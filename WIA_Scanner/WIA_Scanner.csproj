@@ -1,0 +1,139 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>WinExe</OutputType>
+		<TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
+
+		<UseWindowsForms>true</UseWindowsForms>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<CodePage>1251</CodePage>
+		<LangVersion>Latest</LangVersion>
+
+		<IsPublishable>False</IsPublishable>
+
+		<RootNamespace>WS</RootNamespace>
+		<ApplicationIcon>Media\scanner-svgrepo-com.ico</ApplicationIcon>
+
+
+		<!-- Display name -->
+		<NeutralLanguage>en-US</NeutralLanguage>
+		<DefaultLanguage>en-US</DefaultLanguage>
+
+		<Authors>UOM</Authors>
+		<Company>UOM</Company>
+		<Copyright>Copyright (C)UOM 2015-2024</Copyright>
+
+		<ApplicationTitle>WIA Scanner</ApplicationTitle>
+		<Title>WIA Scanner</Title>
+		<Description>Simple application for scanning documents using system WIA driver</Description>
+
+		<AssemblyName>WIA_Scanner</AssemblyName>
+		<AssemblyTitle>WIA Scanner</AssemblyTitle>
+
+		<Product>WIA Scanner</Product>
+		<ProductName>WIA Scanner</ProductName>
+
+
+
+		<ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+
+
+		<!-- Versions -->
+		<Version>5.24.5.11</Version>
+		<ProductVersion>5.24.5.11</ProductVersion>
+		<ApplicationVersion>5.24.5.11</ApplicationVersion>
+		<FileVersion>5.24.5.11</FileVersion>
+		<AssemblyVersion>5.24.5.11</AssemblyVersion>
+		<InformationalVersion>5.24.5.11</InformationalVersion>
+
+		<!--
+		Uncomment for inclute add net core dll's to output dir.
+		<SelfContained>True</SelfContained>
+		-->
+		<GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+
+
+	</PropertyGroup>
+
+
+	<!-- References -->
+	<ItemGroup>
+
+		<COMReference Include="WIA">
+			<Guid>{94A0E92D-43C0-494E-AC29-FD45948A5221}</Guid>
+			<VersionMajor>1</VersionMajor>
+			<VersionMinor>0</VersionMinor>
+			<Lcid>0</Lcid>
+			<WrapperTool>tlbimp</WrapperTool>
+			<Isolated>False</Isolated>
+			<EmbedInteropTypes>True</EmbedInteropTypes>
+		</COMReference>
+
+		<PackageReference Include="Autoupdater.NET.Official" Version="1.8.5" />
+
+		<PackageReference Include="Svg" Version="3.4.7" />
+	</ItemGroup>
+
+
+	<!-- Partial Files -->
+
+	<ItemGroup>
+		<None Include="frmMain.Scanning.cs; frmMain.ScanParams.cs">
+			<DependentUpon>frmMain.cs</DependentUpon>
+		</None>
+
+
+	</ItemGroup>
+
+
+	<!-- Strings localization-->
+	<ItemGroup>
+
+		<EmbeddedResource Update="Localization\LStrings.resx">
+			<Generator>ResXFileCodeGenerator</Generator>
+			<LastGenOutput>LStrings.Designer.cs</LastGenOutput>
+		</EmbeddedResource>
+
+		<Compile Update="Localization\LStrings.Designer.cs">
+			<DesignTime>True</DesignTime>
+			<AutoGen>True</AutoGen>
+			<DependentUpon>LStrings.resx</DependentUpon>
+		</Compile>
+
+		<EmbeddedResource Update="Localization\LStrings.ru.resx">
+			<Generator>ResXFileCodeGenerator</Generator>
+		</EmbeddedResource>
+
+		<EmbeddedResource Update="Localization\LStrings.uk.resx">
+			<Generator>ResXFileCodeGenerator</Generator>
+		</EmbeddedResource>
+
+	</ItemGroup>
+
+
+
+	<!-- Resources	-->
+	<ItemGroup>
+
+
+
+		<!-- Media Resources	-->
+
+		<!--
+		<EmbeddedResource Include="Media\**" />
+		-->
+
+
+		<EmbeddedResource Include="Media\*.svg" />
+
+
+
+	</ItemGroup>
+
+
+
+</Project>
+
+
