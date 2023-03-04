@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.4.33403.182
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WIA_Scanner", "WIA_Scanner\WIA_Scanner.csproj", "{35E1014B-27CC-4DBA-A8C6-ADFCDBEC2775}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{35E1014B-27CC-4DBA-A8C6-ADFCDBEC2775}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{35E1014B-27CC-4DBA-A8C6-ADFCDBEC2775}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{35E1014B-27CC-4DBA-A8C6-ADFCDBEC2775}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{35E1014B-27CC-4DBA-A8C6-ADFCDBEC2775}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {C0EF7B5A-A1CE-457B-A1C1-D8FDA7406C10}
+	EndGlobalSection
+EndGlobal
