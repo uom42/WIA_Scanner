@@ -105,7 +105,7 @@ namespace WS
 						.Where(dpi => dpi >= minDPI && dpi <= maxDPI)
 						.ToArray();
 
-					cboDPI.e_CBOCreateContainersAndFill<int>(validDPIList, selectedDPI);
+					cboDPI.e_FillWithContainersOf<int>(validDPIList, selectedDPI);
 				}
 
 

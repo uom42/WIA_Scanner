@@ -12,7 +12,8 @@ using System.Security.Permissions;
 
 
 using static uom.MessageBoxWithCheckbox.MessageBox;
-
+using SaveFileDialog = System.Windows.Forms.SaveFileDialog;
+using OpenFileDialog = System.Windows.Forms.OpenFileDialog;
 
 
 #if NET5_0_OR_GREATER || NET6_0_OR_GREATER || NETCOREAPP3_0_OR_GREATER
@@ -26,6 +27,7 @@ namespace uom
 {
 
 	/// <summary>Constants</summary>
+#pragma warning disable CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 	internal static partial class constants
 	{
 
@@ -33,6 +35,7 @@ namespace uom
 		internal static readonly Icon ICON_SYSTEM_SHIELD = SystemIcons.Shield;
 		//internal static readonly   Icon ICON_SYSTEM_SHIELD_SMALL = ICON_SYSTEM_SHIELD.Create_Small;
 	}
+#pragma warning restore CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 
 
 	internal static partial class AppInfo
@@ -42,14 +45,6 @@ namespace uom
 			=> (Application.ProductName + " " + Application.ProductVersion);
 
 
-		/// <summary>Detects current process UAC elevation</summary>
-		/// <exception cref="System.ComponentModel.Win32Exception"> When any native Windows API call fails, the function throws a Win32Exception with the last error code.</exception>
-		internal static WinAPI.Security.TOKEN_ELEVATION_TYPE GetProcessElevation()
-		{
-			uom.OS.CheckVistaOrLater();
-			using var hToken = WinAPI.Security.OpenCurrentProcessToken(TokenAccessLevels.Query);
-			return WinAPI.Security.GetTokenInformation_Elevation(hToken);
-		}
 
 
 
@@ -70,8 +65,8 @@ namespace uom
 		/// <summary>Возвращает родительскую папку C:\Users\UUU\AppData\Roaming\UOM\APP (Без номера версии)</summary>
 		public static DirectoryInfo UserAppDataPath_Roaming(bool createIfNotExist = true)
 		{
-			if (Application.CompanyName.e_IsNullOrWhiteSpace()) throw new Exception("Application.CompanyName = NULL!");
-			if (Application.ProductName.e_IsNullOrWhiteSpace()) throw new Exception("Application.ProductName = NULL!");
+			if (string.IsNullOrWhiteSpace(Application.CompanyName)) throw new ArgumentNullException("Application.CompanyName");
+			if (string.IsNullOrWhiteSpace(Application.ProductName)) throw new ArgumentNullException("Application.ProductName");
 
 			var sUserAppDataRoaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
 			DirectoryInfo di = new(Path.Combine(sUserAppDataRoaming, Application.CompanyName, Application.ProductName));
@@ -82,8 +77,9 @@ namespace uom
 		/// <summary>Возвращает родительскую папку C:\Users\UUU\AppData\Local\UOM\APP (Без номера версии)</summary>
 		public static DirectoryInfo UserAppDataPath_Local(bool createIfNotExist = true)
 		{
-			if (Application.CompanyName.e_IsNullOrWhiteSpace()) throw new Exception("Application.CompanyName = NULL!");
-			if (Application.ProductName.e_IsNullOrWhiteSpace()) throw new Exception("Application.ProductName = NULL!");
+			if (string.IsNullOrWhiteSpace(Application.CompanyName)) throw new ArgumentNullException("Application.CompanyName");
+			if (string.IsNullOrWhiteSpace(Application.ProductName)) throw new ArgumentNullException("Application.ProductName");
+
 			var sUserAppDataLocal = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 			DirectoryInfo di = new(Path.Combine(sUserAppDataLocal, Application.CompanyName, Application.ProductName));
 			if (createIfNotExist) di.e_CreateIfNotExist();
@@ -104,6 +100,87 @@ namespace uom
 		}
 
 
+
+
+
+
+
+
+
+		#region Helper Functions for Admin Privileges and Elevation Status
+
+		/// <summary>The function gets the elevation information of the current process. 
+		/// It dictates whether the process is elevated or not. 
+		/// Token elevation is only available on Windows Vista and newer operating systems, thus IsProcessElevated throws a C++ exception if it is called on systems prior to Windows Vista. 
+		/// It is not appropriate to use this function to determine whether a process is run as administartor.
+		/// </summary>
+		/// <returns>Returns True if the process is elevated. Returns False if it is not.</returns>
+		/// <remarks> TOKEN_INFORMATION_CLASS provides TokenElevationType to check the elevation 
+		/// type (TokenElevationTypeDefault / TokenElevationTypeLimited / TokenElevationTypeFull) of the process. 
+		/// It is different from TokenElevation in that, when UAC is turned off, elevation type always returns 
+		/// TokenElevationTypeDefault even though the process is elevated (Integrity 
+		/// Level == High). In other words, it is not safe to say if the process is 
+		/// elevated based on elevation type. Instead, we should use TokenElevation.
+		/// </remarks>
+		internal static WinAPI.Security.TOKEN_ELEVATION_TYPE GetProcessElevation()
+		{
+			uom.OS.CheckVistaOrLater();
+			using var hToken = WinAPI.Security.OpenCurrentProcessToken(TokenAccessLevels.Query);
+			return WinAPI.Security.GetTokenInformation_Elevation(hToken);
+		}
+
+
+		internal static bool IsProcessElevated()
+			=> GetProcessElevation() == WinAPI.Security.TOKEN_ELEVATION_TYPE.TokenElevationTypeFull;
+
+
+		internal static bool AssertProcessElevated()
+				=> IsProcessElevated()
+			? true
+			: throw new Win32Exception((int)uom.WinAPI.Errors.Win32Errors.ERROR_ELEVATION_REQUIRED);
+
+
+
+		/// <summary>The function gets the integrity level of the current process. Integrity level is only available on Windows Vista and newer operating systems, thus 
+		/// GetProcessIntegrityLevel throws a C++ exception if it is called on systems prior to Windows Vista.</summary>
+		/// <exception cref="System.ComponentModel.Win32Exception">When any native Windows API call fails, the function throws a Win32Exception with the last error code.</exception>
+		internal static WinAPI.Security.IntegrityLevels GetProcessIntegrityLevel()
+		{
+			OS.CheckVistaOrLater();
+
+			WinAPI.Security.IntegrityLevels IL;//= WinAPI.Security.IntegrityLevels.ERROR;
+			using var hToken = WinAPI.Security.OpenCurrentProcessToken(TokenAccessLevels.Query); // Open the access token of the current process with TOKEN_QUERY.
+
+			// Then we must query the size of the integrity level information 
+			// associated with the token. Note that we expect GetTokenInformation to 
+			// return False with the ERROR_INSUFFICIENT_BUFFER error code because we 
+			// have given it a null buffer. On exit cbTokenIL will tell the size of 
+			// the group information.
+
+			int cbTokenIL = 0;
+			WinAPI.Security.GetTokenInformation(hToken, WinAPI.Security.TOKEN_INFORMATION_CLASS.TokenIntegrityLevel, IntPtr.Zero, 0, ref cbTokenIL)
+				.e_ThrowLastWin32Exception_AssertFalse(WinAPI.Errors.Win32Errors.ERROR_INSUFFICIENT_BUFFER);
+
+
+			// Now we allocate a buffer for the integrity level information.
+			using var rTokenIL = new WinAPI.Memory.WinApiMemory(cbTokenIL);
+			// Now we ask for the integrity level information again. This may fail if an administrator has added this account to an additional group between our first call to GetTokenInformation and this one.
+			WinAPI.Security.GetTokenInformation(hToken,
+				WinAPI.Security.TOKEN_INFORMATION_CLASS.TokenIntegrityLevel,
+				(IntPtr)rTokenIL,
+				cbTokenIL,
+				ref cbTokenIL).e_ThrowLastWin32Exception_AssertFalse();
+
+			var tokenIL = rTokenIL.DangerousGetHandle().e_ToStructure<WinAPI.Security.TOKEN_MANDATORY_LABEL>();
+
+			// Integrity Level SIDs are in the form of S-1-16-0xXXXX. (e.g. S-1-16-0x1000 stands for low integrity level SID). There is one and only one subauthority.
+			var pIL = WinAPI.Security.GetSidSubAuthority(tokenIL.Label.Sid, 0);
+			int iIL = Marshal.ReadInt32(pIL);
+			IL = (WinAPI.Security.IntegrityLevels)iIL;
+			return IL;
+		}
+
+		#endregion
 
 
 	}
@@ -330,14 +407,14 @@ namespace uom
 		/// <summary>Restart the current process with administrator credentials</summary>
 		internal static Process? StartMyProcess(
 			string? Arguments = null,
-			bool StartVistaElevated = false,
+			bool elevated = false,
 			bool CloseThisApp = false,
 			bool ThrowExceptionOnError = false,
 			bool WaitExit = false)
 			=> StartProcess(
 				System.Windows.Forms.Application.ExecutablePath,
 				Arguments,
-				needElevation: StartVistaElevated,
+				elevated: elevated,
 				closeThisApp: CloseThisApp,
 				throwExceptionOnError: ThrowExceptionOnError,
 				waitExit: WaitExit);
@@ -345,28 +422,28 @@ namespace uom
 
 		internal static Process? StartCMDProcess(
 			string Arguments,
-			bool StartVistaElevated = false,
+			bool elevated = false,
 			bool CloseThisApp = false,
 			bool ThrowExceptionOnError = false,
 			bool WaitExit = false)
 			=> StartWinSys32Process(
 				"cmd.exe",
 				(@"/c " + Arguments),
-				StartVistaElevated,
+				elevated,
 				CloseThisApp,
 				ThrowExceptionOnError,
 				WaitExit);
 
 		internal static Process? StartMMCProcess(
 			string Оснастка,
-			bool StartVistaElevated = false,
+			bool elevated = false,
 			bool CloseThisApp = false,
 			bool ThrowExceptionOnError = false,
 			bool WaitExit = false)
 			=> StartWinSys32Process(
 				"mmc.exe",
 				Оснастка,
-				StartVistaElevated,
+				elevated,
 				CloseThisApp,
 				ThrowExceptionOnError,
 				WaitExit);
@@ -376,7 +453,7 @@ namespace uom
 		internal static Process? StartWinSys32Process(
 			string FileName,
 			string? Arguments = null,
-			bool StartVistaElevated = false,
+			bool elevated = false,
 			bool CloseThisApp = false,
 			bool ThrowExceptionOnError = false,
 			bool WaitExit = false)
@@ -384,7 +461,7 @@ namespace uom
 				OS.GetWinSyst32Path(FileName),
 				Arguments,
 				OS.GetWinSys32Folder(),
-				StartVistaElevated,
+				elevated,
 				CloseThisApp,
 				ThrowExceptionOnError,
 				WaitExit);
@@ -393,7 +470,7 @@ namespace uom
 		internal static Process? StartWinDirProcess(
 			string FileName,
 			string? Arguments = null,
-			bool StartVistaElevated = false,
+			bool elevated = false,
 			bool CloseThisApp = false,
 			bool ThrowExceptionOnError = false,
 			bool WaitExit = false)
@@ -401,7 +478,7 @@ namespace uom
 				Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), FileName),
 				Arguments,
 				null,
-				StartVistaElevated,
+				elevated,
 				CloseThisApp,
 				ThrowExceptionOnError,
 				WaitExit);
@@ -411,7 +488,7 @@ namespace uom
 			string file,
 			string? arguments = null,
 			string? workingDirectory = null,
-			bool needElevation = false,
+			bool elevated = false,
 			bool closeThisApp = false,
 			bool throwExceptionOnError = false,
 			bool waitExit = false)
@@ -422,25 +499,11 @@ namespace uom
 				var StartInfo = new ProcessStartInfo() { UseShellExecute = true, FileName = file };
 				if (arguments.e_IsNOTNullOrWhiteSpace()) StartInfo.Arguments = arguments;
 				if (workingDirectory.e_IsNOTNullOrWhiteSpace()) StartInfo.WorkingDirectory = workingDirectory;
-				if (needElevation)
+				if (elevated && !uom.AppInfo.IsProcessElevated())
 				{
-					//bool useElevation = true;
-					try
-					{
-						if (uom.OS.VistaOrLater)
-						{
-							// XP/2003 - используем запрос админских прав только если пользователь не в группе администраторов
-							needElevation = !OS.UserAccounts.IsRunAsAdmin();
-						}
-						else
-						{
-							// Vista/Win 7/8 Используем повышение 
-							//TODO: Переделать на узнать уровень доступа процесса через токен
-						}
-						needElevation = (uom.AppInfo.GetProcessElevation() == WinAPI.Security.TOKEN_ELEVATION_TYPE.TokenElevationTypeLimited);
-					}
-					catch { }// Какая-то ошибка, скорее всего не хватает прав
-					if (needElevation) StartInfo.Verb = "runas";
+					//needElevation = !uom.AppInfo.IsProcessElevated();
+					//if (needElevation) 
+					StartInfo.Verb = "runas";
 				}
 				// .UseShellExecute = False
 				StartInfo.ErrorDialog = false;
@@ -608,14 +671,13 @@ namespace uom
 
 		#region Helper Functions for Admin Privileges and Elevation Status
 
+
 		/// <summary>The function gets the elevation information of the current process. 
 		/// It dictates whether the process is elevated or not. 
 		/// Token elevation is only available on Windows Vista and newer operating systems, thus IsProcessElevated throws a C++ exception if it is called on systems prior to Windows Vista. 
 		/// It is not appropriate to use this function to determine whether a process is run as administartor.
 		/// </summary>
 		/// <returns>Returns True if the process is elevated. Returns False if it is not.</returns>
-		/// <exception cref="System.ComponentModel.Win32Exception"> 
-		/// When any native Windows API call fails, the function throws a Win32Exception with the last error code.</exception>
 		/// <remarks> TOKEN_INFORMATION_CLASS provides TokenElevationType to check the elevation 
 		/// type (TokenElevationTypeDefault / TokenElevationTypeLimited / TokenElevationTypeFull) of the process. 
 		/// It is different from TokenElevation in that, when UAC is turned off, elevation type always returns 
@@ -623,27 +685,26 @@ namespace uom
 		/// Level == High). In other words, it is not safe to say if the process is 
 		/// elevated based on elevation type. Instead, we should use TokenElevation.
 		/// </remarks>
-		internal static bool IsProcessElevated()
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		internal static WinAPI.Security.TOKEN_ELEVATION_TYPE GetProcessElevation()
 		{
-			OS.CheckVistaOrLater();
-			// Open the access token of the current process with TOKEN_QUERY.
-			using var hToken = WinAPI.Security.OpenCurrentProcessToken(TokenAccessLevels.Query);
-			// Allocate a buffer for the elevation information.
-			int cbTokenElevation = Marshal.SizeOf(typeof(WinAPI.Security.TOKEN_ELEVATION));
-			using var pTokenElevation = new WinAPI.Memory.WinApiMemory(cbTokenElevation);
-			// Retrieve token elevation information.
-			WinAPI.Security.GetTokenInformation(
-				hToken,
-				WinAPI.Security.TOKEN_INFORMATION_CLASS.TokenElevation,
-				(IntPtr)pTokenElevation, cbTokenElevation, ref cbTokenElevation).e_ThrowLastWin32Exception_AssertFalse();
-			// When the process is run on operating systems prior to Windows Vista, GetTokenInformation returns false with the 
-			// ERROR_INVALID_PARAMETER error code because TokenIntegrityLevel is not supported on those OS's.
-
-			// Marshal the TOKEN_ELEVATION struct from native to .NET
-			var elevation = pTokenElevation.DangerousGetHandle().e_ToStructure<WinAPI.Security.TOKEN_ELEVATION>();
-			// TOKEN_ELEVATION.TokenIsElevated is a non-zero value if the token has elevated privileges; otherwise, a zero value.
-			return (elevation.TokenIsElevated != 0);
+			uom.OS.CheckVistaOrLater();
+			using SafeFileHandle hToken = WinAPI.Security.OpenCurrentProcessToken(TokenAccessLevels.Query);
+			return WinAPI.Security.GetTokenInformation_Elevation(hToken);
 		}
+
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		internal static bool IsProcessElevated()
+			=> GetProcessElevation() == uom.WinAPI.Security.TOKEN_ELEVATION_TYPE.TokenElevationTypeFull;
+
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		internal static bool AssertProcessElevated()
+			=> IsProcessElevated()
+			? true
+			: throw new Win32Exception((int)uom.WinAPI.Errors.Win32Errors.ERROR_ELEVATION_REQUIRED);
+
 
 		/// <summary>The function gets the integrity level of the current process. Integrity level is only available on Windows Vista and newer operating systems, thus 
 		/// GetProcessIntegrityLevel throws a C++ exception if it is called on systems prior to Windows Vista.</summary>
@@ -693,6 +754,66 @@ namespace uom
 
 	internal static partial class OS
 	{
+
+
+		private enum DeviceCap : int
+		{
+			VERTRES = 10,
+			DESKTOPVERTRES = 117,
+
+			/// <summary>Logical pixels inch in X</summary>
+			LOGPIXELSX = 88,
+			/// <summary>Logical pixels inch in Y</summary>
+			LOGPIXELSY = 90
+		}
+		[DllImport("gdi32.dll", CharSet = CharSet.Auto, SetLastError = true, ExactSpelling = true)]
+		private static extern int GetDeviceCaps(IntPtr hDC, DeviceCap nIndex);
+
+		[DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true, ExactSpelling = true)]
+		static extern int GetDpiForWindow(IntPtr hWnd);
+
+		private const int DEFAULT_SCREEN_DPI = 96;
+		/// <summary>Used when system uses High DPI modes</summary>
+		/// <returns>
+		/// 1.25 = 125%
+		/// 1.5 = 150%
+		/// </returns>
+		public static float GetScreenScalingFactor()
+		{
+			Graphics g = Graphics.FromHwnd(IntPtr.Zero);
+			IntPtr hdcDesktop = g.GetHdc();
+			//int LogicalScreenHeight = GetDeviceCaps(desktop, DeviceCap.VERTRES);
+			//int PhysicalScreenHeight = GetDeviceCaps(desktop, DeviceCap.DESKTOPVERTRES);
+			//float screenScalingFactor = (float)PhysicalScreenHeight / (float)LogicalScreenHeight;
+			int logpixelsy = GetDeviceCaps(hdcDesktop, DeviceCap.LOGPIXELSY);
+			float dpiScalingFactor = (float)logpixelsy / (float)DEFAULT_SCREEN_DPI;
+			return dpiScalingFactor;
+		}
+
+		/// <summary>
+		/// https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows
+		/// Used when system uses High DPI modes since Windows 8.1
+		/// For this to work correctly on Windows 10 anniversary, 
+		///		you need to add dpiAwareness to app.manifest of your project:
+		/// </summary>
+		/// <returns>
+		/// 1.25 = 125%
+		/// 1.5 = 150%
+		/// </returns>
+		public static float GetHighDPIScaleFactor(IntPtr windowHandle)
+		{
+			try
+			{
+				return GetDpiForWindow(windowHandle) / (float)DEFAULT_SCREEN_DPI;
+			}
+			catch
+			{// Or fallback to GDI solutions above
+				return 1f;
+			}
+		}
+
+
+
 
 		public static Bitmap[] GetScreenshots()
 			=> System.Windows.Forms.Screen.AllScreens
@@ -1240,12 +1361,12 @@ namespace uom
 
 			#endregion
 
-			#region Users
 
 			/// <summary>Кэш для GetCurrentUser</summary>
 			private static readonly EventArgs _CurrentUserSyncLock = new();
 			private static WindowsIdentity? _CurrentUser = null;
 			private static SecurityIdentifier? _CurrentSID = null;
+
 
 			/// <summary>Возвращает данные о текущем пользователе (из под которого вызывается) ПО-УМОЛЧАНИЮ ИСПОЛЬЗУЕТ КЭШИРОВАНИЕ МЕЖДУ ВЫЗОВАМИ!!!</summary>
 			/// <param name="NotUseCachedInfo">Не использовать ранее кэшированные данные, а запросить новые</param>
@@ -1253,77 +1374,34 @@ namespace uom
 			internal static WindowsIdentity GetCurrentUser(bool NotUseCachedInfo = false)
 			{
 				if (NotUseCachedInfo) return WindowsIdentity.GetCurrent();
-				lock (_CurrentUserSyncLock) { _CurrentUser ??= WindowsIdentity.GetCurrent(); return _CurrentUser; }
-			}
-
-			internal static SecurityIdentifier GetCurrentUserSID()
-			{
 				lock (_CurrentUserSyncLock)
 				{
-					_CurrentSID ??= GetCurrentUser(false).User;
-					return _CurrentSID!;
+					_CurrentUser ??= WindowsIdentity.GetCurrent();
+					return _CurrentUser;
 				}
 			}
 
-			/// <summary>Имя пользователя с доменом</summary>
+
+			internal static SecurityIdentifier GetCurrentUserSID()
+			{
+				_CurrentSID ??= GetCurrentUser(false).User;
+				return _CurrentSID!;
+			}
+
+
+			internal static WindowsPrincipal GetCurrentUserPrincipal() => new WindowsPrincipal(GetCurrentUser());
+
+
+			internal static bool UserInAdminGroup() => GetCurrentUserPrincipal().IsInRole(WindowsBuiltInRole.Administrator);
+
+
+			/// <summary>domain/user</summary>
 			internal static string GetCurrentUserName() => GetCurrentUser().Name;
 
 
 			///// <summary>Имя пользователя без домена</summary>
 			//internal static string GetCurrentUserShortName() => GetCurrentUserSID().LookupAccountSidUserName();
 
-			internal static bool IsRunAsAdmin()
-			{
-				var U = GetCurrentUser();
-				lock (U)
-					return (new WindowsPrincipal(U)).IsInRole(WindowsBuiltInRole.Administrator);
-			}
-
-
-			/// <summary>The function checks whether the primary access token of the process belongs to user account that is a member of the local Administrators group, even if it currently is not elevated.</summary>
-			/// <returns>Returns True if the primary access token of the process belongs to user account that is a member of the local Administrators group. Returns False if the token does not.</returns>
-			/// <exception cref="System.ComponentModel.Win32Exception"> When any native Windows API call fails, the function throws a Win32Exception with the last error code.</exception>
-			internal static bool UserInAdminGroup()
-			{
-
-				// Open the access token of the current process for query and duplicate.
-				using var hToken = WinAPI.Security.OpenCurrentProcessToken(TokenAccessLevels.Query | TokenAccessLevels.Duplicate);
-				SafeFileHandle? hTokenToCheck = null;
-				try
-				{
-					// Determine whether system is running Windows Vista or later operating systems (major version >= 6)
-					// because they support linked tokens, but previous versions (major version < 6) do not.
-					if (uom.OS.VistaOrLater) // Running Windows Vista or later (major version >= 6). 
-					{
-						// Determine token type: limited, elevated, or default. 
-						var eElevationType = WinAPI.Security.GetTokenInformation_Elevation(hToken);
-						// If limited, get the linked elevated token for further check.
-						if (eElevationType == WinAPI.Security.TOKEN_ELEVATION_TYPE.TokenElevationTypeLimited)
-						{
-							// Get the linked token.
-							int cbSize = IntPtr.Size;
-							IntPtr hLinkedToken = IntPtr.Zero;
-							WinAPI.Security.GetTokenInformation_IntPtr(hToken, WinAPI.Security.TOKEN_INFORMATION_CLASS.TokenLinkedToken, ref hLinkedToken, cbSize, ref cbSize).e_ThrowLastWin32Exception_AssertFalse();
-							hTokenToCheck = new SafeFileHandle(hLinkedToken, true);
-						}
-					}
-
-					// CheckTokenMembership requires an impersonation token. 
-					// If we Then just got a linked token, it already Is an impersonation token.
-					// If we did Not Get a linked token, duplicate the original into an impersonation token for CheckTokenMembership.
-					hTokenToCheck = hTokenToCheck ??= WinAPI.Security.DuplicateToken(hToken, WinAPI.Security.SECURITY_IMPERSONATION_LEVEL.SecurityIdentification);
-
-					// Check if the token to be checked contains admin SID.
-					var sid = new WindowsIdentity(hTokenToCheck.DangerousGetHandle());
-					var principal = new WindowsPrincipal(sid);
-					bool fInAdminGroup = principal.IsInRole(WindowsBuiltInRole.Administrator);
-					return fInAdminGroup;
-				}
-				finally
-				{
-					if (hTokenToCheck.e_IsValid()) hTokenToCheck?.Dispose();
-				}
-			}
 
 
 
@@ -1440,8 +1518,6 @@ namespace uom
 			#endregion
 
 
-
-			#endregion
 
 			internal static SecurityIdentifier GetSID(WellKnownSidType esid, SecurityIdentifier? domain = null)
 				=> new(esid, domain);
@@ -2092,7 +2168,6 @@ namespace uom
 
 
 	[DefaultProperty("Value")]
-
 	internal class ComboboxItemContainer<T>
 	{
 		public readonly T Value;
@@ -2129,41 +2204,9 @@ namespace uom
 	[DefaultProperty("Value")]
 	internal class ComboboxItemEnumContainer<T> : ComboboxItemContainer<T> where T : Enum
 	{
-		public ComboboxItemEnumContainer(T val, string description) : base(val, description)
-		{
-			throw new NotImplementedException();
-			//@Value = val;
-			//Description = description;
-
-			/*	   			
-
-
-							if (sUserDescription.e_IsNullOrWhiteSpace) {
-				Me.ElementDescription = Me.Value.ToString
-
-								//Извлекаем...
-								Try
-									var TT = typeof(T)
-									//var E As [Enum] = CType(Me.Value, [Enum])
-									//var S = ExtEnum_GetCommentAttributeValue(Me.Value)
-
-									var sValue = Me.Value.ToString
-
-									var OOO As Object = V
-									var VVV As[Enum] = CType(OOO, [Enum])
-									var S = ExtEnum_GetDescriptionValue(VVV)
-									if (S.e_IsNOTNullOrWhiteSpace)
-				{
-					Me.ElementDescription = S
-								Catch: End Try
-
-							}
-				else
-				{ //Вручную указано конкретное описание
-					Me.ElementDescription = sUserDescription
-								}
-			 */
-		}
+		public ComboboxItemEnumContainer(T val)
+			: base(val, (enumValue => enumValue.e_GetDescriptionValue() ?? enumValue.ToString()))
+		{ }
 	}
 
 
@@ -2308,7 +2351,7 @@ namespace uom
 			private void _VCN_OnAfterValueChanged(object sender, ValueChangedEventArgs e)
 			{
 				if (null == OnValueChangedCallBack) return;
-				control?.e_runInUIThread(() => OnValueChangedCallBack?.Invoke(e.NewValue!));
+				control?.e_RunInUIThread(() => OnValueChangedCallBack?.Invoke(e.NewValue!));
 			}
 
 			public MTSafeContainerBase<T> ChangedNotifer { get => ChangedNotifer; }
@@ -2749,7 +2792,7 @@ namespace uom
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_DumpHex(this uom.WinAPI.Memory.WinApiMemory mem) => mem.DangerousGetHandle().e_DumpHex(mem.Lenght);
+			internal static string e_DumpHex(this uom.WinAPI.Memory.WinApiMemory mem) => mem.DangerousGetHandle().e_DumpHexToString(mem.Lenght);
 
 		}
 
@@ -2959,22 +3002,19 @@ namespace uom
 			}
 
 
-			/// <summary>
-			/// e_runute's an async Task<T> method which has a void return value synchronously
-			/// </summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunSync(this Task tsk)
-			{
-				Func<Task> ft = new(() => tsk);
-				ft.e_RunSync();
-			}
 
-			/// <summary>
-			/// e_runute's an async Task<T> method which has a void return value synchronously
-			/// </summary>
-			/// <param name="ft">Task<T> method to e_runute</param>
+
+
+
+
+
+
+
+
+			/// <summary>Run Task synchronously using SynchronizationContext helpers</summary>
+			/// <param name="func">Task<T> method to run</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunSync(this Func<Task> ft)
+			public static void e_RunSync(this Func<Task> func)
 			{
 				SynchronizationContext? oldContext = SynchronizationContext.Current;
 				ExclusiveSynchronizationContext synCtx = new();
@@ -2983,7 +3023,7 @@ namespace uom
 				{
 					try
 					{
-						await ft();
+						await func();
 					}
 					catch (Exception e)
 					{
@@ -2999,14 +3039,9 @@ namespace uom
 				SynchronizationContext.SetSynchronizationContext(oldContext);
 			}
 
-			/// <summary>
-			/// e_runute's an async Task<T> method which has a T return type synchronously
-			/// </summary>
-			/// <typeparam name="T">Return Type</typeparam>
-			/// <param name="tsk">Task<T> method to e_runute</param>
-			/// <returns></returns>
+			/// <inheritdoc cref="e_RunSync"/>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T? e_RunSync<T>(this Func<Task<T?>> tsk)
+			public static T? e_RunSync<T>(this Func<Task<T?>> func)
 			{
 				var oldContext = SynchronizationContext.Current;
 				var synch = new ExclusiveSynchronizationContext();
@@ -3016,7 +3051,7 @@ namespace uom
 				{
 					try
 					{
-						ret = await tsk.Invoke();
+						ret = await func.Invoke();
 					}
 					catch (Exception e)
 					{
@@ -3033,12 +3068,18 @@ namespace uom
 				return ret;
 			}
 
-			/// <summary>
-			/// e_runute's an async Task<T> method which has a T return type synchronously
-			/// </summary>
-			/// <typeparam name="T">Return Type</typeparam>
-			/// <param name="task">Task<T> method to e_runute</param>
-			/// <returns></returns>
+
+
+
+			/// <inheritdoc cref="e_RunSync"/>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void e_RunSync(this Task tsk)
+			{
+				Func<Task> ft = new(() => tsk);
+				ft.e_RunSync();
+			}
+
+			/// <inheritdoc cref="e_RunSync"/>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static T e_RunSync<T>(this Task<T> task)
 			{
@@ -3103,6 +3144,48 @@ namespace uom
 					return this;
 				}
 			}
+
+
+
+
+
+
+
+
+
+
+			/// <summary>Run Task synchronously using Task.Run helpers</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void e_RunSync2(this Task tsk)
+			{
+				var tsk2 = Task.Run(async () => await tsk);
+				tsk2.Wait();
+			}
+
+			/// <inheritdoc cref="e_RunSync2"/>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static T e_RunSync2<T>(this Task<T> tsk)
+			{
+				var tsk2 = Task.Run(async () =>
+				{
+					await tsk;
+				});
+
+				tsk2.Wait();
+				var res = tsk.Result;
+				return res;
+			}
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -3177,6 +3260,7 @@ namespace uom
 
 
 		}
+
 
 
 		[EditorBrowsable(EditorBrowsableState.Never)]
@@ -3318,6 +3402,66 @@ namespace uom
 
 
 		}
+
+
+		[EditorBrowsable(EditorBrowsableState.Never)]
+		internal static class Extensions_Enum_Win
+		{
+
+
+
+
+			////// <summary>Пример использования: var aContainers = DayOfWeek.Friday.EnumGetAllValuesAsEnumContainers()</summary>
+			////// <returns>Возвращает массив EnumContainer(Of T)()</returns>
+			////// <remarks>НЕ ИСПОЛЬЗОВАТЬ вот так: typeof(XXX).EnumGetAllValuesAsEnumContainers</remarks>
+
+
+			//public static ComboboxItemEnumContainer<T>[] e_GetAllValuesAsEnumContainers<T>(T EnumItem) where T : Enum
+
+			/*
+[MethodImpl(MethodImplOptions.AggressiveInlining)]
+public static ComboboxItemEnumContainer<T>[] e_GetAllValuesAsEnumContainers<T>() where T : Enum
+{
+T[] enumValues = Enum.GetValues(typeof(T)).Cast<T>().ToArray();
+ComboboxItemEnumContainer<T>[]? cItems = enumValues.Select(v => new ComboboxItemEnumContainer<T>(v)).ToArray();
+return cItems;
+
+//***ВОТ ТАК РАБОТАЕТ!
+//Private Enum FILE_LOG_RECORDS_GROUPING As Integer
+//    <DescriptionAttribute("Имя файла")> ByFile
+//    <DescriptionAttribute("GUID")> ByGUID
+//    <DescriptionAttribute("Вызвавший процесс")> ByCaller
+//End Enum
+//var aContainers = FILE_LOG_RECORDS_GROUPING.ByCaller.EnumGetAllValuesAsEnumContainers
+
+//*** А ВОТ ТАК НЕ БУДЕТ РАБОТАТЬ!!! 
+//var eAA2 = typeof(XXX).EnumGetAllValuesArray
+}
+			 */
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static ComboboxItemEnumContainer<T>[] e_GetAllValuesAsEnumContainers<T>(this T anyEnumItem) where T : Enum
+			{
+				T[] enumValues = Enum.GetValues(typeof(T)).Cast<T>().ToArray();
+				ComboboxItemEnumContainer<T>[]? cItems = enumValues.Select(v => new ComboboxItemEnumContainer<T>(v)).ToArray();
+				return cItems;
+
+				//***ВОТ ТАК РАБОТАЕТ!
+				//Private Enum FILE_LOG_RECORDS_GROUPING As Integer
+				//    <DescriptionAttribute("Имя файла")> ByFile
+				//    <DescriptionAttribute("GUID")> ByGUID
+				//    <DescriptionAttribute("Вызвавший процесс")> ByCaller
+				//End Enum
+				//var aContainers = FILE_LOG_RECORDS_GROUPING.ByCaller.EnumGetAllValuesAsEnumContainers
+
+				//*** А ВОТ ТАК НЕ БУДЕТ РАБОТАТЬ!!! 
+				//var eAA2 = typeof(XXX).EnumGetAllValuesArray
+			}
+
+
+
+		}
+
 
 
 		[EditorBrowsable(EditorBrowsableState.Never)]
@@ -3826,8 +3970,7 @@ namespace uom
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static void e_MsgboxError(this Exception ex, string? title = null)
 			{
-				var flags = (MsgBoxFlags.Btn_OK | MsgBoxFlags.Icn_Error);
-				ex.Message.e_MsgboxShow(flags);
+				ex.Message.e_MsgboxShow((MsgBoxFlags.Btn_OK | MsgBoxFlags.Icn_Error));
 			}
 
 
@@ -3888,6 +4031,12 @@ namespace uom
 		{
 
 
+
+			/// <inheritdoc cref="uom.OS.GetHighDPIScaleFactor" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static float e_GetHighDPIScaleFactor(this Control ctl)
+				=> uom.OS.GetHighDPIScaleFactor(ctl.Handle);
+
 			#region ShortcutKeys to/from string
 
 			/// <summary>Converts Keys value to shortcut keys string like 'Ctrl+I' </summary>
@@ -3908,13 +4057,23 @@ namespace uom
 			#region runInUIThread
 
 
+
+
+
+
+
+
+
+
+
+
 			/// <summary>MT Safe call code in UI thread.</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_runInUIThread(this Control context, MethodInvoker code)
+			public static void e_RunInUIThread(this Control context, MethodInvoker code)
 			{
 				#region SAMPLE WITH RETURN VALUE:
 				/*
-				lstvwgrp.ListView.e_runInUIThread(delegate
+				lstvwgrp.ListView.e_RunInUIThread(delegate
 				{
 					result = SendMessage(lstvwgrp.ListView.Handle, ListViewMessages.LVM_SETGROUPINFO, groupId, ref group);
 				});
@@ -3924,7 +4083,7 @@ namespace uom
 
 				#region SAMPLE WITHOUT RETURN VALUE:
 				/*
-				  lstvwgrp.ListView.e_runInUIThread(delegate
+				  lstvwgrp.ListView.e_RunInUIThread(delegate
 				  {
 					  SendMessage(lstvwgrp.ListView.Handle, ListViewMessages.LVM_SETGROUPINFO, groupId, ref group);
 				  });
@@ -3949,33 +4108,58 @@ namespace uom
 			}
 
 
-			/// <summary>MT Safe call code in UI thread.</summary>
-			/// <param name="bAsync">If true - used BeginInvoke, else used Invoke</param>
+			/// <summary>ThreadSafe excute action in control UI thread
+			/// <param name="context">Control in which UI thread action e_runutes</param>
+			/// <param name="useBeginInvoke">If true - used BeginInvoke, else used Invoke</param>
+			/// <param name="onError">Any action when Error occurs</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_runInUIThread(this Control context, Action A, bool bAsync = false, Action<Exception>? OnError = null)
+			public static void e_RunInUIThread(this Control context, Action a, bool useBeginInvoke = false, Action<Exception>? onError = null)
 			{
 				_ = context ?? throw new ArgumentNullException(nameof(context));
-				_ = A ?? throw new ArgumentNullException(nameof(A));
+				_ = a ?? throw new ArgumentNullException(nameof(a));
 				if (!context.IsHandleCreated || context.IsDisposed) return;
 				try
 				{
-					if (bAsync) { context.BeginInvoke(A); return; }
-					if (context.InvokeRequired) { context.Invoke(A); return; }
-					A.Invoke();
+					if (useBeginInvoke) { context.BeginInvoke(a); return; }
+					if (context.InvokeRequired) { context.Invoke(a); return; }
+					a.Invoke();
 				}
-				catch (Exception EX) { OnError?.Invoke(EX); }
+				catch (Exception EX) { onError?.Invoke(EX); }
 			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void e_RunWhenHandleReady<T>(this T ctl, Action<Control> HandleReadyAction) where T : Control
+			{
+				_ = ctl ?? throw new ArgumentNullException(nameof(ctl));
+
+				if (ctl.Disposing || ctl.IsDisposed) return;
+
+				if (ctl.IsHandleCreated)
+				{
+					HandleReadyAction?.Invoke(ctl);//Control handle already Exist, run immediate
+				}
+				else
+				{
+					//Delay action when handle will be ready...
+					ctl.HandleCreated += (s, e) => HandleReadyAction?.Invoke((T)s!);
+				}
+			}
+
+
+
+
 
 			/// <summary>MT Safe</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_runInUIThread_AppendText(this TextBox ctl, string Text)
-				=> ctl.e_runInUIThread(() => { ctl.AppendText(Text); ctl.Update(); });
+			public static void e_RunInUIThread_AppendText(this TextBox ctl, string Text)
+				=> ctl.e_RunInUIThread(() => { ctl.AppendText(Text); ctl.Update(); });
 
 #if NET6_0_OR_GREATER
 			/// <summary>MT Safe</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_runInUIThread_AppendLine(this TextBox ctl, string Text, int limitLinesCount = 0)
-				=> ctl.e_runInUIThread(() =>
+			public static void e_RunInUIThread_AppendLine(this TextBox ctl, string Text, int limitLinesCount = 0)
+				=> ctl.e_RunInUIThread(() =>
 				{
 					if (limitLinesCount > 0)
 					{
@@ -3988,30 +4172,30 @@ namespace uom
 
 			/// <summary>MT Safe</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_runInUIThread_SetText(this Control ctl, string Text)
-				=> ctl.e_runInUIThread(() => { ctl.Text = Text; ctl.Update(); });
+			public static void e_RunInUIThread_SetText(this Control ctl, string Text)
+				=> ctl.e_RunInUIThread(() => { ctl.Text = Text; ctl.Update(); });
 
 			/// <summary>MT Safe</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_runInUIThread_SetText(this ToolStripItem ctl, string Text, Form? frmUI = null)
+			public static void e_RunInUIThread_SetText(this ToolStripItem ctl, string Text, Form? frmUI = null)
 			{
 				_ = ctl ?? throw new ArgumentNullException(nameof(ctl));
 				frmUI ??= ctl.GetCurrentParent()?.FindForm();//If form not specifed = search form...
 															 //_ = frmUI ?? throw new ArgumentNullException("ToolStripItem.GetCurrentParent.FindForm() = NULL!");
-				frmUI?.e_runInUIThread(() => { if (frmUI.IsHandleCreated && !frmUI.IsDisposed && !ctl.IsDisposed) ctl.Text = Text; });
+				frmUI?.e_RunInUIThread(() => { if (frmUI.IsHandleCreated && !frmUI.IsDisposed && !ctl.IsDisposed) ctl.Text = Text; });
 			}
 
 			// TODO: List View NF
 			///// <summary>Потокобезопасное обновление свойства</summary>
 			////[ MethodImpl(MethodImplOptions.AggressiveInlining)]
-			////public static void e_runInUIThread_SetEmptyText(this UOM.WinAPI.WinControls.ListView.ListViewNF Ctl, string Text) => Ctl.e_runInUIThread(new Action(() => { Ctl.EmptyText = Text; Ctl.Update(); }));
+			////public static void e_RunInUIThread_SetEmptyText(this UOM.WinAPI.WinControls.ListView.ListViewNF Ctl, string Text) => Ctl.e_RunInUIThread(new Action(() => { Ctl.EmptyText = Text; Ctl.Update(); }));
 			//// ''<summary>Потокобезопасный вызов процедуры в потоке UI элемента, без параметра.
 			//// ''Любые ошибки игнорируются</summary>
 			//// '' <param name="ctlUIThreadControl">Элемент, в потоке которого будет вызываться код</param>
 			//// '' <param name="bAsync">Если асинхронно, то будет использоваться BeginInvoke, иначе Invoke</param>
 			// <DebuggerNonUserCode, DebuggerStepThrough>
 			// <MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
-			// Public Async Sub e_runInUIThreadAwait(ByVal ctlUIThreadControl As Control,
+			// Public Async Sub e_RunInUIThreadAwait(ByVal ctlUIThreadControl As Control,
 			// ByVal A As Task,
 			// Optional ByVal bAsync As bool  = False)
 			// If (UIThreadCtl Is Nothing) OrElse (A Is Nothing) Then Return
@@ -4037,6 +4221,20 @@ namespace uom
 
 			#region FORM
 
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void e_AttachCloseFormWhenEsc(this Form f)
+			{
+				f.KeyPreview = true;
+				f.KeyDown += (s, e) =>
+				{
+					Form f2 = (Form)s!;
+					//f.base.OnKeyDown(e);
+					if (e.KeyCode == Keys.Escape) f2.DialogResult = DialogResult.Cancel;
+				};
+			}
+
+
 			#region CloseFormWhenClick
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static void e_CloseFormWhenClick(this Form F, System.Windows.Forms.ToolStripMenuItem MI)
@@ -4047,7 +4245,7 @@ namespace uom
 				=> Ctl.Click += (_, _) => F?.e_CloseSafe();
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			private static void e_CloseSafe(this Form F) => F?.e_runInUIThread(() => F?.Close());
+			private static void e_CloseSafe(this Form F) => F?.e_RunInUIThread(() => F?.Close());
 			#endregion
 
 
@@ -4372,54 +4570,6 @@ namespace uom
 					return false;
 				}
 			}
-
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunWhenHandleReady<T>(this T ctl, Action<Control> HandleReadyAction) where T : Control
-			{
-				_ = ctl ?? throw new ArgumentNullException(nameof(ctl));
-
-				if (ctl.Disposing || ctl.IsDisposed) return;
-
-				if (ctl.IsHandleCreated)
-				{
-					HandleReadyAction?.Invoke(ctl);//Control handle already Exist, run immediate
-				}
-				else
-				{
-					//Delay action when handle will be ready...
-					ctl.HandleCreated += (s, e) => HandleReadyAction?.Invoke((T)s!);
-				}
-			}
-
-
-
-
-
-
-			/// <summary>ThreadSafe excute action in control UI thread
-			/// Any errors will be ignored!</summary>
-			/// <param name="ctl">Control in which UI thread action e_runutes</param>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunInUIThread(
-				this Control ctl,
-				Action? a,
-				bool useBeginInvoke = false)
-			{
-				ctl.ThrowIfNull();//				ArgumentNullException.ThrowIfNull(ctl);
-				if (a == null) return;
-
-				try
-				{
-					if (!ctl.IsHandleCreated || ctl.IsDisposed) return;
-					if (useBeginInvoke) { ctl.BeginInvoke(a); return; }
-					if (ctl.InvokeRequired) { ctl.Invoke(a); return; }
-					a.Invoke();
-				}
-				catch (ObjectDisposedException) { }//just ignore			
-			}
-
 
 
 
@@ -4765,7 +4915,39 @@ namespace uom
 
 			#endregion
 
+			private const bool C_APPEND_NEW_LINE_DEFAULT = false;
 
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void e_AppendTextWithActionOnSelection(this RichTextBox txt, string text, Action a, bool appendNewLine = C_APPEND_NEW_LINE_DEFAULT)
+			{
+				int selStart = txt.Text.Length;
+				txt.AppendText(text);
+				int selLen = txt.Text.Length - selStart;
+				txt.Select(selStart, selLen);
+				a.Invoke();
+				txt.Select(txt.TextLength, 0);
+				if (appendNewLine) txt.AppendText("\n");
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void e_AppendTextFormatted(
+				this RichTextBox txt,
+				string text,
+				Color? clrFore = null,
+				Color? clrBack = null,
+				Font? fnt = null,
+				bool appendNewLine = C_APPEND_NEW_LINE_DEFAULT)
+			{
+				txt.e_AppendTextWithActionOnSelection(text,
+					 delegate
+					 {
+						 if (clrFore != null) txt.SelectionColor = clrFore.Value;
+						 if (clrBack != null) txt.SelectionBackColor = clrBack.Value;
+						 if (fnt != null) txt.SelectionFont = fnt;
+					 },
+					 appendNewLine);
+			}
 
 		}
 
@@ -4788,83 +4970,105 @@ namespace uom
 
 
 			#region FillCBO
-			public static void e_CBOFill(this ComboBox cbo, object[] data, bool enable, bool selectLast = true)
+			public static void e_Fill(this ComboBox cbo, object[] data, bool enable, bool selectLast = true)
 			{
-				cbo.Items.Clear();
-				if (data.Any())
+				try
 				{
-					cbo.Items.AddRange(data);
-					if (selectLast) cbo.SelectedItem = data.Last();
+					cbo.BeginUpdate();
+
+					cbo.Items.Clear();
+					if (data.Any())
+					{
+						cbo.Items.AddRange(data);
+						if (selectLast) cbo.SelectedItem = data.Last();
+					}
+					cbo.Enabled = enable;
 				}
-				cbo.Enabled = enable;
+				finally { cbo.EndUpdate(); }
 			}
+
+
 
 
 			///<summary>Fills ComboBox with <see cref="ComboboxItemContainer"/> wrappers and returns selected index</summary>
 			///<remarks>Sample: cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING)</remarks>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static int e_CBOFillAndSelectByContainer<T>(
+			public static ComboboxItemContainer<T>? e_Fill<T>(
 				this ComboBox cbo,
 				IEnumerable<ComboboxItemContainer<T>> items,
 				ComboboxItemContainer<T>? selectedItem = null,
 				ComboBoxStyle style = ComboBoxStyle.DropDownList,
-				bool doNotSelectAnyItem = false)
+				bool notSelectAnyItem = false)
 			{
-				cbo.DataSource = null;
-				cbo.Items.Clear();
-				cbo.DropDownStyle = style;
+				try
+				{
+					cbo.BeginUpdate();
 
-				ComboboxItemContainer<T>[] a = items.ToArray();
-				cbo.Items.AddRange(a);
+					cbo.DataSource = null;
+					cbo.Items.Clear();
+					cbo.DropDownStyle = style;
 
-				if (doNotSelectAnyItem) return -1;
+					if (!items.Any()) return null;
 
-				if (null != selectedItem)
+					ComboboxItemContainer<T>[] a = items.ToArray();
+					cbo.Items.AddRange(a);
+					if (notSelectAnyItem) return null;
+
+					selectedItem ??= a[0];
+
 					cbo.SelectedItem = selectedItem!;
-				else
-					cbo.SelectedIndex = 0;
-
-				return cbo.SelectedIndex;
+					return selectedItem;
+				}
+				finally { cbo.EndUpdate(); }
 			}
+
 
 			///<summary>Fills ComboBox with <see cref="ComboboxItemContainer"/> wrappers and returns selected index</summary>
 			///<remarks>Sample: cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING)</remarks>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static int e_CBOFillAndSelectByItem<T>(
+			public static ComboboxItemContainer<T>? e_Fill<T>(
 				this ComboBox cbo,
 				IEnumerable<ComboboxItemContainer<T>> items,
 				T? selectedItem = default,
 				ComboBoxStyle style = ComboBoxStyle.DropDownList,
-				bool doNotSelectAnyItem = false)
+				bool notSelectAnyItem = false)
 			{
-				cbo.e_CBOFillAndSelectByContainer<T>(items, null, style, (selectedItem != null));
-
-				if (doNotSelectAnyItem) return -1;
-				if (selectedItem != null)
+				try
 				{
-					ComboboxItemContainer<T>? containerToSelect = cbo.e_ItemsAs_ObjectContainerOf<T>()
-						.Where(row => row!.Value!.Equals(selectedItem))
-						.FirstOrDefault();
+					cbo.BeginUpdate();
 
-					if (containerToSelect != null)
-					{
-						cbo.SelectedItem = containerToSelect;
-						return cbo.SelectedIndex;
-					}
+					cbo.DataSource = null;
+					cbo.Items.Clear();
+					cbo.DropDownStyle = style;
+
+					if (!items.Any()) return null;
+
+					ComboboxItemContainer<T>[] a = items.ToArray();
+					cbo.Items.AddRange(a);
+					if (notSelectAnyItem) return null;
+
+					var containerToSelect = (selectedItem == null)
+						? items.FirstOrDefault()
+						: items.Where(i => i.Value.e_EqualsUniversal(selectedItem)).FirstOrDefault();
+
+					containerToSelect ??= items.FirstOrDefault();
+
+					if (containerToSelect != null) cbo.SelectedItem = containerToSelect;
+					return containerToSelect;
 				}
-				cbo.SelectedIndex = 0;
-				return cbo.SelectedIndex;
+				finally { cbo.EndUpdate(); }
 			}
+
 
 			///<summary>Fills ComboBox with <see cref="ComboboxItemContainer"/> wrappers and returns selected index</summary>
 			///<remarks>Sample: cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING)</remarks>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static int e_CBOCreateContainersAndFill<T>(
+			public static ComboboxItemContainer<T>? e_FillWithContainersOf<T>(
 				this ComboBox cbo,
 				IEnumerable<T> items,
 				T? selectedItem = default,
 				ComboBoxStyle style = ComboBoxStyle.DropDownList,
-				bool doNotSelectAnyItem = false)
+				bool notSelectAnyItem = false)
 			{
 
 				ComboboxItemContainer<T>? selectedItemContainer = null;
@@ -4878,24 +5082,29 @@ namespace uom
 					})
 					.ToArray();
 
-				return cbo.e_CBOFillAndSelectByContainer<T>(a, selectedItemContainer, style, doNotSelectAnyItem);
+				return cbo.e_Fill<T>(a, selectedItemContainer, style, notSelectAnyItem);
 			}
 
 
 			///<summary>Fills ComboBox with <see cref="EnumContainer"/> wrappers. ONLY FOR ENUM!</summary>
 			///<remarks>Sample: cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING.ByCaller)</remarks>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_CBOFillWithEnumContainersOfEnum<T>(
-				this ComboBox cbo,
-				T selectedItem) where T : Enum
-			{
-				throw new NotImplementedException();
-				/*
-			var aContainers = EnumItem.ExtEnum_GetAllValuesAsEnumContainers
+			public static void e_FillWithContainersOfEnum<T>(this ComboBox cbo, T selectedItem) where T : Enum
+				=> cbo.e_Fill(selectedItem.e_GetAllValuesAsEnumContainers(), selectedItem);
 
-				cbo.e_FillCBOWithEnumContainers(aContainers);
-				 */
+			/*
+			///<summary>Fills ComboBox with <see cref="EnumContainer"/> wrappers. ONLY FOR ENUM!</summary>
+			///<remarks>Sample: cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING.ByCaller)</remarks>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void e_FillWithContainersOfEnum<T>(this ComboBox cbo, T selectedItem) where T : Enum
+			{
+				ComboboxItemEnumContainer<T>[] items = selectedItem.e_GetAllValuesAsEnumContainers();
+				//ComboboxItemEnumContainer<T> sel = items.Where(c => c.Value.Equals(selectedItem)).First();
+				cbo.e_Fill(items, selectedItem);
 			}
+			 */
+
+
 
 			/*
 	//////<summary>Заполняет ComboBox лбъектами типа <see cref="My.UOM.EnumTools.EnumContainer"/>, и выбирает текущим элементом EnumItem</summary>
@@ -4919,6 +5128,32 @@ namespace uom
 
 			*/
 			#endregion
+
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static ComboboxItemContainer<T>? e_SelectContainerOf<T>(this ComboBox cbo, T? itemToSelect, bool selectFirstItemIfNull = true)
+			{
+				if (cbo.Items.Count < 1) return null;
+				var containerToSelect = cbo
+					.e_ItemsAs_ObjectContainerOf<T>()
+					.Where(c => c.Value.e_EqualsUniversal<T>(itemToSelect))
+					.FirstOrDefault();
+
+				if (containerToSelect != null)
+				{
+					cbo.SelectedItem = containerToSelect;
+				}
+				else
+				{
+					if (selectFirstItemIfNull) cbo.SelectedIndex = 0;
+				}
+
+				return containerToSelect;
+			}
+
 
 
 			#region Get Items From CBO
@@ -5016,7 +5251,7 @@ namespace uom
 	return EC
 	End Function
 
-	
+
 
 
 	//# End Region
@@ -5048,7 +5283,7 @@ namespace uom
 				};
 
 				if (lst != null && lst.InvokeRequired)
-					lst.e_runInUIThread(a2);
+					lst.e_RunInUIThread(a2);
 				else
 					a2.Invoke();
 			}
@@ -5249,7 +5484,10 @@ namespace uom
 					else
 						sTitle = $"{sTitle} ({g.Items.Count:N0})".Trim();
 
-					if (!string.IsNullOrWhiteSpace(sTitle)) g.Header = sTitle;
+					if (!string.IsNullOrWhiteSpace(sTitle))
+					{
+						g.Header = sTitle;
+					}
 				});
 
 #if NETCOREAPP3_0_OR_GREATER
@@ -5286,7 +5524,7 @@ namespace uom
 				};
 
 				if (lvw != null && lvw.InvokeRequired)
-					lvw.e_runInUIThread(a2);
+					lvw.e_RunInUIThread(a2);
 				else
 					a2.Invoke();
 			}
@@ -5793,6 +6031,73 @@ namespace uom
 
 
 
+
+
+
+		}
+
+
+		[EditorBrowsable(EditorBrowsableState.Never)]
+		internal static partial class Extensions_Controls_Menu
+		{
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static ToolStripMenuItem? e_SearchMenuItemTree(this IEnumerable<ToolStripItem> emi, Func<ToolStripMenuItem, bool> predicate)
+			{
+				foreach (ToolStripItem tsi in emi)
+				{
+					switch (tsi)
+					{
+						case ToolStripMenuItem mi:
+							{
+								if (predicate(mi)) return mi;
+
+								IEnumerable<ToolStripItem> childItems = mi.DropDownItems.Cast<ToolStripItem>();
+								if (childItems.Any())
+								{
+									ToolStripMenuItem? miChild = e_SearchMenuItemTree(childItems, predicate);
+									if (miChild != null) return miChild;
+								}
+								break;
+							}
+
+						default: break;
+					}
+				}
+
+				return null;
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static ToolStripMenuItem? e_SearchMenuItemTree(this ToolStripMenuItem mi, Func<ToolStripMenuItem, bool> predicate)
+				=> mi.DropDownItems.Cast<ToolStripItem>().e_SearchMenuItemTree(predicate);
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static ToolStripMenuItem? e_SearchMenuItemTree(this ContextMenuStrip cm, Func<ToolStripMenuItem, bool> predicate)
+				=> cm.Items.Cast<ToolStripItem>().e_SearchMenuItemTree(predicate);
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void e_Remove(this ToolStripMenuItem mi)
+			{
+				ToolStripItem? o = mi.OwnerItem;
+				if (o == null) return;
+
+				switch (o)
+				{
+					case ToolStripMenuItem tsmi:
+						{
+							tsmi.DropDownItems.Remove(mi);
+							break;
+						}
+					default: throw new ArgumentException($"Unknown {o.GetType()}");
+				}
+			}
 
 
 
@@ -6379,6 +6684,12 @@ namespace uom
 				=> new(iError);
 
 
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static uom.WinAPI.Errors.HResult e_ToHResult(this IntPtr i)
+				=> (uom.WinAPI.Errors.HResult)((UInt64)i.ToInt64());
+
+
 			#region FIX ERROR Engine
 
 			#region e_LogError_FullErrorDump / e_LogError_DumpExceptionTree
@@ -6807,7 +7118,7 @@ namespace uom
 			// End Sub
 			// <DebuggerNonUserCode, DebuggerStepThrough>  Friend Sub e_LogError_NONMODAL(ByVal EX As System.Exception, frmErrorWindowParent As Form)
 			// Try
-			// Call frmErrorWindowParent.e_runInUIThread(Sub() ShowError_CORE(EX, frmErrorWindowParent))
+			// Call frmErrorWindowParent.e_RunInUIThread(Sub() ShowError_CORE(EX, frmErrorWindowParent))
 
 			// Catch ex2 As Exception
 			// Неудалось показать ошибку в окне!
@@ -6839,7 +7150,7 @@ namespace uom
 							};
 
 							// Временно переходим в поток этой формы
-							frmErrorWindowParent.e_runInUIThread(() => CreateNewAttachment(frmErrorWindowParent));
+							frmErrorWindowParent.e_RunInUIThread(() => CreateNewAttachment(frmErrorWindowParent));
 						}
 						else
 						{
@@ -7652,33 +7963,69 @@ namespace uom
 		{
 
 			#region StrFormatByteSize
-			/// <summary> для PC используется Shell API StrFormatByteSize64, для PDA форимуется вручную</summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_FormatByteSize_Win32(this ulong FileLenght) => ((long)FileLenght).e_FormatByteSize_Win32();
 
-
-			///// <summary> для PC используется Shell API StrFormatByteSize64, для PDA форимуется вручную</summary>
-			//[ MethodImpl(MethodImplOptions.AggressiveInlining)]
-			//public static string e_FormatByteSize_Win32(this long FileLenght) => uom.WinAPI.Shell.StrFormatByteSize(FileLenght);
 
 			/// <summary>используется Shell API StrFormatByteSize64</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_FormatByteSize_Win32(this long FileLenght)
+			internal static string e_FormatByteSize_Win32(this UInt64 FileLenght)
 			{
-				var SB = new StringBuilder(100);
-				var ptrResult = uom.WinAPI.Shell.StrFormatByteSize64(FileLenght, SB, SB.Capacity);
+				StringBuilder SB = new(120);
+				var ptrResult = uom.WinAPI.Shell.StrFormatByteSize64(FileLenght, SB, (uint)SB.Capacity);
 				if (!ptrResult.e_IsValid()) WinAPI.Errors.ThrowLastWin23Error("StrFormatByteSize64");
 				return SB.ToString();
 			}
 
-
-			/// <summary> для PC используется Shell API StrFormatByteSize64, для PDA форимуется вручную</summary>
+			/// <inheritdoc cref="e_FormatByteSize_Win32" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_FormatByteSize_Win32(this int iFileLenght) => ((long)iFileLenght).e_FormatByteSize_Win32();
+			public static string e_FormatByteSize_Win32(this Int64 FileLenght) => ((UInt64)FileLenght).e_FormatByteSize_Win32();
 
-			/// <summary>используется Shell API StrFormatByteSize64</summary>
+			/// <inheritdoc cref="e_FormatByteSize_Win32" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string e_FormatByteSize_Win32(this Int32 iFileLenght) => ((UInt64)iFileLenght).e_FormatByteSize_Win32();
+
+			/// <inheritdoc cref="e_FormatByteSize_Win32" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string e_FormatByteSize_Win32(this UInt32 iFileLenght) => ((UInt64)iFileLenght).e_FormatByteSize_Win32();
+
+			/// <inheritdoc cref="e_FormatByteSize_Win32" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string e_FormatByteSize_Win32(this FileInfo FI) => FI.Length.e_FormatByteSize_Win32();
+
+
+
+
+			/// <summary>используется Shell API StrFormatByteSizeEx 
+			/// to be running on at least Vista SP1 or Server 2008</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string e_FormatByteSize_Win32Ex(this UInt64 FileLenght, WinAPI.Shell.SFBS_FLAGS flags = WinAPI.Shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
+			{
+				StringBuilder SB = new(120);
+				var ptrResult = uom.WinAPI.Shell.StrFormatByteSizeEx(FileLenght, flags, SB, (uint)SB.Capacity);
+				//if (!ptrResult.e_IsValid()) WinAPI.Errors.ThrowLastWin23Error($"StrFormatByteSizeEx ({FileLenght})");
+				string s = SB.ToString();
+				if (s.e_IsNullOrWhiteSpace()) WinAPI.Errors.ThrowLastWin23Error($"StrFormatByteSizeEx ({FileLenght})");
+				return s;
+			}
+
+			/// <inheritdoc cref="e_FormatByteSize_Win32Ex" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string e_FormatByteSize_Win32Ex(this Int64 FileLenght, WinAPI.Shell.SFBS_FLAGS flags = WinAPI.Shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
+				=> ((UInt64)FileLenght).e_FormatByteSize_Win32Ex(flags);
+
+			/// <inheritdoc cref="e_FormatByteSize_Win32Ex" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string e_FormatByteSize_Win32Ex(this Int32 iFileLenght, WinAPI.Shell.SFBS_FLAGS flags = WinAPI.Shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
+				=> ((UInt64)iFileLenght).e_FormatByteSize_Win32Ex(flags);
+
+			/// <inheritdoc cref="e_FormatByteSize_Win32Ex" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string e_FormatByteSize_Win32Ex(this UInt32 iFileLenght, WinAPI.Shell.SFBS_FLAGS flags = WinAPI.Shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
+				=> ((UInt64)iFileLenght).e_FormatByteSize_Win32Ex(flags);
+
+			/// <inheritdoc cref="e_FormatByteSize_Win32Ex" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string e_FormatByteSize_Win32Ex(this FileInfo FI, WinAPI.Shell.SFBS_FLAGS flags = WinAPI.Shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
+				=> FI.Length.e_FormatByteSize_Win32Ex(flags);
 
 
 
@@ -7796,6 +8143,30 @@ namespace uom
 				Brush? brush = null)
 			{
 				Rectangle corner = new(rc.X, rc.Y, radius, radius);
+
+				using System.Drawing.Drawing2D.GraphicsPath path = new();
+				path.AddArc(corner, 180, 90);
+				corner.X = rc.X + rc.Width - radius;
+				path.AddArc(corner, 270, 90);
+				corner.Y = rc.Y + rc.Height - radius;
+				path.AddArc(corner, 0, 90);
+				corner.X = rc.X;
+				path.AddArc(corner, 90, 90);
+				path.CloseFigure();
+
+				if (brush != null) g.FillPath(brush, path);
+				if (pen != null) g.DrawPath(pen, path);
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void e_DrawRoundedRectangle(
+				this Graphics g,
+				RectangleF rc,
+				float radius,
+				Pen? pen = null,
+				Brush? brush = null)
+			{
+				RectangleF corner = new(rc.X, rc.Y, radius, radius);
 
 				using System.Drawing.Drawing2D.GraphicsPath path = new();
 				path.AddArc(corner, 180, 90);
@@ -8707,6 +9078,93 @@ namespace uom
 				return new(ptLocation, src.Size);
 			}
 
+			/// <summary>Центрирует прямоугольник относительно заданной точки</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static RectangleF e_AlignTo(this RectangleF src, RectangleF trg, ContentAlignment alignment, Point? offset = null)
+			{
+				PointF ptLocation = src.Location;
+
+				{
+					//Calculate Y
+					switch (alignment)
+					{
+						case ContentAlignment.TopLeft:
+						case ContentAlignment.TopCenter:
+						case ContentAlignment.TopRight:
+							{
+								ptLocation.Y = trg.Y;
+								if (offset.HasValue) ptLocation.Y += offset.Value.Y;
+								break;
+							}
+					}
+
+					switch (alignment)
+					{
+						case ContentAlignment.MiddleLeft:
+						case ContentAlignment.MiddleCenter:
+						case ContentAlignment.MiddleRight:
+							{
+								RectangleF rcCentered = src.e_CenterTo(trg.e_GetCenter());
+								ptLocation.Y = rcCentered.Y;
+								break;
+							}
+					}
+
+					switch (alignment)
+					{
+						case ContentAlignment.BottomLeft:
+						case ContentAlignment.BottomCenter:
+						case ContentAlignment.BottomRight:
+							{
+								ptLocation.Y = trg.Bottom - src.Height;
+								if (offset.HasValue) ptLocation.Y -= offset.Value.Y;
+								break;
+							}
+					}
+				}
+
+				{
+					//Calculate X
+
+					switch (alignment)
+					{
+						case ContentAlignment.TopLeft:
+						case ContentAlignment.MiddleLeft:
+						case ContentAlignment.BottomLeft:
+							{
+								ptLocation.X = trg.X;
+								if (offset.HasValue) ptLocation.X += offset.Value.X;
+								break;
+							}
+					}
+
+					switch (alignment)
+					{
+						case ContentAlignment.TopCenter:
+						case ContentAlignment.MiddleCenter:
+						case ContentAlignment.BottomCenter:
+							{
+								RectangleF rcCentered = src.e_CenterTo(trg.e_GetCenter());
+								ptLocation.X = rcCentered.X;
+								break;
+							}
+					}
+
+					switch (alignment)
+					{
+						case ContentAlignment.TopRight:
+						case ContentAlignment.MiddleRight:
+						case ContentAlignment.BottomRight:
+							{
+								ptLocation.X = trg.Right - src.Width;
+								if (offset.HasValue) ptLocation.X -= offset.Value.X;
+								break;
+							}
+					}
+				}
+				return new(ptLocation, src.Size);
+			}
+
 
 
 
@@ -8902,6 +9360,65 @@ namespace uom
 				FACILITY_METADIRECTORY = 35
 			}
 
+
+			//
+			// Summary:
+			// HRESULT Wrapper
+			internal enum HResult : Int64
+			{
+				//
+				// Summary:
+				//     S_OK
+				Ok = 0,
+				//
+				// Summary:
+				//     S_FALSE
+				False = 1,
+				//
+				// Summary:
+				//     E_INVALIDARG
+				InvalidArguments = -2147024809,
+				//
+				// Summary:
+				//     E_OUTOFMEMORY
+				OutOfMemory = -2147024882,
+				//
+				// Summary:
+				//     E_NOINTERFACE
+				NoInterface = -2147467262,
+				//
+				// Summary:
+				//     E_FAIL
+				Fail = -2147467259,
+				//
+				// Summary:
+				//     E_ELEMENTNOTFOUND
+				ElementNotFound = -2147023728,
+				//
+				// Summary:
+				//     TYPE_E_ELEMENTNOTFOUND
+				TypeElementNotFound = -2147319765,
+				//
+				// Summary:
+				//     NO_OBJECT
+				NoObject = -2147221019,
+				//
+				// Summary:
+				//     Win32 Error code: ERROR_CANCELLED
+				Win32ErrorCanceled = 1223,
+				//
+				// Summary:
+				//     ERROR_CANCELLED
+				Canceled = -2147023673,
+				//
+				// Summary:
+				//     The requested resource is in use
+				ResourceInUse = -2147024726,
+				//
+				// Summary:
+				//     The requested resources is read-only.
+				AccessDenied = -2147287035
+			}
 
 			internal enum Win32Errors : int
 			{
@@ -12026,406 +12543,406 @@ namespace uom
 
 			DNS_ERROR_RCODE_NO_ERROR =NO_ERROR	,
 
-DNS_ERROR_MASK = 0x00002328 ,
+	DNS_ERROR_MASK = 0x00002328 ,
 				//' 9000 or DNS_ERROR_RESPONSE_CODES_BASE
 			// DNS_ERROR_RCODE_FORMAT_ERROR =  0x00002329
 
 			///<summary> DNS server unable to interpret format.</summary>
-DNS_ERROR_RCODE_FORMAT_ERROR = 9001L
+	DNS_ERROR_RCODE_FORMAT_ERROR = 9001L
 			// DNS_ERROR_RCODE_SERVER_FAILURE = = 0x0000232a
 
 			///<summary> DNS server failure.</summary>
-DNS_ERROR_RCODE_SERVER_FAILURE = 9002,
+	DNS_ERROR_RCODE_SERVER_FAILURE = 9002,
 			 DNS_ERROR_RCODE_NAME_ERROR =  0x0000232b,
 
 			///<summary> DNS name does not exist.</summary>
-DNS_ERROR_RCODE_NAME_ERROR = 9003L
+	DNS_ERROR_RCODE_NAME_ERROR = 9003L
 			// DNS_ERROR_RCODE_NOT_IMPLEMENTED = = 0x0000232c
 
 			///<summary> DNS request not supported by name server.</summary>
-DNS_ERROR_RCODE_NOT_IMPLEMENTED  9004L
+	DNS_ERROR_RCODE_NOT_IMPLEMENTED  9004L
 			// DNS_ERROR_RCODE_REFUSED = = 0x0000232d
 
 			///<summary> DNS operation refused.</summary>
-DNS_ERROR_RCODE_REFUSED = 9005L
+	DNS_ERROR_RCODE_REFUSED = 9005L
 			// DNS_ERROR_RCODE_YXDOMAIN = = 0x0000232e
 
 			///<summary> DNS name that ought not exist, does exist.</summary>
-DNS_ERROR_RCODE_YXDOMAIN = 9006L
+	DNS_ERROR_RCODE_YXDOMAIN = 9006L
 			// DNS_ERROR_RCODE_YXRRSET = = 0x0000232f
 
 			///<summary> DNS RR set that ought not exist, does exist.</summary>
-DNS_ERROR_RCODE_YXRRSET = 9007L
+	DNS_ERROR_RCODE_YXRRSET = 9007L
 			// DNS_ERROR_RCODE_NXRRSET = = 0x00002330
 
 			///<summary> DNS RR set that ought to exist, does not exist.</summary>
-DNS_ERROR_RCODE_NXRRSET = 9008L
+	DNS_ERROR_RCODE_NXRRSET = 9008L
 			// DNS_ERROR_RCODE_NOTAUTH = = 0x00002331
 
 			///<summary> DNS server not authoritative for zone.</summary>
-DNS_ERROR_RCODE_NOTAUTH = 9009L
+	DNS_ERROR_RCODE_NOTAUTH = 9009L
 			// DNS_ERROR_RCODE_NOTZONE = = 0x00002332
 
 			///<summary> DNS name in update or prereq is not in zone.</summary>
-DNS_ERROR_RCODE_NOTZONE = 9010L
+	DNS_ERROR_RCODE_NOTZONE = 9010L
 			// DNS_ERROR_RCODE_BADSIG = = 0x00002338
 
 			///<summary> DNS signature failed to verify.</summary>
-DNS_ERROR_RCODE_BADSIG = 9016L
+	DNS_ERROR_RCODE_BADSIG = 9016L
 			// DNS_ERROR_RCODE_BADKEY = = 0x00002339
 
 			///<summary> DNS bad key.</summary>
-DNS_ERROR_RCODE_BADKEY = 9017L
+	DNS_ERROR_RCODE_BADKEY = 9017L
 			// DNS_ERROR_RCODE_BADTIME = = 0x0000233a
 
 			///<summary> DNS signature validity expired.</summary>
-DNS_ERROR_RCODE_BADTIME = 9018L </ summary >
-DNS_ERROR_RCODE_LAST DNS_ERROR_RCODE_BADTIME
+	DNS_ERROR_RCODE_BADTIME = 9018L </ summary >
+	DNS_ERROR_RCODE_LAST DNS_ERROR_RCODE_BADTIME
 
 
 
 
 			//  Packet format
-</summary>
-DNS_ERROR_PACKET_FMT_BASE 9500
+	</summary>
+	DNS_ERROR_PACKET_FMT_BASE 9500
 			// DNS_INFO_NO_RECORDS = = 0x0000251d
 
 			///<summary> No records found for given DNS query.</summary>
-DNS_INFO_NO_RECORDS = 9501L
+	DNS_INFO_NO_RECORDS = 9501L
 			// DNS_ERROR_BAD_PACKET = = 0x0000251e
 
 			///<summary> Bad DNS packet.</summary>
-DNS_ERROR_BAD_PACKET = 9502L
+	DNS_ERROR_BAD_PACKET = 9502L
 			// DNS_ERROR_NO_PACKET = = 0x0000251f
 
 			///<summary> No DNS packet.</summary>
-DNS_ERROR_NO_PACKET = 9503L
+	DNS_ERROR_NO_PACKET = 9503L
 			// DNS_ERROR_RCODE = = 0x00002520
 
 			///<summary> DNS error, check rcode.</summary>
-DNS_ERROR_RCODE = 9504L
+	DNS_ERROR_RCODE = 9504L
 			// DNS_ERROR_UNSECURE_PACKET = = 0x00002521
 
 			///<summary> Unsecured DNS packet.</summary>
-DNS_ERROR_UNSECURE_PACKET = 9505L </ summary >
-DNS_STATUS_PACKET_UNSECURE DNS_ERROR_UNSECURE_PACKET
+	DNS_ERROR_UNSECURE_PACKET = 9505L </ summary >
+	DNS_STATUS_PACKET_UNSECURE DNS_ERROR_UNSECURE_PACKET
 
 			//  General API errors
-</summary>
-DNS_ERROR_NO_MEMORY = ERROR_OUTOFMEMORY
+	</summary>
+	DNS_ERROR_NO_MEMORY = ERROR_OUTOFMEMORY
 			//</summary>
-DNS_ERROR_INVALID_NAME = ERROR_INVALID_NAME
+	DNS_ERROR_INVALID_NAME = ERROR_INVALID_NAME
 			//</summary>
-DNS_ERROR_INVALID_DATA = ERROR_INVALID_DATA </ summary >
-DNS_ERROR_GENERAL_API_BASE 9550
+	DNS_ERROR_INVALID_DATA = ERROR_INVALID_DATA </ summary >
+	DNS_ERROR_GENERAL_API_BASE 9550
 			// DNS_ERROR_INVALID_TYPE = = 0x0000254f
 
 			///<summary> Invalid DNS type.</summary>
-DNS_ERROR_INVALID_TYPE = 9551L
+	DNS_ERROR_INVALID_TYPE = 9551L
 			// DNS_ERROR_INVALID_IP_ADDRESS = = 0x00002550
 
 			///<summary> Invalid IP address.</summary>
-DNS_ERROR_INVALID_IP_ADDRESS = 9552L
+	DNS_ERROR_INVALID_IP_ADDRESS = 9552L
 			// DNS_ERROR_INVALID_PROPERTY = = 0x00002551
 
 			///<summary> Invalid property.</summary>
-DNS_ERROR_INVALID_PROPERTY = 9553L
+	DNS_ERROR_INVALID_PROPERTY = 9553L
 			// DNS_ERROR_TRY_AGAIN_LATER = = 0x00002552
 
 			///<summary> Try DNS operation again later.</summary>
-DNS_ERROR_TRY_AGAIN_LATER = 9554L
+	DNS_ERROR_TRY_AGAIN_LATER = 9554L
 			// DNS_ERROR_NOT_UNIQUE = = 0x00002553
 
 			///<summary> Record for given name and type is not unique.</summary>
-DNS_ERROR_NOT_UNIQUE = 9555L
+	DNS_ERROR_NOT_UNIQUE = 9555L
 			// DNS_ERROR_NON_RFC_NAME = = 0x00002554
 
 			///<summary> DNS name does not comply with RFC specifications.</summary>
-DNS_ERROR_NON_RFC_NAME = 9556L
+	DNS_ERROR_NON_RFC_NAME = 9556L
 			// DNS_STATUS_FQDN = = 0x00002555
 
 			///<summary> DNS name is a fully-qualified DNS name.</summary>
-DNS_STATUS_FQDN = 9557L
+	DNS_STATUS_FQDN = 9557L
 			// DNS_STATUS_DOTTED_NAME = = 0x00002556
 
 			///<summary> DNS name is dotted (multi-label).</summary>
-DNS_STATUS_DOTTED_NAME = 9558L
+	DNS_STATUS_DOTTED_NAME = 9558L
 			// DNS_STATUS_SINGLE_PART_NAME = = 0x00002557
 
 			///<summary> DNS name is a single-part name.</summary>
-DNS_STATUS_SINGLE_PART_NAME = 9559L
+	DNS_STATUS_SINGLE_PART_NAME = 9559L
 			// DNS_ERROR_INVALID_NAME_CHAR = = 0x00002558
 
 			///<summary> DNS name contains an invalid character.</summary>
-DNS_ERROR_INVALID_NAME_CHAR = 9560L
+	DNS_ERROR_INVALID_NAME_CHAR = 9560L
 			// DNS_ERROR_NUMERIC_NAME = = 0x00002559
 
 			///<summary> DNS name is entirely numeric.</summary>
-DNS_ERROR_NUMERIC_NAME = 9561L
+	DNS_ERROR_NUMERIC_NAME = 9561L
 			// DNS_ERROR_NOT_ALLOWED_ON_ROOT_SERVER  = 0x0000255A
 
 			///<summary> The operation requested is not permitted on a DNS root server.</summary>
-DNS_ERROR_NOT_ALLOWED_ON_ROOT_SERVER 9562L
+	DNS_ERROR_NOT_ALLOWED_ON_ROOT_SERVER 9562L
 			// DNS_ERROR_NOT_ALLOWED_UNDER_DELEGATION  = 0x0000255B
 
 			///<summary> The record could not be created because this part of the DNS namespace has
 			//  been delegated to another server.</summary>
-DNS_ERROR_NOT_ALLOWED_UNDER_DELEGATION 9563L
+	DNS_ERROR_NOT_ALLOWED_UNDER_DELEGATION 9563L
 			// DNS_ERROR_CANNOT_FIND_ROOT_HINTS  = 0x0000255C
 
 			///<summary> The DNS server could not find a set of root hints.</summary>
-DNS_ERROR_CANNOT_FIND_ROOT_HINTS 9564L
+	DNS_ERROR_CANNOT_FIND_ROOT_HINTS 9564L
 			// DNS_ERROR_INCONSISTENT_ROOT_HINTS  = 0x0000255D
 
 			///<summary> The DNS server found root hints but they were not consistent across
 			//  all adapters.</summary>
-DNS_ERROR_INCONSISTENT_ROOT_HINTS 9565 ,
+	DNS_ERROR_INCONSISTENT_ROOT_HINTS 9565 ,
 			//  Zone errors
-</summary>
-DNS_ERROR_ZONE_BASE 9600
+	</summary>
+	DNS_ERROR_ZONE_BASE 9600
 			// DNS_ERROR_ZONE_DOES_NOT_EXIST = = 0x00002581
 
 			///<summary> DNS zone does not exist.</summary>
-DNS_ERROR_ZONE_DOES_NOT_EXIST = 9601L
+	DNS_ERROR_ZONE_DOES_NOT_EXIST = 9601L
 			// DNS_ERROR_NO_ZONE_INFO = = 0x00002582
 
 			///<summary> DNS zone information not available.</summary>
-DNS_ERROR_NO_ZONE_INFO = 9602L
+	DNS_ERROR_NO_ZONE_INFO = 9602L
 			// DNS_ERROR_INVALID_ZONE_OPERATION = = 0x00002583
 
 			///<summary> Invalid operation for DNS zone.</summary>
-DNS_ERROR_INVALID_ZONE_OPERATION 9603L
+	DNS_ERROR_INVALID_ZONE_OPERATION 9603L
 			// DNS_ERROR_ZONE_CONFIGURATION_ERROR = = 0x00002584
 
 			///<summary> Invalid DNS zone configuration.</summary>
-DNS_ERROR_ZONE_CONFIGURATION_ERROR 9604L
+	DNS_ERROR_ZONE_CONFIGURATION_ERROR 9604L
 			// DNS_ERROR_ZONE_HAS_NO_SOA_RECORD = = 0x00002585
 
 			///<summary> DNS zone has no start of authority (SOA) record.</summary>
-DNS_ERROR_ZONE_HAS_NO_SOA_RECORD 9605L
+	DNS_ERROR_ZONE_HAS_NO_SOA_RECORD 9605L
 			// DNS_ERROR_ZONE_HAS_NO_NS_RECORDS = = 0x00002586
 
 			///<summary> DNS zone has no Name Server (NS) record.</summary>
-DNS_ERROR_ZONE_HAS_NO_NS_RECORDS 9606L
+	DNS_ERROR_ZONE_HAS_NO_NS_RECORDS 9606L
 			// DNS_ERROR_ZONE_LOCKED = = 0x00002587
 
 			///<summary> DNS zone is locked.</summary>
-DNS_ERROR_ZONE_LOCKED = 9607L
+	DNS_ERROR_ZONE_LOCKED = 9607L
 			// DNS_ERROR_ZONE_CREATION_FAILED = = 0x00002588
 
 			///<summary> DNS zone creation failed.</summary>
-DNS_ERROR_ZONE_CREATION_FAILED = 9608L
+	DNS_ERROR_ZONE_CREATION_FAILED = 9608L
 			// DNS_ERROR_ZONE_ALREADY_EXISTS = = 0x00002589
 
 			///<summary> DNS zone already exists.</summary>
-DNS_ERROR_ZONE_ALREADY_EXISTS = 9609L
+	DNS_ERROR_ZONE_ALREADY_EXISTS = 9609L
 			// DNS_ERROR_AUTOZONE_ALREADY_EXISTS = = 0x0000258a
 
 			///<summary> DNS automatic zone already exists.</summary>
-DNS_ERROR_AUTOZONE_ALREADY_EXISTS 9610L
+	DNS_ERROR_AUTOZONE_ALREADY_EXISTS 9610L
 			// DNS_ERROR_INVALID_ZONE_TYPE = = 0x0000258b
 
 			///<summary> Invalid DNS zone type.</summary>
-DNS_ERROR_INVALID_ZONE_TYPE = 9611L
+	DNS_ERROR_INVALID_ZONE_TYPE = 9611L
 			// DNS_ERROR_SECONDARY_REQUIRES_MASTER_IP = 0x0000258c
 
 			///<summary> Secondary DNS zone requires master IP address.</summary>
-DNS_ERROR_SECONDARY_REQUIRES_MASTER_IP 9612L
+	DNS_ERROR_SECONDARY_REQUIRES_MASTER_IP 9612L
 			// DNS_ERROR_ZONE_NOT_SECONDARY = = 0x0000258d
 
 			///<summary> DNS zone not secondary.</summary>
-DNS_ERROR_ZONE_NOT_SECONDARY = 9613L
+	DNS_ERROR_ZONE_NOT_SECONDARY = 9613L
 			// DNS_ERROR_NEED_SECONDARY_ADDRESSES = = 0x0000258e
 
 			///<summary> Need secondary IP address.</summary>
-DNS_ERROR_NEED_SECONDARY_ADDRESSES 9614L
+	DNS_ERROR_NEED_SECONDARY_ADDRESSES 9614L
 			// DNS_ERROR_WINS_INIT_FAILED = = 0x0000258f
 
 			///<summary> WINS initialization failed.</summary>
-DNS_ERROR_WINS_INIT_FAILED = 9615L
+	DNS_ERROR_WINS_INIT_FAILED = 9615L
 			// DNS_ERROR_NEED_WINS_SERVERS = = 0x00002590
 
 			///<summary> Need WINS servers.</summary>
-DNS_ERROR_NEED_WINS_SERVERS = 9616L
+	DNS_ERROR_NEED_WINS_SERVERS = 9616L
 			// DNS_ERROR_NBSTAT_INIT_FAILED = = 0x00002591
 
 			///<summary> NBTSTAT initialization call failed.</summary>
-DNS_ERROR_NBSTAT_INIT_FAILED = 9617L
+	DNS_ERROR_NBSTAT_INIT_FAILED = 9617L
 			// DNS_ERROR_SOA_DELETE_INVALID = = 0x00002592
 
 			///<summary> Invalid delete of start of authority (SOA)</summary>
-DNS_ERROR_SOA_DELETE_INVALID = 9618L
+	DNS_ERROR_SOA_DELETE_INVALID = 9618L
 			// DNS_ERROR_FORWARDER_ALREADY_EXISTS = = 0x00002593
 
 			///<summary> A conditional forwarding zone already exists for that name.</summary>
-DNS_ERROR_FORWARDER_ALREADY_EXISTS 9619L
+	DNS_ERROR_FORWARDER_ALREADY_EXISTS 9619L
 			// DNS_ERROR_ZONE_REQUIRES_MASTER_IP = = 0x00002594
 
 			///<summary> This zone must be configured with one or more master DNS server IP addresses.</summary>
-DNS_ERROR_ZONE_REQUIRES_MASTER_IP 9620L
+	DNS_ERROR_ZONE_REQUIRES_MASTER_IP 9620L
 			// DNS_ERROR_ZONE_IS_SHUTDOWN = = 0x00002595
 
 			///<summary> The operation cannot be performed because this zone is shutdown.</summary>
-DNS_ERROR_ZONE_IS_SHUTDOWN = 9621,
+	DNS_ERROR_ZONE_IS_SHUTDOWN = 9621,
 			//  Datafile errors
-</summary>
-DNS_ERROR_DATAFILE_BASE 9650
+	</summary>
+	DNS_ERROR_DATAFILE_BASE 9650
 			// DNS = = 0x000025b3
 
 			///<summary> Primary DNS zone requires datafile.</summary>
-DNS_ERROR_PRIMARY_REQUIRES_DATAFILE 9651L
+	DNS_ERROR_PRIMARY_REQUIRES_DATAFILE 9651L
 			// DNS = = 0x000025b4
 
 			///<summary> Invalid datafile name for DNS zone.</summary>
-DNS_ERROR_INVALID_DATAFILE_NAME  9652L
+	DNS_ERROR_INVALID_DATAFILE_NAME  9652L
 			// DNS = = 0x000025b5
 
 			///<summary> Failed to open datafile for DNS zone.</summary>
-DNS_ERROR_DATAFILE_OPEN_FAILURE  9653L
+	DNS_ERROR_DATAFILE_OPEN_FAILURE  9653L
 			// DNS = = 0x000025b6
 
 			///<summary> Failed to write datafile for DNS zone.</summary>
-DNS_ERROR_FILE_WRITEBACK_FAILED  9654L
+	DNS_ERROR_FILE_WRITEBACK_FAILED  9654L
 			// DNS = = 0x000025b7
 
 			///<summary> Failure while reading datafile for DNS zone.</summary>
-DNS_ERROR_DATAFILE_PARSING = 9655,
+	DNS_ERROR_DATAFILE_PARSING = 9655,
 			//  Database errors
-</summary>
-DNS_ERROR_DATABASE_BASE 9700
+	</summary>
+	DNS_ERROR_DATABASE_BASE 9700
 			// DNS_ERROR_RECORD_DOES_NOT_EXIST = = 0x000025e5
 
 			///<summary> DNS record does not exist.</summary>
-DNS_ERROR_RECORD_DOES_NOT_EXIST  9701L
+	DNS_ERROR_RECORD_DOES_NOT_EXIST  9701L
 			// DNS_ERROR_RECORD_FORMAT = = 0x000025e6
 
 			///<summary> DNS record format error.</summary>
-DNS_ERROR_RECORD_FORMAT = 9702L
+	DNS_ERROR_RECORD_FORMAT = 9702L
 			// DNS_ERROR_NODE_CREATION_FAILED = = 0x000025e7
 
 			///<summary> Node creation failure in DNS.</summary>
-DNS_ERROR_NODE_CREATION_FAILED = 9703L
+	DNS_ERROR_NODE_CREATION_FAILED = 9703L
 			// DNS_ERROR_UNKNOWN_RECORD_TYPE = = 0x000025e8
 
 			///<summary> Unknown DNS record type.</summary>
-DNS_ERROR_UNKNOWN_RECORD_TYPE = 9704L
+	DNS_ERROR_UNKNOWN_RECORD_TYPE = 9704L
 			// DNS_ERROR_RECORD_TIMED_OUT = = 0x000025e9
 
 			///<summary> DNS record timed out.</summary>
-DNS_ERROR_RECORD_TIMED_OUT = 9705L
+	DNS_ERROR_RECORD_TIMED_OUT = 9705L
 			// DNS_ERROR_NAME_NOT_IN_ZONE = = 0x000025ea
 
 			///<summary> Name not in DNS zone.</summary>
-DNS_ERROR_NAME_NOT_IN_ZONE = 9706L
+	DNS_ERROR_NAME_NOT_IN_ZONE = 9706L
 			// DNS_ERROR_CNAME_LOOP = = 0x000025eb
 
 			///<summary> CNAME loop detected.</summary>
-DNS_ERROR_CNAME_LOOP = 9707L
+	DNS_ERROR_CNAME_LOOP = 9707L
 			// DNS_ERROR_NODE_IS_CNAME = = 0x000025ec
 
 			///<summary> Node is a CNAME DNS record.</summary>
-DNS_ERROR_NODE_IS_CNAME = 9708L
+	DNS_ERROR_NODE_IS_CNAME = 9708L
 			// DNS_ERROR_CNAME_COLLISION = = 0x000025ed
 
 			///<summary> A CNAME record already exists for given name.</summary>
-DNS_ERROR_CNAME_COLLISION = 9709L
+	DNS_ERROR_CNAME_COLLISION = 9709L
 			// DNS_ERROR_RECORD_ONLY_AT_ZONE_ROOT = = 0x000025ee
 
 			///<summary> Record only at DNS zone root.</summary>
-DNS_ERROR_RECORD_ONLY_AT_ZONE_ROOT 9710L
+	DNS_ERROR_RECORD_ONLY_AT_ZONE_ROOT 9710L
 			// DNS_ERROR_RECORD_ALREADY_EXISTS = = 0x000025ef
 
 			///<summary> DNS record already exists.</summary>
-DNS_ERROR_RECORD_ALREADY_EXISTS  9711L
+	DNS_ERROR_RECORD_ALREADY_EXISTS  9711L
 			// DNS_ERROR_SECONDARY_DATA = = 0x000025f0
 
 			///<summary> Secondary DNS zone data error.</summary>
-DNS_ERROR_SECONDARY_DATA = 9712L
+	DNS_ERROR_SECONDARY_DATA = 9712L
 			// DNS_ERROR_NO_CREATE_CACHE_DATA = = 0x000025f1
 
 			///<summary> Could not create DNS cache data.</summary>
-DNS_ERROR_NO_CREATE_CACHE_DATA = 9713L
+	DNS_ERROR_NO_CREATE_CACHE_DATA = 9713L
 			// DNS_ERROR_NAME_DOES_NOT_EXIST = = 0x000025f2
 
 			///<summary> DNS name does not exist.</summary>
-DNS_ERROR_NAME_DOES_NOT_EXIST = 9714L
+	DNS_ERROR_NAME_DOES_NOT_EXIST = 9714L
 			// DNS_WARNING_PTR_CREATE_FAILED = = 0x000025f3
 
 			///<summary> Could not create pointer (PTR) record.</summary>
-DNS_WARNING_PTR_CREATE_FAILED = 9715L
+	DNS_WARNING_PTR_CREATE_FAILED = 9715L
 			// DNS_WARNING_DOMAIN_UNDELETED = = 0x000025f4
 
 			///<summary> DNS domain was undeleted.</summary>
-DNS_WARNING_DOMAIN_UNDELETED = 9716L
+	DNS_WARNING_DOMAIN_UNDELETED = 9716L
 			// DNS_ERROR_DS_UNAVAILABLE = = 0x000025f5
 
 			///<summary> The directory service is unavailable.</summary>
-DNS_ERROR_DS_UNAVAILABLE = 9717L
+	DNS_ERROR_DS_UNAVAILABLE = 9717L
 			// DNS_ERROR_DS_ZONE_ALREADY_EXISTS = = 0x000025f6
 
 			///<summary> DNS zone already exists in the directory service.</summary>
-DNS_ERROR_DS_ZONE_ALREADY_EXISTS 9718L
+	DNS_ERROR_DS_ZONE_ALREADY_EXISTS 9718L
 			// DNS_ERROR_NO_BOOTFILE_IF_DS_ZONE = = 0x000025f7
 
 			///<summary> DNS server not creating or reading the boot file for the directory service integrated DNS zone.</summary>
-DNS_ERROR_NO_BOOTFILE_IF_DS_ZONE 9719 ,
+	DNS_ERROR_NO_BOOTFILE_IF_DS_ZONE 9719 ,
 			//  Operation errors
-</summary>
-DNS_ERROR_OPERATION_BASE 9750
+	</summary>
+	DNS_ERROR_OPERATION_BASE 9750
 			// DNS_INFO_AXFR_COMPLETE = = 0x00002617
 
 			///<summary> DNS AXFR (zone transfer) complete.</summary>
-DNS_INFO_AXFR_COMPLETE = 9751L
+	DNS_INFO_AXFR_COMPLETE = 9751L
 			// DNS_ERROR_AXFR = = 0x00002618
 
 			///<summary> DNS zone transfer failed.</summary>
-DNS_ERROR_AXFR = 9752L
+	DNS_ERROR_AXFR = 9752L
 			// DNS_INFO_ADDED_LOCAL_WINS = = 0x00002619
 
 			///<summary> Added local WINS server.</summary>
-DNS_INFO_ADDED_LOCAL_WINS = 9753,
+	DNS_INFO_ADDED_LOCAL_WINS = 9753,
 			//  Secure update
-</summary>
-DNS_ERROR_SECURE_BASE 9800
+	</summary>
+	DNS_ERROR_SECURE_BASE 9800
 			// DNS_STATUS_CONTINUE_NEEDED = = 0x00002649
 
 			///<summary> Secure update call needs to continue update request.</summary>
-DNS_STATUS_CONTINUE_NEEDED = 9801,
+	DNS_STATUS_CONTINUE_NEEDED = 9801,
 			//  Setup errors
-</summary>
-DNS_ERROR_SETUP_BASE 9850
+	</summary>
+	DNS_ERROR_SETUP_BASE 9850
 			// DNS_ERROR_NO_TCPIP = = 0x0000267b
 
 			///<summary> TCP/IP network protocol not installed.</summary>
-DNS_ERROR_NO_TCPIP = 9851L
+	DNS_ERROR_NO_TCPIP = 9851L
 			// DNS_ERROR_NO_DNS_SERVERS = = 0x0000267c
 
 			///<summary> No DNS servers configured for local system.</summary>
-DNS_ERROR_NO_DNS_SERVERS = 9852,
+	DNS_ERROR_NO_DNS_SERVERS = 9852,
 			//  Directory partition (DP) errors
-</summary>
-DNS_ERROR_DP_BASE 9900
+	</summary>
+	DNS_ERROR_DP_BASE 9900
 			// DNS_ERROR_DP_DOES_NOT_EXIST = = 0x000026ad
 
 			///<summary> The specified directory partition does not exist.</summary>
-DNS_ERROR_DP_DOES_NOT_EXIST = 9901L
+	DNS_ERROR_DP_DOES_NOT_EXIST = 9901L
 			// DNS_ERROR_DP_ALREADY_EXISTS = = 0x000026ae
 
 			///<summary> The specified directory partition already exists.</summary>
-DNS_ERROR_DP_ALREADY_EXISTS = 9902L
+	DNS_ERROR_DP_ALREADY_EXISTS = 9902L
 			// DNS_ERROR_DP_NOT_ENLISTED = = 0x000026af
 
 			///<summary> This DNS server is not enlisted in the specified directory partition.</summary>
-DNS_ERROR_DP_NOT_ENLISTED = 9903L
+	DNS_ERROR_DP_NOT_ENLISTED = 9903L
 			// DNS_ERROR_DP_ALREADY_ENLISTED = = 0x000026b0
 
 			///<summary> This DNS server is already enlisted in the specified directory partition.</summary>
-DNS_ERROR_DP_ALREADY_ENLISTED = 9904L
+	DNS_ERROR_DP_ALREADY_ENLISTED = 9904L
 			// DNS_ERROR_DP_NOT_AVAILABLE = = 0x000026b1
 
 			///<summary> The directory partition is not available at this time. Please wait
 			//  a few minutes and try again.</summary>
-DNS_ERROR_DP_NOT_AVAILABLE = 9905L
+	DNS_ERROR_DP_NOT_AVAILABLE = 9905L
 			// '''''''''''''''''''''''''/
 			// = '
 			// = End of DNS Error Codes = '
@@ -13380,6 +13897,15 @@ DNS_ERROR_DP_NOT_AVAILABLE = 9905L
 						if (iHResult == uom.WinAPI.core.S_OK) return Win32Errors.ERROR_SUCCESS;
 						return Win32Errors.ERROR_CAN_NOT_COMPLETE;// Not a Win32 HRESULT so return a generic error code.
 					}
+
+					/*
+					public Win32Errors ToWin32Exception()
+					{
+						Win32Errors wex = ToWin32();
+						uom.WinAPI.Errors.ThrowWin23Error
+
+					}
+					 */
 
 
 					public override string ToString() => $"HRESULT: {iHResult} ({Severity}, Facility: {Facility}, ErrorCode: {Code})";
@@ -23690,10 +24216,10 @@ DNS_ERROR_DP_NOT_AVAILABLE = 9905L
 
 			}
 		}
-
-
 		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
+#pragma warning disable CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 		internal static partial class core
+#pragma warning restore CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 		{
 
 
@@ -24230,7 +24756,7 @@ DNS_ERROR_DP_NOT_AVAILABLE = 9905L
 					return lResult.ToArray();
 				}
 
-				public string DumpHex() => DangerousGetHandle().e_DumpHex(Lenght);
+				public string DumpHex() => DangerousGetHandle().e_DumpHexToString(Lenght);
 
 				public override string ToString() => DumpHex();
 
@@ -28353,9 +28879,10 @@ DNS_ERROR_DP_NOT_AVAILABLE = 9905L
 			public static extern IntPtr GetSidSubAuthority(IntPtr pSid, uint nSubAuthority);
 		}
 
-
 		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
+#pragma warning disable CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 		internal static partial class strings
+#pragma warning restore CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 		{
 
 
@@ -28372,7 +28899,9 @@ DNS_ERROR_DP_NOT_AVAILABLE = 9905L
 
 
 		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
+#pragma warning disable CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 		internal static partial class math
+#pragma warning restore CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 		{
 
 
@@ -28418,14 +28947,29 @@ DNS_ERROR_DP_NOT_AVAILABLE = 9905L
 
 			#region StrFormatByteSize
 
+
+
+
+
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			[DllImport(WinAPI.core.WINDLL_SHLWAPI, SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[DllImport(WinAPI.core.WINDLL_SHLWAPI, SetLastError = true, CharSet = CharSet.Ansi, EntryPoint = "StrFormatByteSize64A", ExactSpelling = true, CallingConvention = CallingConvention.Winapi)]
 			internal static extern IntPtr StrFormatByteSize64(
-				 long FileSize,
-				[MarshalAs(UnmanagedType.LPStr)] StringBuilder Buffer,
-				int BufferSize);
+				[In] UInt64 FileSize,
+				[In, Out, MarshalAs(UnmanagedType.LPStr)] StringBuilder Buffer,
+				[In] uint BufferSize);
 
-
+			public enum SFBS_FLAGS : int
+			{
+				SFBS_FLAGS_ROUND_TO_NEAREST_DISPLAYED_DIGIT = 0x0001,
+				SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS = 0x0002
+			}
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			[DllImport(WinAPI.core.WINDLL_SHLWAPI, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			internal static extern IntPtr StrFormatByteSizeEx(
+				[In] UInt64 FileSize,
+				[In] SFBS_FLAGS flags,
+				[In, Out, MarshalAs(UnmanagedType.LPTStr)] StringBuilder Buffer,
+				[In] uint BufferSize);
 
 
 
@@ -29313,6 +29857,157 @@ DNS_ERROR_DP_NOT_AVAILABLE = 9905L
 			// End Function
 
 
+
+
+
+
+
+
+
+			/// <summary>https://learn.microsoft.com/en-us/windows/win32/api/shlwapi/nf-shlwapi-shloadindirectstring</summary>
+			/// <returns>
+			/// If this function succeeds, it returns S_OK. Otherwise, it returns an HRESULT error code.
+			/// If the string is not an indirect string, then the string is directly copied without change to pszOutBuf and the function returns S_OK.
+			/// </returns>
+			[DllImport(core.WINDLL_SHLWAPI, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			private static extern int SHLoadIndirectString(
+				[In, MarshalAs(UnmanagedType.LPWStr)] string pszSource,
+				[In, Out] StringBuilder pszOutBuf,
+				[In] int cchOutBuf,
+				IntPtr ppvReserved);
+
+			/// <summary>Expands a Microsoft indirect string, such as '@vmms.exe,-279', which can be mapped
+			/// to a normal human-readable string.  Also supports indirect strings similar to this:
+			/// '@{Microsoft.Cortana?ms-resource://Microsoft.Cortana/resources/ProductDescription}'.
+			/// Microsoft indirect strings begin with an "@" symbol and are common in the registry. See https://msdn.microsoft.com/en-us/library/windows/desktop/bb759919(v=vs.85).aspx
+			/// </summary>
+			/// <param name="indirectString">
+			/// Win32: '@{Filepath?resource}'
+			/// AppX: '@{PackageFullName?resource-id}'
+			/// SAMPLE:
+			/// @{C:\Program Files\WindowsApps\Microsoft.BingMaps_2.1.3230.2048_x64__8wekyb3d8bbwe\resources.pri?ms-resource://Microsoft.BingMaps/Resources/AppShortDisplayName};
+			/// </param>
+			public static string SHLoadIndirectString(string indirectString, int bufferSize = 1024)
+			{
+				//@{s}
+				if (indirectString.Length < 5 || indirectString[0] != '@') throw new ArgumentException($"'{nameof(indirectString)}' should begin with the '@' symbol!");
+
+				StringBuilder sb = new(bufferSize);
+				int result = SHLoadIndirectString(indirectString, sb, sb.Capacity, IntPtr.Zero);
+				if (result == 0)
+				{
+					string s = sb.ToString();
+					if (s != indirectString) return s;//Resource loaded OK
+
+					throw new ArgumentException($"'{nameof(indirectString)}' is not an indirect string!");
+				}
+				var Hr = new uom.WinAPI.Errors.COMErrors._HRESULT(result);
+				Win32Exception wex = new((int)Hr.ToWin32());
+				throw wex;
+			}
+
+
+			public const string MS_RESX_PREFIX = @"ms-resource:";
+
+			/// <param name="ResID">ms-resource:AppxManifest_DisplayName</param>
+			/// <returns>@{C:\Program Files\WindowsApps\Microsoft.BingMaps_2.1.3230.2048_x64__8wekyb3d8bbwe\resources.pri?ms-resource://Microsoft.BingMaps/Resources/AppShortDisplayName};</returns>
+			public static string SHLoadIndirectppPackageResourceString(string ResID, string PackageName, string PackageFullName, string InstallLocation)
+			{
+				if (!ResID.StartsWith(MS_RESX_PREFIX)) throw new ArgumentException(nameof(ResID));
+
+
+				//@{PackageFullName?resource-id}
+				//ms-resource://PackageName/Resources/Id
+
+				/*
+				 * https://stackoverflow.com/questions/18219915/get-localized-friendly-names-for-all-winrt-metro-apps-installed-from-wpf-applica
+				 Я обнаружил, что путь к PRI является лучшим решением, чем указание имени пакета. Много раз SHLoadIndirectString не разрешает ресурс, когда указано только имя пакета. Путь к PRI — это место установки пакета + resources.pri . Пример: C:\Program Files\WindowsApps\Microsoft.MicrosoftEdge_8wekyb3d8bbwe\Resources.pri.
+				 */
+
+				string resID2 = ResID.Substring(MS_RESX_PREFIX.Length);
+
+				{
+					string pack = PackageFullName;
+
+					try
+					{
+						string input = @$"{pack}? {MS_RESX_PREFIX}//{PackageName}/Resources/{resID2}";
+						input = @"@{" + input + @"}";
+
+						string parsedString = SHLoadIndirectString(input);
+						if (!string.IsNullOrWhiteSpace(parsedString)) return parsedString;
+					}
+					catch (Exception ex) { var ttt = ex; }
+
+					try
+					{
+						string input = @$"{pack}? {MS_RESX_PREFIX}//{PackageName}/{resID2}";
+						input = @"@{" + input + @"}";
+
+						string parsedString = SHLoadIndirectString(input);
+						if (!string.IsNullOrWhiteSpace(parsedString)) return parsedString;
+					}
+					catch (Exception ex) { var ttt = ex; }
+				}
+
+				{
+					string pack = InstallLocation;
+					try
+					{
+						string input = @$"{pack}? {MS_RESX_PREFIX}//{PackageName}/Resources/{resID2}";
+						input = @"@{" + input + @"}";
+
+						string parsedString = SHLoadIndirectString(input);
+						if (!string.IsNullOrWhiteSpace(parsedString)) return parsedString;
+					}
+					catch (Exception ex) { var ttt = ex; }
+
+					try
+					{
+						string input = @$"{pack}? {MS_RESX_PREFIX}//{PackageName}/{resID2}";
+						input = @"@{" + input + @"}";
+
+						string parsedString = SHLoadIndirectString(input);
+						if (!string.IsNullOrWhiteSpace(parsedString)) return parsedString;
+					}
+					catch (Exception ex) { var ttt = ex; }
+				}
+
+				{
+					string pack = InstallLocation;
+					try
+					{
+						string input = @$"{pack}\resources.pri? {MS_RESX_PREFIX}//{PackageName}/Resources/{resID2}";
+						input = @"@{" + input + @"}";
+
+						string parsedString = SHLoadIndirectString(input);
+						if (!string.IsNullOrWhiteSpace(parsedString)) return parsedString;
+					}
+					catch (Exception ex) { var ttt = ex; }
+
+					try
+					{
+						string input = @$"{pack}\resources.pri? {MS_RESX_PREFIX}//{PackageName}/{resID2}";
+						input = @"@{" + input + @"}";
+
+						string parsedString = SHLoadIndirectString(input);
+						if (!string.IsNullOrWhiteSpace(parsedString)) return parsedString;
+					}
+					catch (Exception ex) { var ttt = ex; }
+
+					try
+					{
+						string input = @$"{pack}\resources.pri? {MS_RESX_PREFIX}//{resID2}";
+						input = @"@{" + input + @"}";
+
+						string parsedString = SHLoadIndirectString(input);
+						if (!string.IsNullOrWhiteSpace(parsedString)) return parsedString;
+					}
+					catch (Exception ex) { var ttt = ex; }
+				}
+
+				return string.Empty;
+			}
 
 		}
 

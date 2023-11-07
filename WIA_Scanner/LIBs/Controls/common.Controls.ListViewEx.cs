@@ -1085,10 +1085,12 @@ namespace common.Controls
 		private Dictionary<string, bool> GetCurrentGroupsCollapsedStates()
 			=> this
 				.e_GroupsAsIEnumerable()
-				.Select(grp => (Name: (grp.Name ?? DEFAULT_LIST_VIEW_GROUP_NAME).ToLower().Trim(), Collapsed: grp.e_GetState_IsCollapsed()))
+				.Select(grp => (Name: grp.e_GetStringID(DEFAULT_LIST_VIEW_GROUP_NAME).ToLower().Trim(), Collapsed: grp.e_GetState_IsCollapsed()))
 				.Where(grp => !string.IsNullOrWhiteSpace(grp.Name))
 				.OrderBy(grp => grp.Name)
 				.ToDictionary(grp => grp.Name, grp => grp.Collapsed);
+
+
 
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1096,8 +1098,6 @@ namespace common.Controls
 		{
 			var currentStates = GetCurrentGroupsCollapsedStates();
 			bool hasAnyChanges = !currentStates.e_IsDictionaryEqualTo(_knownGroupsStates);
-			//_knownGroupsStates = currentStates;
-
 			if (hasAnyChanges)
 			{
 				this.GroupsCollapsedStateChangedByMouse?.Invoke(this, "");
@@ -1203,8 +1203,8 @@ namespace common.Controls
 					.e_ForEach(grp =>
 						{
 							grp.e_SetStateFlag(ListViewGroupState.Collapsible);
-
-							if (loadedGroupStates != null && loadedGroupStates.TryGetValue((grp.Name ?? DEFAULT_LIST_VIEW_GROUP_NAME).ToLower().Trim(), out bool oldState)) grp.e_SetState_Collapsed(oldState);
+							string grpID = grp.e_GetStringID(DEFAULT_LIST_VIEW_GROUP_NAME).ToLower().Trim();
+							if (loadedGroupStates != null && loadedGroupStates.TryGetValue(grpID, out bool oldState)) grp.e_SetState_Collapsed(oldState);
 						});
 				});
 
@@ -1446,14 +1446,8 @@ namespace common.Controls
 		#endregion
 
 
-		private static Int32 GetGroupID(ListViewGroup lstvwgrp)
-		{
-			_ = lstvwgrp!.ListView ?? throw new ArgumentException("Group must ge Added to ListView before!", nameof(lstvwgrp));
 
-			var groupID = lstvwgrp.e_GetPropertyValue_Integer("ID");
-			if (groupID == 0) groupID = lstvwgrp.ListView.Groups.IndexOf(lstvwgrp);
-			return groupID;
-		}
+
 
 
 
@@ -1462,7 +1456,7 @@ namespace common.Controls
 		public static Int32 SetGroup(ListViewGroup lstvwgrp, LVGROUP group)
 		{
 			int result = 0;
-			lstvwgrp.ListView!.e_runInUIThread(delegate
+			lstvwgrp.ListView!.e_RunInUIThread(delegate
 			{
 				Int32 groupId = group.IGroupId;
 				result = SendMessage(lstvwgrp.ListView!.Handle, ListViewMessages.LVM_SETGROUPINFO, groupId, ref group);
@@ -1481,7 +1475,7 @@ namespace common.Controls
 		{
 
 			int groupId = 0;
-			lstvwgrp!.ListView!.e_runInUIThread(delegate { groupId = GetGroupID(lstvwgrp); });
+			lstvwgrp!.ListView!.e_RunInUIThread(delegate { groupId = lstvwgrp.e_GetWin32ID(); });
 
 			ListViewGroupMask eMask = ListViewGroupMask.LVGF_NONE;
 			if (Header != null) eMask |= ListViewGroupMask.LVGF_HEADER;
@@ -1519,7 +1513,7 @@ namespace common.Controls
 		public static void SetGroupState(ListViewGroup grp, ListViewGroupState state)
 		{
 			SetGroup(grp, state: state);
-			grp.ListView!.e_runInUIThread(delegate { grp.ListView!.Refresh(); });
+			grp.ListView!.e_RunInUIThread(delegate { grp.ListView!.Refresh(); });
 		}
 
 		public static void SetGroupStateFlag(ListViewGroup grp, ListViewGroupState flag, bool flagState = true)
@@ -1545,9 +1539,9 @@ namespace common.Controls
 			if (bitsToGet == null) bitsToGet = (ListViewGroupState)ListViewGroupState.Collapsed.e_MixFlagsAsInt32(ListViewGroupState.Invalid);
 
 			ListViewGroupState result = 0;
-			grp.ListView.e_runInUIThread(delegate
+			grp.ListView.e_RunInUIThread(delegate
 			{
-				int groupID = GetGroupID(grp);
+				int groupID = grp.e_GetWin32ID();
 				result = (ListViewGroupState)SendMessage(grp.ListView.Handle, ListViewMessages.LVM_GETGROUPSTATE, groupID, (int)bitsToGet.Value);
 			});
 			return result;
@@ -1954,6 +1948,55 @@ else
 			}
 		}
 
+		/// <summary>Safely sets group Header and don't broke groups collapswd states</summary>
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void e_SetGroupsTitlesFastW32Safe(
+			this ListView? lvw,
+			Func<ListViewGroup, string>? getGroupHeader = null)
+				=> lvw?.e_GroupsAsIEnumerable().e_ForEach(g =>
+				{
+					string sTitle = g.Name ?? "";
+					if (getGroupHeader != null)
+						sTitle = getGroupHeader.Invoke(g);
+					else
+						sTitle = $"{sTitle} ({g.Items.Count:N0})".Trim();
+
+					if (!string.IsNullOrWhiteSpace(sTitle))
+					{
+						g.e_SetText(sTitle);
+					}
+				});
+
+		///<summary>
+		///Safely sets group Header and don't broke groups collapswd states
+		///MT Safe!!!</summary>
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void e_runOnLockedUpdateW32Safe(
+			this ListView? lvw,
+			Action a,
+			bool autoSizeColumns = false,
+			bool fastUpdateGroupHeaders = false)
+		{
+			_ = a ?? throw new ArgumentNullException(nameof(a));
+
+			Action a2 = delegate
+			{
+				lvw?.BeginUpdate();
+				try { a!.Invoke(); }
+				finally
+				{
+					if (autoSizeColumns) lvw?.e_AutoSizeColumns();
+					if (fastUpdateGroupHeaders) lvw?.e_SetGroupsTitlesFastW32Safe();
+					lvw?.EndUpdate();
+				}
+			};
+
+			if (lvw != null && lvw.InvokeRequired)
+				lvw.e_RunInUIThread(a2);
+			else
+				a2.Invoke();
+		}
+
 
 
 
@@ -2008,7 +2051,22 @@ else
 
 
 
+		internal static Int32 e_GetWin32ID(this ListViewGroup lstvwgrp)
+		{
+			_ = lstvwgrp!.ListView ?? throw new ArgumentException("Group must ge Added to ListView before!", nameof(lstvwgrp));
 
+			var groupID = lstvwgrp.e_GetPropertyValue_Integer("ID");
+			if (groupID == 0) groupID = lstvwgrp.ListView.Groups.IndexOf(lstvwgrp);
+			return groupID;
+		}
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		internal static string e_GetStringID(this ListViewGroup g, string defaultID = "default")
+		{
+			if (!string.IsNullOrWhiteSpace(g.Name)) return g.Name;
+			if (!string.IsNullOrWhiteSpace(g.Header)) return g.Header;
+			return defaultID;
+		}
 
 
 

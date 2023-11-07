@@ -43,20 +43,20 @@ namespace WS
 				{
 					ScannerDevice[] scannersList = _scanManager.GetScanners();
 					ScannerDevice? lastUsedScanner = scannersList.Where(dev => dev.ID == ss.ScannerID).FirstOrDefault();
-					cboScannerSelect.e_CBOCreateContainersAndFill(scannersList, lastUsedScanner);
+					cboScannerSelect.e_FillWithContainersOf(scannersList, lastUsedScanner);
 				}
 
 				//Color mode and DPI
 				{
-					cboColorMode.e_CBOFillAndSelectByItem(colorModes, selectedItem: ss.ColorMode_WIA);
+					cboColorMode.e_Fill(colorModes, selectedItem: ss.ColorMode_WIA);
 					//Just populate DPI Combobox with FAKE last saved DPI from scanner settings
 					//When user selects scanner - dpi list will be updated ()
-					cboDPI.e_CBOCreateContainersAndFill<int>(ss.DPI.e_ToArrayOf(), ss.DPI);
+					cboDPI.e_FillWithContainersOf<int>(ss.DPI.e_ToArrayOf(), ss.DPI);
 				}
 
 				//File format and storage
 				{
-					cboFileFormat.e_CBOFillAndSelectByItem(fileFormats, selectedItem: ss.FileFormat_WIA);
+					cboFileFormat.e_Fill(fileFormats, selectedItem: ss.FileFormat_WIA);
 					xFileFolder.FullPath = ss.SaveDir;
 				}
 

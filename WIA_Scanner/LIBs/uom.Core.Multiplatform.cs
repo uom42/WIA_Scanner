@@ -1,4 +1,6 @@
-﻿#nullable enable
+﻿#define UOM_TEST_DEF
+
+#nullable enable
 
 global using System;
 global using System.Collections;
@@ -25,7 +27,14 @@ global using uom.Extensions;
 
 using System.Net;
 using System.Net.Http;
+using System.Net.NetworkInformation;
 using System.Numerics;
+using System.Xml.Linq;
+
+
+#if UOM_TEST_DEF
+//Console.WriteLine("Visual Studio 7");
+#endif
 
 
 #region Code Snippets
@@ -111,7 +120,13 @@ See All # Constants: https://docs.microsoft.com/ru-ru/dotnet/csharp/language-ref
 
 //if (e is MethodCallExpression { Method.Name: "MethodName" })
 
-///// <inheritdoc cref="ContextMenu_UnRegisterAction" />
+
+//	object? value = key?.GetValue("AppsUseLightTheme");
+//	return value is int i && i > 0;
+
+
+//	/// <inheritdoc cref="ContextMenu_UnRegisterAction" />
+//	/// <inheritdoc />
 
 #region Binary variable definitions
 /*
@@ -492,6 +507,86 @@ fixed (char* p = message)
         Direction.Left  => Orientation.West,
         _ => throw new ArgumentOutOfRangeException(nameof(direction), $"Not expected direction value: {direction}"),
     }; 
+
+	static Point Transform(Point point) => point switch
+	{
+		{ X: 0, Y: 0 }                    => new Point(0, 0),
+		{ X: var x, Y: var y } when x < y => new Point(x + y, y),
+		{ X: var x, Y: var y } when x > y => new Point(x - y, y),
+		{ X: var x, Y: var y }            => new Point(2 * x, 2 * y),
+	};
+
+	static int GetSourceLabel<T>(IEnumerable<T> source) => source switch
+	{
+		Array array => 1,
+		ICollection<T> collection => 2,
+		_ => 3,
+	};
+
+	public static decimal CalculateToll(this Vehicle vehicle) => vehicle switch
+    {
+        Car _ => 2.00m,
+        Truck _ => 7.50m,
+        null => throw new ArgumentNullException(nameof(vehicle)),
+        _ => throw new ArgumentException("Unknown type of a vehicle", nameof(vehicle)),
+    };
+
+	public static decimal CalculateToll(this Vehicle vehicle) => vehicle switch
+	{
+		Car => 2.00m,
+		Truck => 7.50m,
+		null => throw new ArgumentNullException(nameof(vehicle)),
+		_ => throw new ArgumentException("Unknown type of a vehicle", nameof(vehicle)),
+	};
+
+	static string Classify(double measurement) => measurement switch
+	{
+		< -4.0 => "Too low",
+		> 10.0 => "Too high",
+		double.NaN => "Unknown",
+		_ => "Acceptable",
+	};
+
+	static string GetCalendarSeason(DateTime date) => date.Month switch
+	{
+		>= 3 and < 6 => "spring",
+		>= 6 and < 9 => "summer",
+		>= 9 and < 12 => "autumn",
+		12 or (>= 1 and < 3) => "winter",
+		_ => throw new ArgumentOutOfRangeException(nameof(date), $"Date with unexpected month: {date.Month}."),
+	};
+
+	static string GetCalendarSeason(DateTime date) => date.Month switch
+	{
+		3 or 4 or 5 => "spring",
+		6 or 7 or 8 => "summer",
+		9 or 10 or 11 => "autumn",
+		12 or 1 or 2 => "winter",
+		_ => throw new ArgumentOutOfRangeException(nameof(date), $"Date with unexpected month: {date.Month}."),
+	};
+
+	static string TakeFive(object input) => input switch
+	{
+		string { Length: >= 5 } s => s.Substring(0, 5),
+		string s => s,
+
+		ICollection<char> { Count: >= 5 } symbols => new string(symbols.Take(5).ToArray()),
+		ICollection<char> symbols => new string(symbols.ToArray()),
+
+		null => throw new ArgumentNullException(nameof(input)),
+		_ => throw new ArgumentException("Not supported input type."),
+	};
+
+
+	balance += record switch
+	{
+		[_, "DEPOSIT", _, var amount]     => decimal.Parse(amount),
+		[_, "WITHDRAWAL", .., var amount] => -decimal.Parse(amount),
+		[_, "INTEREST", var amount]       => decimal.Parse(amount),
+		[_, "FEE", var fee]               => decimal.Parse(fee),
+		_                                 => throw new InvalidOperationException($"Record {record} is not in the expected format!"),
+	};
+	Console.WriteLine($"Record: {record}, New balance: {balance:C}");
  */
 #endregion
 #region Шаблоны списков c# 11
@@ -603,6 +698,9 @@ foreach (var record in ReadRecords())
 	catch (HttpRequestException e) when (e.Message.Contains("404"))
 	{
 		return "Page Not Found";
+	}
+	catch		(Exception ex) when(ex is FormatException || ex is OverflowException)
+	{
 	}
 	catch (HttpRequestException e)
 	{
@@ -1157,6 +1255,15 @@ private static async Task<int> AnotherSlowCalculation()
 // cancellationToken.Cancel();
 */
 #endregion
+#region CancellationToken
+/*
+ 		https://learn.microsoft.com/ru-ru/dotnet/api/system.threading.cancellationtoken.-ctor?view=net-7.0
+			CancellationTokenSource source = new CancellationTokenSource();
+			CancellationToken token = source.Token;
+			source.Cancel();
+
+ */
+#endregion
 
 #endregion
 
@@ -1166,7 +1273,9 @@ namespace uom
 {
 
 	/// <summary>Constants</summary>
+#pragma warning disable CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 	internal static partial class constants
+#pragma warning restore CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 	{
 
 		internal const char vbNullChar = '\0';
@@ -1774,7 +1883,7 @@ namespace uom
 		{
 			while (rList.Any())
 			{
-				var rObjectToKill = rList.Pop();
+				IDisposable rObjectToKill = rList.Pop();
 				rObjectToKill.e_DisposeAndSetNothing();
 			}
 		}
@@ -1813,7 +1922,11 @@ namespace uom
 		public T? Value
 		{
 			get => _Value;
-			set { _Value = value; RegisterDisposableObject(_Value!, true); }
+			set
+			{
+				_Value = value;
+				RegisterDisposableObject(_Value!, true);
+			}
 		}
 	}
 
@@ -2126,6 +2239,195 @@ namespace uom
 			_startPos += WindowSize;
 			if (_startPos > MaxStartPos) ExpandToEnd();//Recalculate new Window Size
 			return true;
+		}
+	}
+
+	internal class IPv4Address : System.Net.NetworkInformation.IPAddressInformation, IComparable<IPv4Address>
+	{
+
+		private const int NO_MASK = 32;
+		private static Lazy<Regex> _rxMaskedIP = new(() => new Regex(@"\b(?<IP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?<Mask>\/\d{1,5})?\b"));
+
+		private readonly IPAddress _ipAddress;
+
+		public readonly IPAddress? IPv4Mask;
+
+		public readonly int PrefixLength;
+
+		protected IPv4Address(IPAddress ip4, int prefixLength = NO_MASK) : base()
+		{
+			_ipAddress = ip4;
+
+			if (prefixLength < 0 || prefixLength > NO_MASK) throw new ArgumentOutOfRangeException(nameof(prefixLength), $"IPv4 mask suffix '{prefixLength}' is invalid, must be 0 to {NO_MASK}!");
+			PrefixLength = prefixLength;
+
+			if (HasMask) IPv4Mask = new IPAddress(_ipAddress.GetAddressBytes().e_setBitsTo(PrefixLength, NO_MASK));
+		}
+
+		public override IPAddress Address => _ipAddress;
+		public override bool IsDnsEligible => throw new NotImplementedException();
+		public override bool IsTransient => throw new NotImplementedException();
+		public bool HasMask => (PrefixLength < NO_MASK);
+
+
+		public override string ToString() => $"{_ipAddress}/{PrefixLength}";
+
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		internal static IEnumerable<IPv4Address> Parse(string ipString)
+		{
+			MatchCollection result = _rxMaskedIP.Value.Matches(ipString);
+			if (result.Count < 1) yield break;
+
+			foreach (Match m in result)
+			{
+				string ip = m.Groups["IP"].Value;
+				string maskString = m.Groups["Mask"].Value;
+
+				IPAddress ipa = IPAddress.Parse(ip);
+				int mask = maskString.e_IsNullOrWhiteSpace()
+					? NO_MASK
+					: int.Parse(maskString.Substring(1));
+
+				yield return new IPv4Address(ipa, mask);
+			}
+			yield break;
+		}
+
+
+
+
+
+
+		private void dd()
+		{
+
+			NetworkInterface[] aNetCards = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
+			foreach (var NC in aNetCards)
+			{
+				//Dim R As New List(Of CIDR_4)
+				if (NC.OperationalStatus == OperationalStatus.Up)
+				{
+					//UnicastIPAddressInformation ttt = new();
+
+
+					UnicastIPAddressInformation[] UA = NC.GetIPProperties().UnicastAddresses.ToArray();
+					foreach (var UAI in UA)
+					{
+						if (UAI.Address != null && UAI.IPv4Mask != null)
+						{
+							if (UAI.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+							{
+								//Dim A As New CIDR_4(UAI)
+								//Call R.Add(A)
+							}
+						}
+					}
+				}
+			}
+
+		}
+
+
+
+		public int CompareTo(IPv4Address? other)
+			=> (other == null)
+			? 1
+			: Address!.e_CompareTo(other!.Address!);
+	}
+
+
+
+	internal class ComparibleIPAddress : System.Net.IPAddress
+	{
+		public ComparibleIPAddress(byte[] address) : base(address) { }
+
+		public ComparibleIPAddress(Int64 address) : base(address) { }
+
+		public ComparibleIPAddress(byte[] address, Int64 scopeid) : base(address, scopeid) { }
+
+
+		/// <summary>Determines the relative value of adddress1 to address2.</summary>
+		/// <returns>-1 indicates address1 is less than address2. 1 indicates address1 is greater than address2. 0 indicates both are equal. -2 indicates addresses are incompatible for comparison.</returns>
+		public int CompareTo(ComparibleIPAddress value)
+		{
+			int returnVal = 0;
+			if (this.AddressFamily == value.AddressFamily)
+			{
+				byte[] b1 = this.GetAddressBytes();
+				byte[] b2 = value.GetAddressBytes();
+
+				for (int i = 0; i < b1.Length; i++)
+				{
+					if (b1[i] < b2[i])
+					{
+						returnVal = -1;
+						break;
+					}
+					else if (b1[i] > b2[i])
+					{
+						returnVal = 1;
+						break;
+					}
+				}
+			}
+			else
+			{
+				throw new ArgumentOutOfRangeException("value", "Cannot compare two addresses no in the same Address Family.");
+			}
+
+			return returnVal;
+		}
+
+		/// <summary>Determines if the current IP Address is in the given range.</summary>
+		/// <param name="rangeStartAddress">The beginning of the range.</param>
+		/// <param name="rangeEndAddress">The end of the range.</param>
+		/// <returns>True if the IP Address is within the passed range.</returns>
+		public bool IsInRange(ComparibleIPAddress rangeStartAddress, ComparibleIPAddress rangeEndAddress)
+		{
+			bool returnVal = false;
+			// ensure that all addresses are of the same type otherwise reject //
+			if (rangeStartAddress.AddressFamily != rangeEndAddress.AddressFamily)
+				throw new ArgumentOutOfRangeException(nameof(rangeStartAddress),
+					  $"The Start Range type {rangeStartAddress.AddressFamily} and End Range type {rangeEndAddress.AddressFamily} are not compatible ip address families.");
+
+			if (rangeStartAddress.AddressFamily == this.AddressFamily)
+			{
+				returnVal = (CompareTo(rangeStartAddress) >= 0 && CompareTo(rangeEndAddress) <= 0);   // no need to check for -2 value as this check has already been undertaken to get into this block //
+			}
+			else
+			{
+				throw new ArgumentOutOfRangeException(nameof(rangeStartAddress),
+					  $"The range type {rangeStartAddress.AddressFamily} and current value type {this.AddressFamily} are not compatible ip address families");
+			}
+
+			return returnVal;
+		}
+
+		public static ComparibleIPAddress[] GetLocalAddresses()
+		{
+			string hostName = System.Net.Dns.GetHostName();
+			System.Net.IPHostEntry entry = System.Net.Dns.GetHostEntry(hostName);
+			List<ComparibleIPAddress> list = new List<ComparibleIPAddress>();
+			foreach (System.Net.IPAddress address in entry.AddressList)
+			{
+				list.Add(new ComparibleIPAddress(address.GetAddressBytes()));
+			}
+			return list.ToArray();
+		}
+
+		public static bool IsLocalAddressInRange(ComparibleIPAddress rangeStartAddress, ComparibleIPAddress rangeEndAddress)
+		{
+			bool returnVal = false;
+			foreach (ComparibleIPAddress address in GetLocalAddresses())
+			{
+				if (address.IsInRange(rangeStartAddress, rangeEndAddress))
+				{
+					returnVal = true;
+					break;
+				}
+			}
+			return returnVal;
 		}
 	}
 
@@ -3095,7 +3397,7 @@ namespace uom
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_DumpHex(this byte[] data, ulong startAddress = ulong.MinValue, int elementsInLine = 16)
+			internal static string e_DumpHexToString(this byte[] data, ulong startAddress = ulong.MinValue, int elementsInLine = 16)
 			{
 				if (data == null || data.Length < 1) return "[NULL OR EMPTY]";
 
@@ -3122,15 +3424,15 @@ namespace uom
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_DumpHex(this IntPtr lpBuffer, int nBytes)
+			internal static string e_DumpHexToString(this IntPtr lpBuffer, int nBytes)
 			=> lpBuffer
 					.e_PtrToBytes(nBytes)
-					.e_DumpHex((ulong)lpBuffer.ToInt64());
+					.e_DumpHexToString((ulong)lpBuffer.ToInt64());
 
 #if NET
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static string e_DumpHex(this Span<Byte> abData, ulong startAddress = ulong.MinValue, int elementsInLine = 16)
-				=> abData.ToArray().e_DumpHex(startAddress, elementsInLine);
+				=> abData.ToArray().e_DumpHexToString(startAddress, elementsInLine);
 
 #endif
 
@@ -3140,7 +3442,7 @@ namespace uom
 			/// Any pointer type
 			/// Any user-defined struct type that contains fields of unmanaged types only.
 			/// </summary>
-			private static string e_DumpValue<T>(this T? value,
+			private static string e_DumpValueToString<T>(this T? value,
 				[System.Runtime.CompilerServices.CallerArgumentExpression("value")] string? valueName = null) where T : unmanaged
 			{
 
@@ -3153,7 +3455,7 @@ namespace uom
 				return $"{valueName} = {val}";
 			}
 
-			private static string e_DumpValue<T>(this string? value,
+			private static string e_DumpValueToString<T>(this string? value,
 				[System.Runtime.CompilerServices.CallerArgumentExpression("value")] string? valueName = null)
 			{
 				string val = "null";
@@ -3201,46 +3503,137 @@ namespace uom
 	  }
 		  */
 
-
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_DumpValue<T>(this T? value,
-				[System.Runtime.CompilerServices.CallerArgumentExpression("value")] string? srcArgString = null) where T : class
+			internal static string e_DumpObjectToString<T>(this T? value,
+				[System.Runtime.CompilerServices.CallerArgumentExpression("value")] string? valueName = null) where T : class
 			{
-				if (value == null) return $"{srcArgString} = null";
+
+				if (value == null) return $"{valueName} = null";
 				StringBuilder sb = new();
+
 				System.Type t = value.GetType();
-				sb.AppendLine($"{srcArgString} = {t}:");
+				sb.AppendLine($"{valueName} = {t}:");
 
 				MemberInfo[] members = t.GetMembers()
 					.OrderBy(m => m.Name)
 					.ToArray();
 
-				foreach (MemberInfo m in members)
+
+
+				if (value is System.MarshalByRefObject)
 				{
-					string v = "";
+					//int gggg = 9;
+					//System.MarshalByRefObject mro = value;
+
+				}
+
+
+
+				string RWAsString(bool r, bool w)
+				{
+					string rr = r ? "R" : string.Empty;
+					string ww = w ? "W" : string.Empty;
+					string slash = (r && w) ? @"/" : string.Empty;
+					return $"{rr}{slash}{ww}";
+				}
+
+				foreach (MemberInfo mi in members)
+				{
+					string memberDump = "";
 					try
 					{
-						if (m is PropertyInfo p)
+						object? objMemberValue = null;
+
+						switch (mi)
 						{
-							v = p.GetValue(value).e_DumpValue(p.Name);
-						}
-						if (m is FieldInfo f)
-						{
-							v = f.GetValue(value).e_DumpValue(f.Name);
+							case PropertyInfo pi:
+								objMemberValue = pi.GetValue(value);
+								memberDump = $"Property '{mi.Name}'({RWAsString(pi.CanRead, pi.CanWrite)})[{pi.PropertyType}]";
+								break;
+
+							case FieldInfo fi:
+								objMemberValue = fi.GetValue(value);
+								memberDump = $"Field '{fi.Name}'[{fi.FieldType}]";
+
+								break;
+
+							default:
+								continue;
 						}
 
-						if (v.e_IsNullOrWhiteSpace()) continue;
-						bool isOwn = (m.DeclaringType == t);
-						if (!isOwn) v = $"->[{m.DeclaringType}]-> " + v;
+						/*
+						memberDump = mi switch
+						{
+							PropertyInfo pi => (pi.GetValue(value) ?? "").ToString(),
+							FieldInfo fi => (fi.GetValue(value) ?? "").ToString(),
+							_ => null
+						};
+						if (memberDump == null) continue;
+						 */
+						memberDump += $" = '{objMemberValue ?? string.Empty}'";
+
+						bool isOwn = (mi.DeclaringType == t);
+						if (!isOwn) memberDump = $"->[inherit from: {mi.DeclaringType}]-> " + memberDump;
+
 
 					}
 					catch (Exception ex)
 					{
-						v += $"{m.Name}: {ex.Message}";
+						memberDump = $"{mi.Name}: {ex.Message}";
 					}
 
-					v = "\t" + v;
-					sb.AppendLine(v);
+					memberDump = "\t" + memberDump;
+					sb.AppendLine(memberDump);
+
+				}
+				return sb.ToString();
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string e_DumpObjectMembersTreeToString<T>(this T? value,
+				[System.Runtime.CompilerServices.CallerArgumentExpression("value")] string? valueName = null) where T : class
+			{
+
+				if (value == null) return $"{valueName} = null";
+				StringBuilder sb = new();
+
+				//WARNING!!! NOT WORKING!!!
+				//return sb.ToString();
+
+				System.Type t = value.GetType();
+				sb.AppendLine($"{valueName} = {t}:");
+
+				MemberInfo[] members = t.GetMembers()
+					.OrderBy(m => m.Name)
+					.ToArray();
+
+				foreach (MemberInfo mi in members)
+				{
+					string memberDump = "";
+					try
+					{
+
+						memberDump = mi switch
+						{
+							PropertyInfo pi => pi.GetValue(value).e_DumpObjectToString(pi.Name),
+							FieldInfo fi => fi.GetValue(value).e_DumpObjectToString(fi.Name),
+							_ => ""
+						};
+
+						if (memberDump.e_IsNullOrWhiteSpace()) continue;
+
+						bool isOwn = (mi.DeclaringType == t);
+						if (!isOwn) memberDump = $"->[{mi.DeclaringType}]-> " + memberDump;
+
+					}
+					catch (Exception ex)
+					{
+						memberDump = $"{mi.Name}: {ex.Message}";
+					}
+
+					memberDump = "\t" + memberDump;
+					sb.AppendLine(memberDump);
 
 				}
 				return sb.ToString();
@@ -3252,19 +3645,21 @@ namespace uom
 			//contestant.Points.ShouldBe(1337); // thisExpression: "contestant.Points"
 			 */
 
+			private const int C_DEFAULT_ARRAY_DUMP_ITEMS_COUNT = 100;
+
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_DumpArray<T>(
+			internal static string e_DumpArrayToString<T>(
 				this IEnumerable<T>? src,
 				string itemSeparator = ",",
 				int limitArrayItemsOutput = C_DEFAULT_ARRAY_DUMP_ITEMS_COUNT,
-				[System.Runtime.CompilerServices.CallerArgumentExpression("src")] string? srcArgString = null
+				[System.Runtime.CompilerServices.CallerArgumentExpression("src")] string? arrayName = null
 				)
 			{
-				if (src == null) return $"{srcArgString} = null";
-				if (!src.Any()) return $"{srcArgString} = {typeof(T)}[0]";
+				if (src == null) return $"{arrayName} = null";
+				if (!src.Any()) return $"{arrayName} = {typeof(T)}[0]";
 
-				string result = $"{srcArgString} = {typeof(T)}[{src.Count()}]";
+				string result = $"{arrayName} = {typeof(T)}[{src.Count()}]";
 
 				if (limitArrayItemsOutput > 0 && src.Count() > limitArrayItemsOutput)
 				{
@@ -3297,55 +3692,65 @@ namespace uom
 				return result;
 			}
 
-			private const int C_DEFAULT_ARRAY_DUMP_ITEMS_COUNT = 100;
+
+			/*
+
+	   internal static string e_DumpArrayToString2(
+		   this System.Array? src,
+		   string itemSeparator = ",",
+		   int limitArrayItemsOutput = C_DEFAULT_ARRAY_DUMP_ITEMS_COUNT
+		   )
+	   {
+		   if (src == null) return "null";
 
 
-			internal static string e_DumpArrayAsString2(
-				this System.Array? src,
-				string itemSeparator = ",",
-				int limitArrayItemsOutput = C_DEFAULT_ARRAY_DUMP_ITEMS_COUNT
-				)
-			{
-				if (src == null) return "null";
+		   System.Array.
 
-				System.Type t = src.GetType();
-				if (src.Length < 1) return $"{t}[0]";
 
-				if (t == typeof(byte[]))
-				{
-					byte[] a = (byte[])src;
-					return a.e_DumpArray(itemSeparator, limitArrayItemsOutput);
-				}
+		   var e = src as IEnumerable;
+		   return e.e_DumpArrayToString();
 
-				if (t == typeof(string[]))
-				{
-					string[] a = (string[])src;
-					return a.e_DumpArray(itemSeparator, limitArrayItemsOutput);
-				}
 
-				string result = $"{t}[{src.Length}]";
 
-				if (limitArrayItemsOutput > 0 && src.Length > limitArrayItemsOutput)
-					result += $":FIRST:{limitArrayItemsOutput}";
 
-				result += " = ";
+		   System.Type t = src.GetType();
+		   if (src.Length < 1) return $"{t}[0]";
 
-				IEnumerable ie = src;
-				List<string> l = new();
-				foreach (var o in ie)
-				{
+		   if (t == typeof(byte[]))
+		   {
+			   byte[] a = (byte[])src;
+			   return a.e_DumpArrayToString(itemSeparator, limitArrayItemsOutput);
+		   }
+
+		   if (t == typeof(string[]))
+		   {
+			   string[] a = (string[])src;
+			   return a.e_DumpArrayToString(itemSeparator, limitArrayItemsOutput);
+		   }
+
+		   string result = $"{t}[{src.Length}]";
+
+		   if (limitArrayItemsOutput > 0 && src.Length > limitArrayItemsOutput)
+			   result += $":FIRST:{limitArrayItemsOutput}";
+
+		   result += " = ";
+
+		   IEnumerable ie = src;
+		   List<string> l = new();
+		   foreach (var o in ie)
+		   {
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
-					string s = (o ?? "null").ToString();
+			   string s = (o ?? "null").ToString();
 #pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning disable CS8604 // Possible null reference argument.
-					l.Add(s);
+			   l.Add(s);
 #pragma warning restore CS8604 // Possible null reference argument.
-					if (l.Count >= limitArrayItemsOutput) break;
-				}
-				result += l.ToArray().e_Join(itemSeparator)!;
-				return result;
-			}
-
+			   if (l.Count >= limitArrayItemsOutput) break;
+		   }
+		   result += l.ToArray().e_Join(itemSeparator)!;
+		   return result;
+	   }
+				  */
 
 
 
@@ -3751,6 +4156,31 @@ namespace uom
 
 
 
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void e_SetManyTo(this BitArray bits, int startIndex, int endIndex, bool value = true)
+			{
+				for (int i = startIndex; i < endIndex; i++) bits.Set(i, value);
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void e_SetMany(this BitArray bits, int startIndex, int count, bool value = true)
+				=> bits.e_SetManyTo(startIndex, startIndex + count, value);
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Byte[] e_setBitsTo(this Byte[] bytes, int startIndex, int endIndex, bool value = true)
+			{
+				BitArray bits = new(bytes);
+				bits.e_SetManyTo(startIndex, endIndex, value);
+				bits.CopyTo(bytes, 0);
+				return bytes;
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Byte[] e_setBits(this Byte[] bytes, int startIndex, int count, bool value = true)
+				=> bytes.e_setBitsTo(startIndex, startIndex + count, value);
+
 		}
 
 
@@ -3818,9 +4248,38 @@ namespace uom
 			public static bool e_IsNOTNullOrWhiteSpaceAndEndsWith(this string? SourceText, string sFindWhat) => SourceText.e_IsNOTNullOrWhiteSpace() && SourceText!.EndsWith(sFindWhat);
 
 
+
+
+			[MethodImpl(MethodImplOptions.NoOptimization | MethodImplOptions.AggressiveInlining)]
+			public static bool e_Assert_NullOrWhiteSpace(
+				this string? s,
+				[System.Runtime.CompilerServices.CallerArgumentExpression("s")] string? valueName = null)
+				=> !string.IsNullOrWhiteSpace(s)
+					? true
+					: throw new ArgumentNullException(valueName);
+
+			[MethodImpl(MethodImplOptions.NoOptimization | MethodImplOptions.AggressiveInlining)]
+			public static bool e_Assert_NullOrEmpty(
+				this string? s,
+				[System.Runtime.CompilerServices.CallerArgumentExpression("s")] string? valueName = null)
+				=> !string.IsNullOrEmpty(s)
+					? true
+					: throw new ArgumentNullException(valueName);
+
+			[MethodImpl(MethodImplOptions.NoOptimization | MethodImplOptions.AggressiveInlining)]
+			public static bool e_Assert_Null<T>(
+				this T? v,
+				[System.Runtime.CompilerServices.CallerArgumentExpression("v")] string? valueName = null) where T : class
+				=> (v != null)
+					? true
+					: throw new ArgumentNullException(valueName);
+
+
+
+
+
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_ReverseString(this string src)
-				=> new(src.Reverse().ToArray());
+			public static string e_ReverseString(this string src) => new(src.Reverse().ToArray());
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -4172,6 +4631,44 @@ namespace uom
 			/// <summary>Заменяет все множественные пробелы на один пробел</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static string e_RemoveDoubleSpaces(this string SourceText) => SourceText.e_ReplaceAll2("  ", " ");
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string e_ReplaceCharsWithString(this string source, char[] charsToReplace, string replaceWith)
+			{
+				string[] fixedChars = source
+					.ToCharArray()
+					.Select(x =>
+					{
+						if (!charsToReplace.Contains(x)) return x.ToString();
+						return replaceWith;
+					})
+					.ToArray();
+
+				string result = string.Join("", fixedChars);
+				return result;
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string e_ReplaceCharsWithString(this string source, char[] charsToReplace, Func<char, string> replaceFunc)
+			{
+				string[] fixedChars = source
+					.ToCharArray()
+					.Select(x =>
+					{
+						if (!charsToReplace.Contains(x)) return x.ToString();
+						return replaceFunc.Invoke(x);
+					})
+					.ToArray();
+
+				string result = string.Join("", fixedChars);
+				return result;
+			}
+
+
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -5020,8 +5517,22 @@ namespace uom
 
 
 
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static int e_CompareTo(this IPAddress x, IPAddress y)
+			{
 
+				var abX = x.GetAddressBytes();
+				var abY = y.GetAddressBytes();
+				if (abX.Length != 4) throw new ArgumentOutOfRangeException("IP4 only can be compared!");
+				if (abX.Length != abX.Length) throw new ArgumentOutOfRangeException("asfd");
 
+				for (int i = 0; i < 4; i++)
+				{
+					int res = abX[i].CompareTo(abY[i]);
+					if (res != 0) return res;
+				}
+				return 0;
+			}
 
 		}
 
@@ -5125,11 +5636,17 @@ namespace uom
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static T[] e_ToArrayOf<T>(this T? source) => (null == source) ? System.Array.Empty<T>() : new T[] { source };
 
-			/*
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static T? e_FirstIfContains<T>(this IEnumerable<T> A, Func<T, bool> ContainCheck)
 			{
+				/*
+				If (Not A.Any) Then Return Nothing
+				For Each R In A
+					If ContainCheck.Invoke(R) Then Return R
+				Next
+				Return Nothing
+				 */
 				if (!A.Any()) return default;
 
 				foreach (var R in A)
@@ -5138,6 +5655,7 @@ namespace uom
 				}
 				return default;
 			}
+			/*
 			 */
 
 			/// <summary>Return source or Empty<source> if source is null</summary>
@@ -5291,6 +5809,15 @@ namespace uom
 				return l.ToArray();
 			}
 
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void e_RemoveRange<T>(this List<T> l, IEnumerable<T> whatToRemove)
+			{
+				foreach (T i in whatToRemove)
+				{
+					l.Remove(i);
+				}
+			}
+
 
 			/// <summary>Объединяет двумерный массив в одномерный. !!!БЕЗ СОРТИРОВКИ!!!</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -5306,9 +5833,9 @@ namespace uom
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static T? e_PeekFirstOrDefault<T>(this List<T> L)
 			{
-				var TmpVal = L.FirstOrDefault();
-				if (L.Any()) L.RemoveAt(0);
-				return TmpVal;
+				var firstItem = L.FirstOrDefault();
+				if (firstItem != null) L.RemoveAt(0);
+				return firstItem;
 			}
 
 
@@ -5503,6 +6030,22 @@ namespace uom
 
 				return (arrA as IStructuralEquatable).Equals(arrB as IStructuralEquatable, StructuralComparisons.StructuralEqualityComparer);
 			}
+
+
+
+			/// <summary>Использование интерфейса <see cref="System.Collections.IStructuralEquatable"/> - Это новый способ, появился только в NET_4</summary>'
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static bool e_Any<T>(this T arr) where T : IList, ICollection, IEnumerable
+				=> (arr != null) && (arr.Count > 0);
+
+
+
+
+
+
+
+
+
 
 			//[MethodImpl(MethodImplOptions.AggressiveInlining)]
 #if NET5_0_OR_GREATER
@@ -5706,7 +6249,7 @@ namespace uom
 				if (isDefinedEnumField) //This value is direct defined in ENUM! not bit mask
 				{
 					string enumFieldName = eValue.ToString();
-					FieldInfo fi = T.GetField(enumFieldName);
+					FieldInfo fi = T.GetField(enumFieldName)!;
 					return (true, fi, false, Array.Empty<Enum>(), Array.Empty<FieldInfo>());
 				}
 
@@ -5715,12 +6258,14 @@ namespace uom
 					.GetValues(T)
 					.Cast<Enum>()
 					.Where(enumFieldValue => eValue.HasFlag(enumFieldValue))
-					.Select(enumFieldValue => (MaskValue: enumFieldValue, MaskFieldInfo: T.GetField(enumFieldValue.ToString())));
+					.Select(enumFieldValue => (MaskValue: enumFieldValue, MaskFieldInfo: T.GetField(enumFieldValue.ToString())!));
 
 				if (!fields.Any()) return (false, null, false, Array.Empty<Enum>(), Array.Empty<FieldInfo>());
 
 				Enum[] maskValue = fields.Select(ff => ff.MaskValue).ToArray();
-				FieldInfo[] maskInfo = fields.Select(ff => ff.MaskFieldInfo).ToArray();
+				FieldInfo[] maskInfo = fields
+					.Select(ff => ff.MaskFieldInfo)
+					.ToArray();
 				return (false, null, true, maskValue, maskInfo);
 			}
 
@@ -5771,6 +6316,30 @@ namespace uom
 					return S;
 				}
 			}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -6011,38 +6580,6 @@ namespace uom
 		var tArr = objArr.Cast(Of T)()
 		return tArr.ToArray
 		End Function
-
-		////// <summary>Пример использования: var aContainers = DayOfWeek.Friday.EnumGetAllValuesAsEnumContainers()</summary>
-		////// <returns>Возвращает массив EnumContainer(Of T)()</returns>
-		////// <remarks>НЕ ИСПОЛЬЗОВАТЬ вот так: typeof(XXX).EnumGetAllValuesAsEnumContainers</remarks>
-		<DebuggerNonUserCode, DebuggerStepThrough> <MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
-		Friend Function ExtEnum_GetAllValuesAsEnumContainers(Of T)(ByVal EnumItem As T) As My.UOM.EnumTools.EnumContainer(Of T)()
-		var aEnumValues = ExtEnum_GetAllValuesArray(Of T)(EnumItem)
-
-		var aContainers = (From Val In aEnumValues
-		Let B = New My.UOM.EnumTools.EnumContainer(Of T)(Val)
-		Select B).ToArray
-
-		return aContainers
-
-		//***ВОТ ТАК РАБОТАЕТ!
-
-		//Private Enum FILE_LOG_RECORDS_GROUPING As Integer
-		//    <DescriptionAttribute("Имя файла")> ByFile
-		//    <DescriptionAttribute("GUID")> ByGUID
-		//    <DescriptionAttribute("Вызвавший процесс")> ByCaller
-		//End Enum
-
-		//var aContainers = FILE_LOG_RECORDS_GROUPING.ByCaller.EnumGetAllValuesAsEnumContainers
-
-
-
-
-
-		//*** А ВОТ ТАК НЕ БУДЕТ РАБОТАТЬ!!! 
-		//var eAA2 = typeof(XXX).EnumGetAllValuesArray
-		End Function
-
 
 
 
@@ -6433,19 +6970,7 @@ namespace uom
 			/// ReparsePoint is supported on Windows, Linux, and macOS.
 			/// </summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static bool e_IsNTFS_SymLinkMP(this FileSystemInfo fsi) => fsi.Attributes.HasFlag(FileAttributes.ReparsePoint);
-
-			/*
-
-	/// <summary>Multiplatform FileAttributes.ReparsePoint
-	/// The file contains a reparse point, which is a block of user-defined data associated with a file or a directory. 
-	/// ReparsePoint is supported on Windows, Linux, and macOS.
-	/// </summary>
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public static bool e_IsNTFS_SymLinkMP(this string path) => path.e_ToFileSystemInfo()!.e_IsNTFS_SymLinkMP();
-			 */
-
-
+			public static bool e_IsNTFS_SymLinkMP(this FileSystemInfo fsi) => fsi.Attributes.HasFlag(FileAttributes.ReparsePoint) && !fsi.Attributes.HasFlag(FileAttributes.SparseFile);
 
 #if NET6_0
 
@@ -6456,8 +6981,7 @@ namespace uom
 				var sMsg = $"SymLink '{fsi.e_FullName_RemoveLongPathPrefix()}'";
 				try
 				{
-					var sSymLinkTarget = fsi.LinkTarget;
-					if (sSymLinkTarget != null) sMsg += $" => '{sSymLinkTarget}'";
+					if (fsi.LinkTarget != null) sMsg += $" => '{fsi.LinkTarget}'";
 				}
 				catch { }
 				return sMsg;
@@ -6862,7 +7386,7 @@ namespace uom
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static void e_WriteAllText(this FileInfo fi, string text, Encoding? @encoding = null)
 			{
-				using var sw = fi.e_CreateWriter(FileMode.OpenOrCreate, encoding: @encoding ?? Encoding.Unicode);
+				using StreamWriter sw = fi.e_CreateWriter(FileMode.OpenOrCreate, encoding: @encoding ?? Encoding.Unicode);
 				sw.BaseStream.e_Truncate();
 				if (!string.IsNullOrEmpty(text)) sw.Write(text);
 				sw.Flush();
@@ -7143,6 +7667,21 @@ namespace uom
 		[EditorBrowsable(EditorBrowsableState.Never)]
 		internal static partial class Extensions_Object
 		{
+			/// <summary>Compares Classes via ReferenceEquals, and unmanaged via Equals</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static bool e_EqualsUniversal<T>(this T? A, T? B)
+			{
+				if (A == null && B == null) return true;
+				if ((A == null && B != null) || (B == null && A != null)) return false;
+
+				if (A!.GetType().IsClass) return Object.ReferenceEquals(A, B);
+				if (A is IEquatable<T> ea) return ea.Equals(B!);
+				if (A is IComparable<T> ca) return ca.CompareTo(B!) == 0;
+
+				return A.Equals(B);
+			}
+
+
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static void ThrowIfNull<T>(this T? obj)
@@ -7207,11 +7746,21 @@ namespace uom
 		{
 
 
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static async Task e_StartAndWait(this Task t)
+			{
+				t.Start();
+				await t;
+			}
 
 
 
-
-
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static async Task e_StartAndWaitLongRunning(this Action a)
+			{
+				using Task tsk = new(a.Invoke, TaskCreationOptions.LongRunning);
+				await tsk.e_StartAndWait();
+			}
 
 
 			/// <summary>Exec FUNC. Return result</summary>
@@ -7220,9 +7769,6 @@ namespace uom
 			{
 				lock (rLockObject) return f.Invoke();
 			}
-
-
-
 
 
 
@@ -7407,6 +7953,47 @@ namespace uom
 
 		}
 
+
+		[EditorBrowsable(EditorBrowsableState.Never)]
+		internal static partial class Extensions_Resources
+		{
+
+			//
+			// Usage
+			//string resourceText = await Assembly.GetExecutingAssembly().ReadResourceAsync("myResourceName");
+
+			public static string e_ReadResourceFileAsString(this Assembly assembly, string name)
+			{
+				// Determine path
+				string resourcePath = name;
+				// Format: "{Namespace}.{Folder}.{filename}.{Extension}"
+				//if (!name.StartsWith(nameof(SignificantDrawerCompiler)))
+				resourcePath = assembly.GetManifestResourceNames().Single(str => str.EndsWith(name));
+				using Stream stream = assembly.GetManifestResourceStream(resourcePath);
+				using StreamReader reader = new(stream);
+				return reader.ReadToEnd();
+			}
+
+			public static string e_ReadResourceFileAsString(this string name)
+				=> Assembly.GetExecutingAssembly().e_ReadResourceFileAsString(name);
+
+			public static async Task<string> e_ReadResourceFileAsStringAsync(this Assembly assembly, string name)
+			{
+				// Determine path
+				string resourcePath = name;
+				// Format: "{Namespace}.{Folder}.{filename}.{Extension}"
+				//if (!name.StartsWith(nameof(SignificantDrawerCompiler)))
+				resourcePath = assembly.GetManifestResourceNames().Single(str => str.EndsWith(name));
+
+				using Stream stream = assembly.GetManifestResourceStream(resourcePath)!;
+				using StreamReader reader = new(stream);
+				return await reader.ReadToEndAsync();
+			}
+			public static async Task<string> e_ReadResourceFileAsStringAsync(this string name)
+				=> await Assembly.GetExecutingAssembly().e_ReadResourceFileAsStringAsync(name);
+
+
+		}
 
 		[EditorBrowsable(EditorBrowsableState.Never)]
 		internal static partial class Extensions_Reflection
@@ -8142,6 +8729,137 @@ namespace uom
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static XmlNode[] e_ToArray(this XmlNodeList xnl) => xnl.Cast<XmlNode>().ToArray();
+
+			public static string e_AsString(this XmlDocument xmlDoc)
+			{
+				using (StringWriter sw = new())
+				{
+					using (XmlTextWriter tx = new(sw))
+					{
+						xmlDoc.WriteTo(tx);
+					}
+					return sw.ToString();
+				}
+			}
+
+			public static System.Xml.Linq.XDocument e_ToXDocument(this XmlDocument xd)
+			{
+				System.Xml.Linq.XDocument doc = System.Xml.Linq.XDocument.Parse(xd.e_AsString());
+				return doc;
+			}
+
+
+			private static IEnumerable<System.Xml.Linq.XElement> e_GetElementsOrDescendants(this XContainer node, SearchOption so = SearchOption.TopDirectoryOnly)
+			{
+				//https://stackoverflow.com/questions/8460464/finding-element-in-xdocument
+				//Имейте в виду, что свойство Name возвращает объект, который имеет LocalName и Namespace. Вот почему вы должны использовать Name.LocalName, если хотите сравнить по имени.
+				//Мой опыт работы с большими и сложными файлами XML заключается в том, что иногда ни элементы, ни потомки не работают при извлечении определенного элемента (и я до сих пор не знаю, почему).
+
+				/*										 				 
+				 Elements()будет проверять только прямые дочерние элементы, 
+				которые в первом случае являются корневыми элементами, 
+				а во втором — дочерними элементами корневого элемента, 
+				поэтому во втором случае вы получите совпадение. 
+
+				Если вы просто хотите, чтобы любой соответствующий потомок использовал Descendants()вместо этого:
+				var query = from c in xmlFile.Descendants("Band") select c;
+				 */
+
+				return (so == SearchOption.TopDirectoryOnly)
+					? node.Elements()
+					: node.Descendants();
+			}
+
+			public delegate bool XElementToNameCompareDelegate(XElement node, string name);
+
+			private static Lazy<XElementToNameCompareDelegate> defaultXElementToNameComparer = new(() => new XElementToNameCompareDelegate((x, s) => x.Name.LocalName == s));
+
+
+			public static System.Xml.Linq.XElement[] e_FindNodes(
+				this XContainer node,
+				string name,
+				SearchOption so = SearchOption.TopDirectoryOnly,
+				XElementToNameCompareDelegate? comparePredicate = null)
+			{
+				//https://stackoverflow.com/questions/8460464/finding-element-in-xdocument
+				//Имейте в виду, что свойство Name возвращает объект, который имеет LocalName и Namespace. Вот почему вы должны использовать Name.LocalName, если хотите сравнить по имени.
+				//Мой опыт работы с большими и сложными файлами XML заключается в том, что иногда ни элементы, ни потомки не работают при извлечении определенного элемента (и я до сих пор не знаю, почему).
+
+				var elements = node.e_GetElementsOrDescendants(so);
+				return elements
+					.Where(x => (comparePredicate ?? defaultXElementToNameComparer.Value)!.Invoke(x, name))
+					.ToArray();
+			}
+
+			public static System.Xml.Linq.XElement? e_FindSingleOrDefaultNode(
+				this XContainer node,
+				string name, SearchOption so = SearchOption.TopDirectoryOnly,
+				XElementToNameCompareDelegate? comparePredicate = null)
+				=> node
+				.e_GetElementsOrDescendants(so)
+				.SingleOrDefault(x => (comparePredicate ?? defaultXElementToNameComparer.Value)!.Invoke(x, name));
+
+
+			/// <summary>
+			/// Gets Last node in each tree path which corresponds to tree like 'nodeTreeNames1\nodeTreeNames2\nodeTreeNamesXXX'
+			/// SAMPLE: var xProps = Manifest.e_FindTree(null, "Package", "Properties").FirstOrDefault();
+			/// </summary>
+			/// <param name="comparePredicate">Custom node to name comparer, or NULL, to use default comparer</param>			
+			/// <returns> Last node in each tree path which corresponds to tree path 'nodeTreeNames1\nodeTreeNames2\nodeTreeNamesXXX'</returns>
+			public static System.Xml.Linq.XElement[] e_FindTree(
+				this XContainer node,
+				SearchOption startPointSearchOptions,
+				XElementToNameCompareDelegate? comparePredicate = null,
+				params string[] nodeTreeNames)
+			{
+				if (nodeTreeNames.Length < 2) throw new ArgumentOutOfRangeException(nameof(nodeTreeNames), $"{nameof(nodeTreeNames)} count must be > 1 !");
+
+				comparePredicate ??= defaultXElementToNameComparer.Value;
+
+				var treesBranches = node.e_FindNodes(nodeTreeNames[0], startPointSearchOptions);
+				List<XElement> lFoundLastNodes = new();
+
+
+				void FindNextChildForNode(XContainer x, string[] childrensToFind)
+				{
+					string childToFind = childrensToFind[0];
+					XElement[] foundChildrens = x
+						.Elements()
+						.Where(p => comparePredicate!.Invoke(p, childToFind))
+						.ToArray();
+
+					if (childrensToFind.Length == 1)
+					{
+						//We Found last needed Child in this branch path!
+						foundChildrens.ToList().ForEach(x => lFoundLastNodes.Add(x));
+					}
+					else
+					{
+						//We have to found next children
+						childrensToFind = childrensToFind.e_TakeFrom(1);
+						foundChildrens
+							.ToList()
+							.ForEach(x => FindNextChildForNode(x, childrensToFind));
+					}
+				}
+
+				nodeTreeNames = nodeTreeNames.e_TakeFrom(1);
+				treesBranches
+					.ToList()
+					.ForEach(x => FindNextChildForNode(x, nodeTreeNames));
+
+				XElement[] foundLastNodes = lFoundLastNodes.ToArray();
+
+				return foundLastNodes;
+				//return Array.Empty<System.Xml.Linq.XElement>();
+			}
+
+
+			public static System.Xml.Linq.XElement[] e_FindTree(this XContainer node, params string[] nodeTreeNames)
+				=> node.e_FindTree(SearchOption.AllDirectories, null, nodeTreeNames);
+
+
+
 		}
 
 
@@ -8397,7 +9115,7 @@ namespace uom
 
 
 
-#if !NET5_0 && !NET6_0
+#if !NET
 namespace System.Runtime.CompilerServices
 {
 	/// <summary>
