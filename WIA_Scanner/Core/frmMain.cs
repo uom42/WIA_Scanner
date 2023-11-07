@@ -21,15 +21,15 @@ namespace WS
 		public frmMain(WIAManager manager) : this()
 		{
 			_scanManager = manager;
-
 			InitUI();
-			//this.Load += delegate { InitUI(); };
 		}
 
 
 		private void InitUI()
 		{
 			Text = Application.ProductName + " " + Application.ProductVersion.ToString();
+
+			this.e_StartAutoupdateOnShown("https://raw.githubusercontent.com/uom42/1C_Pasta/master/UpdaterXML.xml");
 
 			try
 			{

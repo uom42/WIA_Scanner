@@ -10,4 +10,4 @@
 [assembly: Guid("35e1014b-27cc-4dba-a8c6-adfcdbec2775")]
 
 [assembly: AssemblyInformationalVersion("5.1.0.0")]
-[assembly: AssemblyVersion("5.1.0.*")]
+[assembly: AssemblyVersion("5.1.0.5")]

@@ -249,7 +249,7 @@ namespace common.Controls.PathSelector
 	[ToolboxItem(true)]
 	internal sealed class FileOpenSelector : SelectorBase
 	{
-		private OpenFileDialog _ofd;
+		private System.Windows.Forms.OpenFileDialog _ofd;
 
 		public FileOpenSelector() : base()
 		{
@@ -307,7 +307,7 @@ namespace common.Controls.PathSelector
 	[ToolboxItem(true)]
 	internal sealed class FileSaveSelector : SelectorBase
 	{
-		private SaveFileDialog _sfd = new();
+		private System.Windows.Forms.SaveFileDialog _sfd = new();
 
 		public FileSaveSelector() : base()
 		{
