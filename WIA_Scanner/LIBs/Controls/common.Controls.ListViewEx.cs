@@ -1,19 +1,21 @@
 ﻿#nullable enable
 
+//global using Extensions.Extensions_Controls_Listview;
+
+
 global using System.Windows.Forms;
 
 global using System.Drawing;
 
-global using common.Controls;
-
-using Extensions;
+global using uom.controls;
 
 using uom.WinAPI;
 
-using static common.Controls.ListViewEx;
+using static uom.controls.ListViewEx;
+using System.Diagnostics.Eventing.Reader;
 
 
-namespace common.Controls
+namespace uom.controls
 {
 
 	public partial class ListViewEx : ListView
@@ -102,6 +104,7 @@ namespace common.Controls
 			LVM_SETITEMINDEXSTATE = LVM_FIRST + 210,
 			LVM_GETNEXTITEMINDEX = LVM_FIRST + 211
 		}
+
 		/// <summary>ListView messages</summary>
 		public enum ListViewNotifyMessages : int
 		{
@@ -110,6 +113,107 @@ namespace common.Controls
 			LVN_LINKCLICK = (LVN_FIRST - 84),
 			LVN_GETEMPTYMARKUP = LVN_FIRST - 87,
 		}
+
+		public enum ExStyles : int
+		{
+
+			/// <summary>
+			/// Displays gridlines around items and subitems. This style is available only in conjunction with the LVS_REPORT style.
+			/// </summary>
+			LVS_EX_GRIDLINES = 0x00000001,
+
+			/// <summary>
+			///Allows images to be displayed for subitems. This style is available only in conjunction with the LVS_REPORT style.
+			/// </summary>
+			LVS_EX_SUBITEMIMAGES = 0x00000002,
+
+			/// <summary>
+			///Version 4.70. Enables check boxes for items in a list-view control. When set to this style, the control creates and sets a state image list with two images using DrawFrameControl. State image 1 is the unchecked box, and state image 2 is the checked box.Setting the state image to zero removes the check box.
+			///Version 6.00 and later Check boxes are visible and functional with all list view modes except the tile view mode introduced in ComCtl32.dll version 6. Clicking a checkbox in tile view mode only selects the item; the state does not change.
+			///You can obtain the state of the check box for a given item with ListView_GetCheckState.To set the check state, use ListView_SetCheckState. If this style is set, the list-view control automatically toggles the check state when the user clicks the check box or presses the space bar.
+			/// </summary>
+			LVS_EX_CHECKBOXES = 0x00000004,
+
+			/// <summary>
+			///Enables hot-track selection in a list-view control. Hot track selection means that an item is automatically selected when the cursor remains over the item for a certain period of time. The delay can be changed from the default system setting with a LVM_SETHOVERTIME message. This style applies to all styles of list-view control. You can check whether hot-track selection is enabled by calling SystemParametersInfo.
+			/// </summary>
+			LVS_EX_TRACKSELECT = 0x00000008,
+
+			/// <summary>
+			///Enables drag-and-drop reordering of columns in a list-view control. This style is only available to list-view controls that use the LVS_REPORT style.
+			/// </summary>
+			LVS_EX_HEADERDRAGDROP = 0x00000010,
+
+			/// <summary>
+			///When an item is selected, the item and all its subitems are highlighted. This style is available only in conjunction with the LVS_REPORT style.
+			/// </summary>
+			LVS_EX_FULLROWSELECT = 0x00000020, // applies to report mode only
+
+			/// <summary>
+			///The list-view control sends an LVN_ITEMACTIVATE notification code to the parent window when the user clicks an item. This style also enables hot tracking in the list-view control. Hot tracking means that when the cursor moves over an item, it is highlighted but not selected. See the Extended List-View Styles Remarks section for a discussion of item activation.
+			/// </summary>
+			LVS_EX_ONECLICKACTIVATE = 0x00000040
+
+
+
+			/*
+
+			 LVS_EX_AUTOAUTOARRANGE
+			Windows Vista and later. Automatically arrange icons if no icon positions have been set (Similar to LVS_AUTOARRANGE).
+			LVS_EX_AUTOCHECKSELECT
+			Windows Vista and later. Automatically select check boxes on single click.
+			LVS_EX_AUTOSIZECOLUMNS
+			Windows Vista and later. Automatically size listview columns.
+			LVS_EX_BORDERSELECT
+			Version 4.71 and later. Changes border color when an item is selected, instead of highlighting the item.
+			
+			
+				LVS_EX_COLUMNOVERFLOW
+			Indicates that an overflow button should be displayed in icon/tile view if there is not enough client width to display the complete set of header items. The list-view control sends the LVN_COLUMNOVERFLOWCLICK notification when the overflow button is clicked. This flag is only valid when LVS_EX_HEADERINALLVIEWS is also specified.
+			LVS_EX_COLUMNSNAPPOINTS
+			Windows Vista and later. Snap to minimum column width when the user resizes a column.
+			LVS_EX_DOUBLEBUFFER
+			Version 6.00 and later. Paints via double-buffering, which reduces flicker. This extended style also enables alpha-blended marquee selection on systems where it is supported.
+			LVS_EX_FLATSB
+			Enables flat scroll bars in the list view. If you need more control over the appearance of the list view's scroll bars, you should manipulate the list view's scroll bars directly using the Flat Scroll Bar APIs. If the system metrics change, you are responsible for adjusting the scroll bar metrics with FlatSB_SetScrollProp. See Flat Scroll Bars for further details.
+			
+			LVS_EX_HEADERINALLVIEWS
+			Windows Vista and later. Show column headers in all view modes.
+			LVS_EX_HIDELABELS
+			Version 6.00 and later. Hides the labels in icon and small icon view.
+			LVS_EX_INFOTIP
+			When a list-view control uses the LVS_EX_INFOTIP style, the LVN_GETINFOTIP notification code is sent to the parent window before displaying an item's tooltip.
+			LVS_EX_JUSTIFYCOLUMNS
+			Windows Vista and later. Icons are lined up in columns that use up the whole view.
+			LVS_EX_LABELTIP
+			If a partially hidden label in any list view mode lacks tooltip text, the list-view control will unfold the label. If this style is not set, the list-view control will unfold partly hidden labels only for the large icon mode.
+			LVS_EX_MULTIWORKAREAS
+			If the list-view control has the LVS_AUTOARRANGE style, the control will not autoarrange its icons until one or more work areas are defined (see LVM_SETWORKAREAS). To be effective, this style must be set before any work areas are defined and any items have been added to the control.
+			LVS_EX_REGIONAL
+			Version 4.71 through Version 5.80 only. Not supported on Windows Vista and later. Sets the list view window region to include only the item icons and text using SetWindowRgn. Any area that is not part of an item is excluded from the window region. This style is only available to list-view controls that use the LVS_ICON style.
+			LVS_EX_SIMPLESELECT
+			Version 6.00 and later. In icon view, moves the state image of the control to the top right of the large icon rendering. In views other than icon view there is no change. When the user changes the state by using the space bar, all selected items cycle over, not the item with the focus.
+			LVS_EX_SINGLEROW
+			Version 6.00 and later. Not used.
+			LVS_EX_SNAPTOGRID
+			Version 6.00 and later. In icon view, icons automatically snap into a grid.
+			
+				
+			LVS_EX_TRANSPARENTBKGND
+			Windows Vista and later. Background is painted by the parent via WM_PRINTCLIENT.
+			LVS_EX_TRANSPARENTSHADOWTEXT
+			Windows Vista and later. Enable shadow text on transparent backgrounds only.
+			LVS_EX_TWOCLICKACTIVATE
+			The list-view control sends an LVN_ITEMACTIVATE notification code to the parent window when the user double-clicks an item. This style also enables hot tracking in the list-view control. Hot tracking means that when the cursor moves over an item, it is highlighted but not selected. See the Extended List-View Styles Remarks section for a discussion of item activation.
+			LVS_EX_UNDERLINECOLD
+			Causes those non-hot items that may be activated to be displayed with underlined text. This style requires that LVS_EX_TWOCLICKACTIVATE be set also. See the Extended List-View Styles Remarks section for a discussion of item activation.
+			LVS_EX_UNDERLINEHOT
+			Causes those hot items that may be activated to be displayed with underlined text. This style requires that LVS_EX_ONECLICKACTIVATE or LVS_EX_TWOCLICKACTIVATE also be set. See the Extended List-View Styles Remarks section for a discussion of item activation.
+
+			 */
+
+		}
+
 
 
 		#endregion
@@ -159,7 +263,10 @@ namespace common.Controls
 
 
 		public event EventHandler<QueryEmptyTextEventArgs> QueryEmptyText = delegate { };
+
+#if !NET
 		public event EventHandler<string> GroupsCollapsedStateChangedByMouse = delegate { };
+#endif
 
 
 		#region item editing and Clipboard copy/pasting
@@ -212,7 +319,7 @@ namespace common.Controls
 			var POS = e.Location;
 			var LI = this.GetItemAt(POS.X, POS.Y);
 			if (null == LI) return;
-			this.On_Items_NeedEdit(LI.e_ToArrayOf());
+			this.On_Items_NeedEdit(LI.eToArrayOf());
 		}
 
 		private void On_KeyDown(Object sender, KeyEventArgs e)
@@ -291,16 +398,16 @@ namespace common.Controls
 
 		protected virtual bool On_Items_NeedEdit(ListViewItem[]? aSel = null)
 		{
-			if (null == aSel || !aSel.Any()) aSel = this.e_SelectedItemsAsIEnumerable().ToArray();
+			if (null == aSel || !aSel.Any()) aSel = this.eSelectedItemsAsIEnumerable().ToArray();
 			if (!aSel.Any()) return false;
-			if (!this.MultiSelect) aSel = aSel.First().e_ToArrayOf();
+			if (!this.MultiSelect) aSel = aSel.First().eToArrayOf();
 			Items_NeedEdit?.Invoke(this, aSel);
 			return true;
 		}
 
 		protected virtual bool On_Items_NeedDelete()
 		{
-			var aSel = this.e_SelectedItemsAsIEnumerable().ToArray();
+			var aSel = this.eSelectedItemsAsIEnumerable().ToArray();
 			if (!aSel.Any()) return false;
 			Items_NeedDelete?.Invoke(this, aSel);
 			return true;
@@ -314,7 +421,7 @@ namespace common.Controls
 
 		private bool On_Clipboard_Copy()
 		{
-			var aSel = this.e_SelectedItemsAsIEnumerable().ToArray();
+			var aSel = this.eSelectedItemsAsIEnumerable().ToArray();
 			if (!aSel.Any()) return false;
 			ClipboardCopy?.Invoke(this, aSel);
 			return true;
@@ -547,7 +654,7 @@ namespace common.Controls
 		public Color DragDrop_InsertionLineColor
 		{
 			get => _dragDrop_InsertionLineColor;
-			set => _dragDrop_InsertionLineColor.e_UpdateIfNotEquals(value, () => OnInsertionLineColorChanged(EventArgs.Empty));
+			set => _dragDrop_InsertionLineColor.eUpdateIfNotEquals(value, () => OnInsertionLineColorChanged(EventArgs.Empty));
 		}
 
 
@@ -729,7 +836,7 @@ namespace common.Controls
 				ListViewItem? dropToItem = null;
 				if (DragDropMode.HasFlag(DragDropModes.ItemsReorder))//Allow draw insertion mark only when DragDropModes.ItemsReorder is set!
 				{
-					var nearestToCursor = this.e_GetNearestItem(ptCursor);
+					var nearestToCursor = this.eGetNearestItem(ptCursor);
 					dropToItem = nearestToCursor.Item;
 				}
 
@@ -738,7 +845,7 @@ namespace common.Controls
 					newInsertionIndex = dropToItem.Index;
 
 					Rectangle dropToItemBounds = dropToItem.GetBounds(ItemBoundsPortion.Entire);
-					var ptDropToItemCenter = dropToItemBounds.e_GetCenter().e_RoundToInt();
+					var ptDropToItemCenter = dropToItemBounds.eGetCenter().eRoundToInt();
 
 					switch (View)
 					{
@@ -970,7 +1077,7 @@ namespace common.Controls
 		private void ResetEmptyText()
 		{
 			if (!IsHandleCreated) return;
-			uom.WinAPI.Windows.SendMessage(Handle, (int)ListViewMessages.LVM_RESETEMPTYTEXT, 0, 0);
+			uom.WinAPI.windows.SendMessage(Handle, (int)ListViewMessages.LVM_RESETEMPTYTEXT, 0, 0);
 		}
 
 
@@ -1001,10 +1108,10 @@ namespace common.Controls
 		[DebuggerStepThrough]
 		protected override void WndProc(ref Message m)
 		{
-			var msg = (uom.WinAPI.Windows.WindowMessages)m.Msg;
+			var msg = (uom.WinAPI.windows.WindowMessages)m.Msg;
 			switch (msg)
 			{
-				case uom.WinAPI.Windows.WindowMessages.OCM_NOTIFY:
+				case uom.WinAPI.windows.WindowMessages.OCM_NOTIFY:
 					OnOCNNotifyMessage(ref m);
 					break;
 
@@ -1014,17 +1121,17 @@ namespace common.Controls
 
 			switch (msg)
 			{
-				case uom.WinAPI.Windows.WindowMessages.WM_PAINT:
+				case uom.WinAPI.windows.WindowMessages.WM_PAINT:
 					this.OnWmPaint(ref m);
 					break;
 
-				case uom.WinAPI.Windows.WindowMessages.WM_LBUTTONUP:
+				case uom.WinAPI.windows.WindowMessages.WM_LBUTTONUP:
 					//This provides collapsing/expanding groups by clicking on the right triangle.
-					//Collapsing/expanding by doubleclicking on group geader - occurs independently from this by itself.
+					//Collapsing/expanding by doubleclicking on group header - occurs independently from this by itself.
+#if !NET
 					base.DefWndProc(ref m);
-
 					CheckGroupsCollapsedStatesForChanges();
-
+#endif
 					break;
 			}
 		}
@@ -1059,15 +1166,9 @@ namespace common.Controls
 
 		protected override void OnNotifyMessage(Message m)
 		{
-			var msg = (uom.WinAPI.Windows.WindowMessages)m.Msg;
-
+			var msg = (uom.WinAPI.windows.WindowMessages)m.Msg;
 			base.OnNotifyMessage(m);
 		}
-
-
-
-
-
 
 
 
@@ -1079,45 +1180,56 @@ namespace common.Controls
 
 		private const string DEFAULT_LIST_VIEW_GROUP_NAME = "default";
 
-		private Dictionary<string, bool> _knownGroupsStates = new();
+		private Dictionary<string, bool> _knownGroupsStates = [];
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		private Dictionary<string, bool> GetCurrentGroupsCollapsedStates()
 			=> this
-				.e_GroupsAsIEnumerable()
-				.Select(grp => (Name: grp.e_GetStringID(DEFAULT_LIST_VIEW_GROUP_NAME).ToLower().Trim(), Collapsed: grp.e_GetState_IsCollapsed()))
+				.eGroupsAsIEnumerable()
+				.Select(grp =>
+				{
+					string id = grp.eGetStringID(DEFAULT_LIST_VIEW_GROUP_NAME).ToLower().Trim();
+					bool collapsed = false;
+#if NET
+					collapsed = grp.CollapsedState == ListViewGroupCollapsedState.Collapsed;
+#else
+					collapsed = grp.eGetState_IsCollapsed();
+#endif
+					return (Name: id, Collapsed: collapsed);
+				}
+				)
 				.Where(grp => !string.IsNullOrWhiteSpace(grp.Name))
 				.OrderBy(grp => grp.Name)
 				.ToDictionary(grp => grp.Name, grp => grp.Collapsed);
 
 
-
-
+#if !NET
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		private void CheckGroupsCollapsedStatesForChanges()
 		{
 			var currentStates = GetCurrentGroupsCollapsedStates();
-			bool hasAnyChanges = !currentStates.e_IsDictionaryEqualTo(_knownGroupsStates);
+			bool hasAnyChanges = !currentStates.eIsDictionaryEqualTo(_knownGroupsStates);
 			if (hasAnyChanges)
 			{
 				this.GroupsCollapsedStateChangedByMouse?.Invoke(this, "");
 			}
 		}
+#endif
 
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		private FileInfo GetGroupsCollapsedStateStorage(string? @directory = null, string dataID = "")
 		{
 			const string GROUPS_SATES_EXT = ".groups.xml";
-			string lvID = this.e_CreateListViewID();
+			string lvID = this.eCreateListViewID();
 			if (!string.IsNullOrWhiteSpace(dataID)) lvID += $"_{dataID}";
 
 			DirectoryInfo di = (@directory != null)
 				? new(@directory)
-				: uom.AppInfo.UserAppDataPath_Roaming();
+				: uom.AppInfo.UserAppDataPath(true);
 
 			return System.IO.Path.Combine(di.FullName, lvID + GROUPS_SATES_EXT)
-				.e_ToFileInfo()!;
+				.eToFileInfo()!;
 		}
 
 
@@ -1127,9 +1239,7 @@ namespace common.Controls
 			Dictionary<string, bool>? states = null;
 			if (append)//Do not replace all file data, but update known groups states
 			{
-				states = LoadGroupsCollapsedStateFromStorage(@directory, dataID);
-				states ??= new();
-
+				states = LoadGroupsCollapsedStateFromStorage(@directory, dataID) ?? [];
 				var currentStates = GetCurrentGroupsCollapsedStates();
 				foreach (var kvp in currentStates) states[kvp.Key] = kvp.Value;
 			}
@@ -1138,30 +1248,28 @@ namespace common.Controls
 
 			_knownGroupsStates = states;
 
-			var text = _knownGroupsStates
+			var sortedRows = _knownGroupsStates
 				.Select(kvp => (Name: kvp.Key, Collapsed: kvp.Value))
 				.Where(grp => !string.IsNullOrWhiteSpace(grp.Name))
 				.OrderBy(grp => grp.Name)
-				.ToArray()
+				.ToArray();
 
-				.e_SerializeAsXML();
+			var dd = _knownGroupsStates.eDumpArrayToString();
+			Debug.WriteLine($"SaveAllGroupsCollapsedStates: {dd}");
 
+			var text = sortedRows.eSerializeAsXML();
+
+			//Debug.WriteLine($"RestoreAllGroupsCollapsedStateFromStorage (dataID: '{dataID}') GroupID: '{grpID}', State: '{loadedCollapsedState}'");
 
 			FileInfo fi = GetGroupsCollapsedStateStorage(@directory, dataID);
-			using (var sw = fi.e_CreateWriter(FileMode.OpenOrCreate, encoding: System.Text.Encoding.Unicode))
+			using (var sw = fi.eCreateWriter(FileMode.OpenOrCreate, encoding: System.Text.Encoding.Unicode))
 			{
-				//trim previous file data
-				sw.BaseStream.e_Truncate();
-
-				//writing actual data
-				sw.WriteLine(text);
+				sw.BaseStream.eTruncate(); //trim previous file data										   
+				sw.WriteLine(text); //writing actual data
 				sw.Flush();
 			}
 			return fi;
 		}
-
-
-
 
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1173,9 +1281,9 @@ namespace common.Controls
 				if (!fi.Exists) return null;
 
 				return fi
-					.e_ReadAsText()!
+					.eReadAsText()!
 					.Trim()
-					.e_DeSerializeXML<(string Name, bool Collapsed)[]>(ThrowExceptionOnError: true)!
+					.eDeSerializeXML<(string Name, bool Collapsed)[]>(throwOnError: true)!
 					.Where(grp => !string.IsNullOrWhiteSpace(grp.Name))
 					.OrderBy(grp => grp.Name)
 					.ToDictionary(r => r.Name, r => r.Collapsed);
@@ -1183,7 +1291,7 @@ namespace common.Controls
 			catch (Exception ex)
 			{
 				//just ignore errors
-				ex.e_LogError(false);
+				ex.eLogError(false);
 				return null;
 			}
 		}
@@ -1193,18 +1301,30 @@ namespace common.Controls
 		public void RestoreAllGroupsCollapsedStateFromStorage(string? @directory = null, string dataID = "")
 		{
 			var loadedGroupStates = LoadGroupsCollapsedStateFromStorage(@directory, dataID);
-			//if (loadedGroupStates == null) return;
-
 			try
 			{
-				this.e_runOnLockedUpdate(delegate
+				this.erunOnLockedUpdate(delegate
 				{
-					this.e_GroupsAsIEnumerable()
-					.e_ForEach(grp =>
+					this.eGroupsAsIEnumerable()
+					.eForEach(grp =>
 						{
-							grp.e_SetStateFlag(ListViewGroupState.Collapsible);
-							string grpID = grp.e_GetStringID(DEFAULT_LIST_VIEW_GROUP_NAME).ToLower().Trim();
-							if (loadedGroupStates != null && loadedGroupStates.TryGetValue(grpID, out bool oldState)) grp.e_SetState_Collapsed(oldState);
+#if !NET
+							grp.eSetStateFlag(ListViewGroupState.Collapsible);
+#endif
+							string grpID = grp.eGetStringID(DEFAULT_LIST_VIEW_GROUP_NAME).ToLower().Trim();
+
+							if (loadedGroupStates != null && loadedGroupStates.TryGetValue(grpID, out bool loadedCollapsedState))
+							{
+#if NET
+								grp.CollapsedState = loadedCollapsedState
+									? ListViewGroupCollapsedState.Collapsed
+									: ListViewGroupCollapsedState.Expanded;
+
+								Debug.WriteLine($"RestoreAllGroupsCollapsedStateFromStorage (dataID: '{dataID}') GroupID: '{grpID}', State: '{loadedCollapsedState}'");
+#else
+								grp.eSetState_Collapsed(loadedCollapsedState);
+#endif
+							}
 						});
 				});
 
@@ -1212,7 +1332,7 @@ namespace common.Controls
 			catch (Exception ex)
 			{
 				//just ignore errors
-				ex.e_LogError(false);
+				ex.eLogError(false);
 			}
 		}
 
@@ -1221,25 +1341,9 @@ namespace common.Controls
 
 
 
+#if !NET
 
 
-
-
-
-		/*
-				private void OnGroupTaskLinkClicked(Int32 GroupID)
-				{
-					foreach (ListViewGroup grp in this.Groups)
-					{
-						if (GetGroupID(G) == GroupID)
-						{
-							var TAE = new TaskLinkClickEventArgs {.Group = G };
-							RaiseEvent TaskLinkClick(Me, TAE);
-							return;
-						}
-					}
-				}
-		 */
 
 
 		#region Groups API
@@ -1446,17 +1550,12 @@ namespace common.Controls
 		#endregion
 
 
-
-
-
-
-
 		#region SetGroup
 
 		public static Int32 SetGroup(ListViewGroup lstvwgrp, LVGROUP group)
 		{
 			int result = 0;
-			lstvwgrp.ListView!.e_RunInUIThread(delegate
+			lstvwgrp.ListView!.eRunInUIThread(delegate
 			{
 				Int32 groupId = group.IGroupId;
 				result = SendMessage(lstvwgrp.ListView!.Handle, ListViewMessages.LVM_SETGROUPINFO, groupId, ref group);
@@ -1475,7 +1574,7 @@ namespace common.Controls
 		{
 
 			int groupId = 0;
-			lstvwgrp!.ListView!.e_RunInUIThread(delegate { groupId = lstvwgrp.e_GetWin32ID(); });
+			lstvwgrp!.ListView!.eRunInUIThread(delegate { groupId = lstvwgrp.eGetWin32ID(); });
 
 			ListViewGroupMask eMask = ListViewGroupMask.LVGF_NONE;
 			if (Header != null) eMask |= ListViewGroupMask.LVGF_HEADER;
@@ -1505,15 +1604,12 @@ namespace common.Controls
 		#endregion
 
 
-
-
-
 		#region SetGroupState
 
 		public static void SetGroupState(ListViewGroup grp, ListViewGroupState state)
 		{
 			SetGroup(grp, state: state);
-			grp.ListView!.e_RunInUIThread(delegate { grp.ListView!.Refresh(); });
+			grp.ListView!.eRunInUIThread(delegate { grp.ListView!.Refresh(); });
 		}
 
 		public static void SetGroupStateFlag(ListViewGroup grp, ListViewGroupState flag, bool flagState = true)
@@ -1534,25 +1630,21 @@ namespace common.Controls
 		public static ListViewGroupState GetGroupState(ListViewGroup grp, ListViewGroupState? bitsToGet = null)
 		{
 			if (grp == null || grp.ListView == null) return default;
-
-
-			if (bitsToGet == null) bitsToGet = (ListViewGroupState)ListViewGroupState.Collapsed.e_MixFlagsAsInt32(ListViewGroupState.Invalid);
+			if (bitsToGet == null) bitsToGet = (ListViewGroupState)ListViewGroupState.Collapsed.eMixFlagsAsInt32(ListViewGroupState.Invalid);
 
 			ListViewGroupState result = 0;
-			grp.ListView.e_RunInUIThread(delegate
+			grp.ListView.eRunInUIThread(delegate
 			{
-				int groupID = grp.e_GetWin32ID();
+				int groupID = grp.eGetWin32ID();
 				result = (ListViewGroupState)SendMessage(grp.ListView.Handle, ListViewMessages.LVM_GETGROUPSTATE, groupID, (int)bitsToGet.Value);
 			});
 			return result;
 		}
 
-
 		#endregion
 
+
 		private delegate void CallbackSetGroupString(ListViewGroup lstvwgrp, string value);
-
-
 
 
 		#region SetGroupText
@@ -1693,6 +1785,9 @@ namespace common.Controls
 
 		#endregion
 
+#endif
+
+
 		#endregion
 
 
@@ -1701,6 +1796,56 @@ namespace common.Controls
 
 
 
+		/*
+
+
+
+		To get this result you need to..:
+
+Set OwnerDraw = true for the LV
+Set UseItemStyleForSubItems = false for all Items
+Code all three Drawxxx events.
+Decide on how to store the references to the 2nd (etc) image, since the SubItem class doesn't have an ImageIndex.
+You can either use the Tag of the SubItem to hold the ImageIndex number or, if you don't need the Text, you can set the text so you can use it as index or even as Key into the ImageList.
+
+Two of the events are simple:
+
+		 private void listView1_DrawColumnHeader(object sender, DrawListViewColumnHeaderEventArgs e)
+		{
+			e.DrawDefault = true;
+		}
+
+		private void listView1_DrawItem(object sender, DrawListViewItemEventArgs e)
+		{
+			e.DrawDefault = true;
+		}
+
+
+
+
+
+
+
+
+		   private void listView1_DrawSubItem(object sender, DrawListViewSubItemEventArgs e)
+    {
+        e.DrawBackground();
+        Size sz = listView1.SmallImageList.ImageSize;
+        int idx = 0;
+        if (e.SubItem.Tag != null) idx = (int)e.SubItem.Tag;
+        Bitmap bmp = (Bitmap)listView1.SmallImageList.Images[idx];
+        Rectangle rTgt = new Rectangle(e.Bounds.Location, sz);
+        bool selected = e.ItemState.HasFlag(ListViewItemStates.Selected);
+        // optionally show selection:
+        if (selected ) e.Graphics.FillRectangle(Brushes.CornflowerBlue, e.Bounds);
+
+        if (bmp != null) e.Graphics.DrawImage(bmp, rTgt);
+
+        // optionally draw text
+        e.Graphics.DrawString(e.SubItem.Text, listView1.Font,
+                              selected  ? Brushes.White: Brushes.Black,
+                              e.Bounds.X + sz.Width + 2, e.Bounds.Y + 2);
+    }
 
 
 
@@ -1710,6 +1855,9 @@ namespace common.Controls
 
 
 
+
+
+		 */
 
 
 
@@ -1721,7 +1869,8 @@ namespace common.Controls
 
 }
 
-namespace Extensions
+
+namespace uom.Extensions
 {
 
 
@@ -1730,37 +1879,7 @@ namespace Extensions
 	{
 
 
-
-
-
-
-		/*
-
-		/// <summary>Only for ListView, TreeView</summary>
-
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal void e_Vista_SetExplorerTheme(this ListView CTL) => CTL.e_Vista_SetExplorerTheme_CORE();
-
-
-		/// <summary>Only for ListView, TreeView</summary>
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal void e_Vista_SetExplorerTheme(this TreeView CTL) => CTL.e_Vista_SetExplorerTheme_CORE();
-
-
-		/// <summary>Only for ListView, TreeView</summary>
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		private void e_Vista_SetExplorerTheme_CORE(this Control CTL)
-		{
-			if (!(CTL is ListView) && !(CTL is TreeView))
-				throw new ArgumentException("SetExplorerTheme() valid only for ListView or TreeView", "CTL");
-			//uom.WinAPI.Windows.Themes.SetWindowTheme(CTL.Handle, uomvb.Win32.Windows.Themes.C_THEME_EXPLORER, null);
-		}
-		 */
-
-
-
-
-
+#if !NET
 
 
 		#region Set group state
@@ -1768,22 +1887,21 @@ namespace Extensions
 
 		/// <summary>Группа будет сворачиваться/разворачиваться только на ListViewNF (или надо реализовать соответствующую функциональность самостоятельно)</summary>
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_SetState(this ListViewGroup grp, ListViewEx.ListViewGroupState state = DEFAULT_GROUP_STATE)
+		internal static void eSetState(this ListViewGroup grp, ListViewEx.ListViewGroupState state = DEFAULT_GROUP_STATE)
 			=> ListViewEx.SetGroupState(grp, state);
 
+
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_SetStateFlag(this ListViewGroup grp, ListViewGroupState flag, bool flagState = true)
+		internal static void eSetStateFlag(this ListViewGroup grp, ListViewGroupState flag, bool flagState = true)
 			=> ListViewEx.SetGroupStateFlag(grp, flag, flagState);
-
-
 
 
 		/// <summary>Группа будет сворачиваться/разворачиваться только на ListViewNF (или надо реализовать соответствующую функциональность самостоятельно)</summary>
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_SetState_Collapsed(this ListViewGroup grp, bool makeCollapsed)
+		internal static void eSetState_Collapsed(this ListViewGroup grp, bool makeCollapsed)
 		{
 			bool needChangeState = false;
-			ListViewEx.ListViewGroupState state = grp.e_GetState();
+			ListViewEx.ListViewGroupState state = grp.eGetState();
 
 			if (!state.HasFlag(ListViewGroupState.Collapsible))//check that also Collapsible flag already set
 			{
@@ -1797,94 +1915,59 @@ namespace Extensions
 				state ^= ListViewEx.ListViewGroupState.Collapsed;//revering Collapsed state
 			}
 
-			if (needChangeState) grp.e_SetState(state);
+			if (needChangeState) grp.eSetState(state);
 		}
 
 
 		/// <summary>Группа будет сворачиваться/разворачиваться только на ListViewNF (или надо реализовать соответствующую функциональность самостоятельно)</summary>
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_SetGroupsState(this ListView? lvw, ListViewEx.ListViewGroupState state = DEFAULT_GROUP_STATE)
-			=> lvw?.e_GroupsAsIEnumerable().ToList().ForEach(grp => grp.e_SetState(state));
+		internal static void eSetGroupsState(this ListView? lvw, ListViewEx.ListViewGroupState state = DEFAULT_GROUP_STATE)
+			=> lvw?.eGroupsAsIEnumerable().ToList().ForEach(grp => grp.eSetState(state));
 
 
 		#endregion
 
 
 
-
-
 		/// <summary>Группа будет сворачиваться/разворачиваться только на ListViewNF (или надо реализовать соответствующую функциональность самостоятельно)</summary>
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static ListViewEx.ListViewGroupState e_GetState(this ListViewGroup grp)
+		internal static ListViewEx.ListViewGroupState eGetState(this ListViewGroup grp)
 			=> ListViewEx.GetGroupState(grp);
 
 
 		/// <summary>Группа будет сворачиваться/разворачиваться только на ListViewNF (или надо реализовать соответствующую функциональность самостоятельно)</summary>
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static bool e_GetState_IsCollapsed(this ListViewGroup grp)
-			=> grp.e_GetState().HasFlag(ListViewEx.ListViewGroupState.Collapsed);
-
-
-
-		/*
-
-/// <summary>Группа будет сворачиваться/разворачиваться только на ListViewNF (или надо реализовать соответствующую функциональность самостоятельно)</summary>
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-internal static void e_SetStateFlag(this ListViewGroup grp, ListViewEx.ListViewGroupState StateBit, bool bSet = true)
-{
-ListViewEx.ListViewGroupState state = grp.e_GetState();
-if ((state & StateBit) == StateBit)
-{
-	// Флаг установлен
-	if ((!bSet))
-	{
-		// Сбрасываем флаг
-		state = state ^ StateBit;
-		G.SetState(state);
-	}
-}
-else
-	// Флаг не установлен
-	if ((bSet))
-{
-	// Устанавливаем флаг
-	state = state | StateBit;
-	G.SetState(state);
-}
-}
-		 */
-
-
-
-
-
-
+		internal static bool eGetState_IsCollapsed(this ListViewGroup grp)
+			=> grp.eGetState().HasFlag(ListViewEx.ListViewGroupState.Collapsed);
 
 
 		internal const ListViewEx.ListViewGroupState DEFAULT_GROUP_STATE = ListViewEx.ListViewGroupState.Collapsible;
+
+#endif
+
 
 		private const string ERROR_LIST_VIEW_GROUP_NAME_NULL = "ListViewGroup.Name = NULL!";
 		private const string LISTVIEW_GROUPS_STATE_KEY_PREFIX = @"ListView Groups states\";
 
 		[Obsolete("Do not save group states in to registry! Save to file instead!", true)]
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_SaveGroupsCollapsedStates_Reg(this ListView lvw, string listViewID = "")
+		internal static void eSaveGroupsCollapsedStates_Reg(this ListView lvw, string listViewID = "")
 			=> lvw
-			.e_GroupsAsIEnumerable()
+			.eGroupsAsIEnumerable()
 			.ToList()
-			.ForEach(grp => grp.e_SaveGroupCollapsedState_Reg(listViewID));
+			.ForEach(grp => grp.eSaveGroupCollapsedState_Reg(listViewID));
 
 
 		[Obsolete("Do not save group states in to registry! Save to file instead!", true)]
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_SaveGroupCollapsedState_Reg(this ListViewGroup grp, string listViewID = "")
+		internal static void eSaveGroupCollapsedState_Reg(this ListViewGroup grp, string listViewID = "")
 		{
 			if (string.IsNullOrWhiteSpace(grp.Name)) throw new ArgumentNullException(ERROR_LIST_VIEW_GROUP_NAME_NULL);
 
 			if (string.IsNullOrWhiteSpace(listViewID))
 			{
 				if (grp.ListView == null) return; // Группе не назначен ListView - Просто игнорируем
-				listViewID = grp.ListView.e_CreateListViewID();
+				listViewID = grp.ListView.eCreateListViewID();
 			}
 
 			var sFullGroupIDRegKey = LISTVIEW_GROUPS_STATE_KEY_PREFIX + listViewID;
@@ -1897,14 +1980,14 @@ else
 
 		[Obsolete("Do not save group states in to registry! Save to file instead!", true)]
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_LoadGroupCollapsedState_Reg(this ListViewGroup grp, string listViewID = "", bool SearchPreVersion = false)
+		internal static void eLoadGroupCollapsedState_Reg(this ListViewGroup grp, string listViewID = "", bool SearchPreVersion = false)
 		{
 			if (string.IsNullOrWhiteSpace(grp.Name)) throw new ArgumentNullException(ERROR_LIST_VIEW_GROUP_NAME_NULL);
 
 			if (string.IsNullOrWhiteSpace(listViewID))
 			{
 				if (grp.ListView == null) return; // Группе не назначен ListView - Просто игнорируем
-				listViewID = grp.ListView.e_CreateListViewID();
+				listViewID = grp.ListView.eCreateListViewID();
 			}
 
 			var sFullGroupIDRegKey = LISTVIEW_GROUPS_STATE_KEY_PREFIX + listViewID;
@@ -1912,26 +1995,27 @@ else
 			var bCollapsed = uomvb.Settings.GetSetting_Boolean(grp.Name, false, null, SearchPreVersion, sFullGroupIDRegKey).Value;
 			ListViewEx.ListViewGroupState State = DEFAULT_GROUP_STATE;
 			if (bCollapsed) State |= ListViewEx.ListViewGroupState.Collapsed;
-			grp.e_SetState(State);
+			grp.eSetState(State);
 			 */
 		}
 
 
 		/// <summary>Generate ListView ID with Form Name</summary>
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static string e_CreateListViewID(this ListView lvw) => $"{lvw.FindForm().Name}.{lvw.Name}";
+		internal static string eCreateListViewID(this ListView lvw) => $"{lvw.FindForm()!.Name}.{lvw.Name}";
 
+#if !NET
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_SetGroupsTitlesBy_Count(
+		internal static void eSetGroupsTitlesBy_Count(
 			this ListView lvw,
 			Func<ListViewGroup, string>? callbackGroupTitleProvider = null,
 			Action<ListViewGroup, string, ListViewEx.ListViewGroupState>? callbackGroupTitleApplier = null)
 		{
-			foreach (var grp in lvw.e_GroupsAsIEnumerable())
+			foreach (var grp in lvw.eGroupsAsIEnumerable())
 			{
 				{
-					var bCollapsed = grp.e_GetState_IsCollapsed();
+					var bCollapsed = grp.eGetState_IsCollapsed();
 
 					ListViewEx.ListViewGroupState state = DEFAULT_GROUP_STATE;
 					if (bCollapsed) state |= ListViewEx.ListViewGroupState.Collapsed;
@@ -1943,17 +2027,18 @@ else
 					if (callbackGroupTitleApplier != null)
 						callbackGroupTitleApplier.Invoke(grp, sTitle, state);
 					else
-						grp.e_SetGroup(Header: sTitle, state: state);
+						grp.eSetGroup(Header: sTitle, state: state);
 				}
 			}
 		}
 
+
 		/// <summary>Safely sets group Header and don't broke groups collapswd states</summary>
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static void e_SetGroupsTitlesFastW32Safe(
+		public static void eSetGroupsTitlesFastW32Safe(
 			this ListView? lvw,
 			Func<ListViewGroup, string>? getGroupHeader = null)
-				=> lvw?.e_GroupsAsIEnumerable().e_ForEach(g =>
+				=> lvw?.eGroupsAsIEnumerable().eForEach(g =>
 				{
 					string sTitle = g.Name ?? "";
 					if (getGroupHeader != null)
@@ -1963,15 +2048,17 @@ else
 
 					if (!string.IsNullOrWhiteSpace(sTitle))
 					{
-						g.e_SetText(sTitle);
+						g.eSetText(sTitle);
 					}
 				});
+
+
 
 		///<summary>
 		///Safely sets group Header and don't broke groups collapswd states
 		///MT Safe!!!</summary>
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static void e_runOnLockedUpdateW32Safe(
+		public static void erunOnLockedUpdateW32Safe(
 			this ListView? lvw,
 			Action a,
 			bool autoSizeColumns = false,
@@ -1979,29 +2066,23 @@ else
 		{
 			_ = a ?? throw new ArgumentNullException(nameof(a));
 
-			Action a2 = delegate
+			void a2()
 			{
 				lvw?.BeginUpdate();
 				try { a!.Invoke(); }
 				finally
 				{
-					if (autoSizeColumns) lvw?.e_AutoSizeColumns();
-					if (fastUpdateGroupHeaders) lvw?.e_SetGroupsTitlesFastW32Safe();
+					if (autoSizeColumns) lvw?.eAutoSizeColumnsAuto();
+					if (fastUpdateGroupHeaders) lvw?.eSetGroupsTitlesFastW32Safe();
 					lvw?.EndUpdate();
 				}
 			};
 
 			if (lvw != null && lvw.InvokeRequired)
-				lvw.e_RunInUIThread(a2);
+				lvw.eRunInUIThread(a2);
 			else
-				a2.Invoke();
+				a2();
 		}
-
-
-
-
-
-
 
 
 		/// <summary>Группа будет сворачиваться/разворачиваться только на ListViewNF (или надо реализовать соответствующую функциональность самостоятельно)</summary>
@@ -2012,17 +2093,13 @@ else
 			foreach (var G in GG)
 			{
 				lvw.Groups.Add(G);
-				G.e_SetState(state);
+				G.eSetState(state);
 			}
 		}
 
 
-
-
-
-
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_SetGroup(
+		internal static void eSetGroup(
 			this ListViewGroup lvg,
 			string? Header = null,
 			string? SubTitle = null,
@@ -2035,37 +2112,34 @@ else
 
 		/// <summary>Задаёт текст для группы, но не меняет флаг состояния группы (!!! Стандартный .Header=String меняет флаг состояния!!!)</summary>
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_SetText(this ListViewGroup lvg, string Text) => lvg.e_SetGroup(Text);
+		internal static void eSetText(this ListViewGroup lvg, string Text) => lvg.eSetGroup(Text);
 
 
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_SetSubTitle(this ListViewGroup lvg, string subTitle) => lvg.e_SetGroup(SubTitle: subTitle);
+		internal static void eSetSubTitle(this ListViewGroup lvg, string subTitle) => lvg.eSetGroup(SubTitle: subTitle);
 
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static void e_SetFooter(this ListViewGroup lvg, string footerText) => lvg.e_SetGroup(Footer: footerText);
-
-		/// <summary>Обработку кликов надо делать в событии Listview.TaskLinkClick</summary>
-		//		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		//internal static void e_SetTaskLink(this ListViewGroup lvg, string TaskLinkText) => ListViewEx.SetGroupTaskLink(lvg, TaskLinkText);
+		internal static void eSetFooter(this ListViewGroup lvg, string footerText) => lvg.eSetGroup(Footer: footerText);
 
 
-
-		internal static Int32 e_GetWin32ID(this ListViewGroup lstvwgrp)
+		internal static Int32 eGetWin32ID(this ListViewGroup lstvwgrp)
 		{
 			_ = lstvwgrp!.ListView ?? throw new ArgumentException("Group must ge Added to ListView before!", nameof(lstvwgrp));
 
-			var groupID = lstvwgrp.e_GetPropertyValue_Integer("ID");
-			if (groupID == 0) groupID = lstvwgrp.ListView.Groups.IndexOf(lstvwgrp);
-			return groupID;
+			var groupID = lstvwgrp.eGetPropertyValue_Int32("ID");
+			if (!groupID.HasValue) groupID = lstvwgrp.ListView.Groups.IndexOf(lstvwgrp);
+			return groupID.Value;
 		}
 
+#endif
+
+
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static string e_GetStringID(this ListViewGroup g, string defaultID = "default")
+		internal static string eGetStringID(this ListViewGroup g, string defaultID = "default")
 		{
-			if (!string.IsNullOrWhiteSpace(g.Name)) return g.Name;
-			if (!string.IsNullOrWhiteSpace(g.Header)) return g.Header;
-			return defaultID;
+			string?[] fields = [g.Name, g.Header];
+			return fields.FirstOrDefault(s => s.eIsNotNullOrWhiteSpace()) ?? defaultID;
 		}
 
 
@@ -2076,15 +2150,131 @@ else
 
 #else
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static (ListViewGroup Group, bool Created) e_GroupsCreateGroupByKey(
+		public static (ListViewGroup Group, bool Created) eGroupsCreateGroupByKey(
 			this ListViewEx lvw,
 			string key,
 			string? header = null,
 			ListViewGroupState newGroupState = ListViewGroupState.Collapsible)
-			=> lvw.e_GroupsCreateGroupByKey(key, header, new Action<ListViewGroup>(grp => grp.e_SetStateFlag(newGroupState)));
+			=> lvw.eGroupsCreateGroupByKey(key, header, new Action<ListViewGroup>(grp => grp.eSetStateFlag(newGroupState)));
 
 
 #endif
+
+
+
+
+
+
+		#region Allow SubItemImages
+
+		[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+		private struct LV_ITEM
+		{
+			public MaskFlags mask;
+			public Int32 iItem;
+			public Int32 iSubItem;
+			public UInt32 state;
+			public UInt32 stateMask;
+			public String pszText;
+			public Int32 cchTextMax;
+			public Int32 iImage;
+			public IntPtr lParam;
+
+			public enum MaskFlags : UInt32
+			{
+				LVIF_TEXT = 0x0001,
+				LVIF_IMAGE = 0x0002
+			}
+
+			public void Apply(IntPtr h)
+			{
+				[DllImport("user32.dll")]
+				static extern bool SendMessage(IntPtr hWnd, ListViewMessages msg, Int32 wParam, ref LV_ITEM lParam);
+
+				SendMessage(h, ListViewMessages.LVM_SETITEM, 0, ref this);
+			}
+		}
+
+
+		/*
+		protected override void OnHandleCreated(EventArgs e)
+		{
+			base.OnHandleCreated(e);
+			AllowSubItemImages();
+		}
+		 */
+
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static IntPtr SendMessage_IntPtr(this ListView lvw, ListViewMessages m, IntPtr? wParam = default, IntPtr? lParam = default)
+			=> uom.WinAPI.windows.SendMessage(lvw.Handle, (int)m, wParam.HasValue ? wParam.Value : IntPtr.Zero, lParam.HasValue ? lParam.Value : IntPtr.Zero);
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static int SendMessage_Int(this ListView lvw, ListViewMessages m, int? wParam = 0, int? lParam = 0)
+			=> uom.WinAPI.windows.SendMessage(lvw.Handle, (int)m, wParam.HasValue ? wParam.Value : 0, lParam.HasValue ? lParam.Value : 0);
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static ExStyles GetExtendedListViewStyle(this ListView lvw) => (ExStyles)lvw.SendMessage_Int(ListViewMessages.LVM_GETEXTENDEDLISTVIEWSTYLE);
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void SetExtendedListViewStyle(this ListView lvw, ExStyles s) => lvw.SendMessage_Int(ListViewMessages.LVM_SETEXTENDEDLISTVIEWSTYLE, 0, (int)s);
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void SetExtendedListViewStyleFlag(this ListView lvw, ExStyles s) => lvw.SetExtendedListViewStyle(lvw.GetExtendedListViewStyle() | s);
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static void AllowSubItemImages(this ListView lvw) => lvw.SetExtendedListViewStyleFlag(ExStyles.LVS_EX_SUBITEMIMAGES);
+
+		/*
+		public void SetSubItem(ListView lvw, int row, int col, string text, int iconIndex)
+		{
+			LV_ITEM lvi = new()
+			{
+				iItem = row,
+				iSubItem = col,
+				pszText = text,
+				mask = LV_ITEM.MaskFlags.LVIF_IMAGE | LV_ITEM.MaskFlags.LVIF_TEXT,
+				iImage = iconIndex
+			};
+			lvi.Apply(this.Handle);
+			//SendMessage(this.Handle, ListViewMessages.LVM_SETITEM, 0, ref lvi);
+		}
+
+		public static void SetSubItemImage(this ListView lvw, int row, int col, int iconIndex)
+		{
+			LV_ITEM lvi = new()
+			{
+				iItem = row,
+				iSubItem = col,
+				mask = LV_ITEM.MaskFlags.LVIF_IMAGE,
+				iImage = iconIndex
+			};
+			lvi.Apply(lvw.Handle);
+		}
+		 */
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static bool SetSubItemImage(this ListViewItem li, int col, int iconIndex)
+		{
+			//ListViewItem.ListViewSubItem? lsi = li.SubItems[col];
+			if (li.ListView == null) return false;// throw new ArgumentNullException(nameof(li), "ListViewItem.ListView = NULL!");
+			LV_ITEM lvi = new()
+			{
+				iItem = li.Index,
+				iSubItem = col,
+				mask = LV_ITEM.MaskFlags.LVIF_IMAGE,
+				iImage = iconIndex
+			};
+			lvi.Apply(li.ListView.Handle);
+			return true;
+		}
+
+		#endregion
+
+
+
+
+
 
 
 

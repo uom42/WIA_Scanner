@@ -11,6 +11,8 @@ using uom.Extensions;
 
 using static System.Net.Mime.MediaTypeNames;
 
+using Font = System.Drawing.Font;
+
 namespace WS
 {
 
@@ -86,7 +88,7 @@ namespace WS
 		private RectangleF? NormalizedMaouseCropRectCm => !IsInMouseCropMode
 			? null
 			: RectangleF.FromLTRB(ptfMouseCropStartCm!.Value.X, ptfMouseCropStartCm!.Value.Y, ptfMouseCropEndCm!.Value.X, ptfMouseCropEndCm!.Value.Y)
-			.e_Normalize();
+			.eNormalize();
 
 
 		#region Constructor
@@ -161,7 +163,7 @@ namespace WS
 			get => _paperCropCm; set
 			{
 				_paperCropCm = value;
-				if (_paperCropCm.HasValue) _paperCropCm = _paperCropCm.Value.e_EnsureInRect(PaperSizeCm.e_ToRectangleF());
+				if (_paperCropCm.HasValue) _paperCropCm = _paperCropCm.Value.eEnsureInRect(PaperSizeCm.eToRectangleF());
 
 				OnPropertiesChanged();
 			}
@@ -215,23 +217,23 @@ namespace WS
 			rcClient.Inflate(-BORDER_SIZE, -BORDER_SIZE);
 
 			// Центральная точка страницы
-			PointF ptfCenter = rcClient.e_ToRectangleF().e_GetCenter();
+			PointF ptfCenter = rcClient.eToRectangleF().eGetCenter();
 
-			var pageOnScreenPx = PaperSizeCm.e_ВписатьВ(rcClient.Size);
+			var pageOnScreenPx = PaperSizeCm.eВписатьВ(rcClient.Size);
 			_zoom = pageOnScreenPx.Zoom;
-			_rcPageOnScreenPx = pageOnScreenPx.TargetSize.e_ToRectangleF().e_CenterTo(ptfCenter).e_ToRectangle();
+			_rcPageOnScreenPx = pageOnScreenPx.TargetSize.eToRectangleF().eCenterTo(ptfCenter).eToRectangle();
 		}
 
 
 
 		/// <summary>Converts paper Coords (Cm) to Screen Coords (Pixels)</summary>
-		public Size PaperToScreen(SizeF szfPaper) => szfPaper.e_Multiply(_zoom).ToSize();
+		public Size PaperToScreen(SizeF szfPaper) => szfPaper.eMultiply(_zoom).ToSize();
 
 
 		/// <inheritdoc cref="PaperToScreen"/>
 		public Point PaperToScreen(PointF ptfPaper)
 		{
-			var ptScreen = PaperToScreen(ptfPaper.e_ToSize()).e_ToPoint();
+			var ptScreen = PaperToScreen(ptfPaper.eToSize()).eToPoint();
 			//Offsetting from paper start corner
 			{
 				ptScreen.X += _rcPageOnScreenPx.Left;
@@ -245,7 +247,7 @@ namespace WS
 		{
 			var ptScreen = PaperToScreen(rcfPaper.Location);
 			var szScreen = PaperToScreen(rcfPaper.Size);
-			Rectangle rcfScreenRect = new RectangleF(ptScreen, szScreen).e_ToRectangle();
+			Rectangle rcfScreenRect = new RectangleF(ptScreen, szScreen).eToRectangle();
 			return rcfScreenRect;
 		}
 
@@ -316,7 +318,7 @@ namespace WS
 						var rcImage = PaperToScreen(di.ImageRectCm);
 						g.DrawImage(di.Image, PaperToScreen(di.ImageRectCm));
 #if DEBUG
-						g.DrawRectangles(Pens.Blue, rcImage.e_ToArrayOf());
+						g.DrawRectangles(Pens.Blue, rcImage.eToArrayOf());
 #endif
 					}
 
@@ -326,7 +328,7 @@ namespace WS
 						{
 							//Drawing No Image Text
 							using Font fnt = new(this.Font.FontFamily, 20);
-							g.e_DrawTextEx(_emptyImagesText, fnt, Color.Gray, _rcPageOnScreenPx, ContentAlignment.MiddleCenter);
+							g.eDrawTextEx(_emptyImagesText, fnt, Color.Gray, _rcPageOnScreenPx, ContentAlignment.MiddleCenter);
 						}
 					}
 					else
@@ -346,13 +348,13 @@ namespace WS
 
 						rcfCropCm = IsInMouseCropMode
 							? NormalizedMaouseCropRectCm!.Value
-							: _paperCropCm!.Value.e_Normalize();
+							: _paperCropCm!.Value.eNormalize();
 
-						rcfCropCm = rcfCropCm.e_EnsureInRect(PaperSizeCm.e_ToRectangleF());
+						rcfCropCm = rcfCropCm.eEnsureInRect(PaperSizeCm.eToRectangleF());
 
 
 						Rectangle rcCropPx = PaperToScreen(rcfCropCm);
-						rcCropPx = rcCropPx.e_EnsureInRect(_rcPageOnScreenPx);
+						rcCropPx = rcCropPx.eEnsureInRect(_rcPageOnScreenPx);
 
 						// Shadowing White page except Clip Rect
 						using Region rgnPageWitoutCrop = new(_rcPageOnScreenPx);
@@ -391,13 +393,13 @@ namespace WS
 										const int TIP_FRAME_SIZE = 2;
 										Point tipOffset = new(4, 4);
 
-										Rectangle tr = g.MeasureString(txt, Font).e_ToRectangleF().e_ToRectangle();
+										Rectangle tr = g.MeasureString(txt, Font).eToRectangleF().eToRectangle();
 										tr.Inflate(TIP_FRAME_SIZE, TIP_FRAME_SIZE);
 
-										tr = tr.e_AlignTo(rc, align, tipOffset);
+										tr = tr.eAlignTo(rc, align, tipOffset);
 										g.FillRectangle(SystemBrushes.Info, tr);
 										g.DrawRectangle(Pens.DarkGray, tr);
-										g.e_DrawTextEx(txt, Font, Color.DarkGray, tr, ContentAlignment.MiddleCenter);
+										g.eDrawTextEx(txt, Font, Color.DarkGray, tr, ContentAlignment.MiddleCenter);
 									}
 
 

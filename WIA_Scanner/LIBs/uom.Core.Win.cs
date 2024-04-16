@@ -1,5 +1,7 @@
 ﻿#nullable enable
 
+global using static uom.Extensions.Extensions_DebugAndErrors;
+
 global using System.Windows.Forms;
 global using System.Drawing;
 global using System.Drawing.Drawing2D;
@@ -9,11 +11,26 @@ global using Microsoft.Win32.SafeHandles;
 
 using System.IO.IsolatedStorage;
 using System.Security.Permissions;
+using System.Runtime.Remoting;
 
 
-using static uom.MessageBoxWithCheckbox.MessageBox;
 using SaveFileDialog = System.Windows.Forms.SaveFileDialog;
 using OpenFileDialog = System.Windows.Forms.OpenFileDialog;
+//using MethodInvoker = System.Windows.Forms.MethodInvoker;
+
+using uom.ComboboxItems;
+using uom.AutoDisposable;
+using System.Linq.Expressions;
+using System.Net.NetworkInformation;
+using SystemColors = System.Drawing.SystemColors;
+using Size = System.Drawing.Size;
+using Point = System.Drawing.Point;
+using Application = System.Windows.Forms.Application;
+using MessageBox = System.Windows.Forms.MessageBox;
+using HorizontalAlignment = System.Windows.Forms.HorizontalAlignment;
+
+//using Windows.ApplicationModel.Activation;
+
 
 
 #if NET5_0_OR_GREATER || NET6_0_OR_GREATER || NETCOREAPP3_0_OR_GREATER
@@ -21,13 +38,18 @@ using OpenFileDialog = System.Windows.Forms.OpenFileDialog;
 #else
 //return 0L;
 #endif
+
+
+#pragma warning disable IDE1006 // Naming Styles
+#pragma warning disable CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
+
+
 /// <summary>Commnon Tools For Net Apps (WINDOWN PLATFORM)
 /// (C)UOM 2000 - 2022 </ summary >
 namespace uom
 {
 
 	/// <summary>Constants</summary>
-#pragma warning disable CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 	internal static partial class constants
 	{
 
@@ -35,7 +57,6 @@ namespace uom
 		internal static readonly Icon ICON_SYSTEM_SHIELD = SystemIcons.Shield;
 		//internal static readonly   Icon ICON_SYSTEM_SHIELD_SMALL = ICON_SYSTEM_SHIELD.Create_Small;
 	}
-#pragma warning restore CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 
 
 	internal static partial class AppInfo
@@ -45,11 +66,7 @@ namespace uom
 			=> (Application.ProductName + " " + Application.ProductVersion);
 
 
-
-
-
-
-		/// <summary>в режиме дизайнера WinForms/WPF?</summary>
+		/// <summary>WinForms + WPF</summary>
 		public static bool isInDesignerMode(Control? ctl = null)
 		{
 			if (IsInDesignerMode_WPF) return true;
@@ -62,30 +79,42 @@ namespace uom
 		}
 
 
-		/// <summary>Возвращает родительскую папку C:\Users\UUU\AppData\Roaming\UOM\APP (Без номера версии)</summary>
-		public static DirectoryInfo UserAppDataPath_Roaming(bool createIfNotExist = true)
+		/// <summary>Gets dir like: 'C:\Users\UUU\AppData\Roaming_or_Local\company\product' (no version number included)'</summary>
+		public static DirectoryInfo UserAppDataPath(bool roaming, string company, string product, string? assemblymName)
+		{
+			if (string.IsNullOrWhiteSpace(company)) throw new ArgumentNullException("Application.CompanyName");
+			if (string.IsNullOrWhiteSpace(product)) throw new ArgumentNullException("Application.ProductName");
+
+			string rootPath = roaming
+				? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
+				: Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+			string fullPath = Path.Combine(rootPath, company, product);
+
+			if (!string.IsNullOrWhiteSpace(assemblymName))
+			{
+				fullPath = Path.Combine(fullPath, assemblymName);
+			}
+
+			DirectoryInfo di = new(fullPath);
+			return di;
+		}
+
+		/// <inheritdoc cref="UserAppDataPath" />
+		public static DirectoryInfo UserAppDataPath(bool roaming, bool createIfNotExist = true)
 		{
 			if (string.IsNullOrWhiteSpace(Application.CompanyName)) throw new ArgumentNullException("Application.CompanyName");
 			if (string.IsNullOrWhiteSpace(Application.ProductName)) throw new ArgumentNullException("Application.ProductName");
 
-			var sUserAppDataRoaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-			DirectoryInfo di = new(Path.Combine(sUserAppDataRoaming, Application.CompanyName, Application.ProductName));
-			if (createIfNotExist) di.e_CreateIfNotExist();
+			string? asmName = null;
+#if NET
+			asmName = Assembly.GetExecutingAssembly().GetName().Name;
+			if (string.IsNullOrWhiteSpace(asmName)) throw new ArgumentNullException("Assembly.Name");
+#endif
+			DirectoryInfo di = UserAppDataPath(roaming, Application.CompanyName, Application.ProductName, asmName);
+			if (createIfNotExist) di.eCreateIfNotExist();
 			return di;
 		}
-
-		/// <summary>Возвращает родительскую папку C:\Users\UUU\AppData\Local\UOM\APP (Без номера версии)</summary>
-		public static DirectoryInfo UserAppDataPath_Local(bool createIfNotExist = true)
-		{
-			if (string.IsNullOrWhiteSpace(Application.CompanyName)) throw new ArgumentNullException("Application.CompanyName");
-			if (string.IsNullOrWhiteSpace(Application.ProductName)) throw new ArgumentNullException("Application.ProductName");
-
-			var sUserAppDataLocal = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-			DirectoryInfo di = new(Path.Combine(sUserAppDataLocal, Application.CompanyName, Application.ProductName));
-			if (createIfNotExist) di.e_CreateIfNotExist();
-			return di;
-		}
-
 
 
 		internal static string ConsoleAppHeader()
@@ -102,54 +131,47 @@ namespace uom
 
 
 
-
-
-
-
-
 		#region Helper Functions for Admin Privileges and Elevation Status
 
-		/// <summary>The function gets the elevation information of the current process. 
-		/// It dictates whether the process is elevated or not. 
-		/// Token elevation is only available on Windows Vista and newer operating systems, thus IsProcessElevated throws a C++ exception if it is called on systems prior to Windows Vista. 
-		/// It is not appropriate to use this function to determine whether a process is run as administartor.
+		/// <summary>The function gets the elevation information of the current process. It dictates whether the process is elevated or not.<br/>
+		/// Token elevation is only available on Windows Vista and newer, thus IsProcessElevated throws a C++ exception if it is called on systems prior to Windows Vista.<br/>
+		/// <c>It is not appropriate to use this function to determine whether a process is run as administartor.</c>
 		/// </summary>
-		/// <returns>Returns True if the process is elevated. Returns False if it is not.</returns>
-		/// <remarks> TOKEN_INFORMATION_CLASS provides TokenElevationType to check the elevation 
-		/// type (TokenElevationTypeDefault / TokenElevationTypeLimited / TokenElevationTypeFull) of the process. 
-		/// It is different from TokenElevation in that, when UAC is turned off, elevation type always returns 
-		/// TokenElevationTypeDefault even though the process is elevated (Integrity 
-		/// Level == High). In other words, it is not safe to say if the process is 
-		/// elevated based on elevation type. Instead, we should use TokenElevation.
+		/// <returns>True if the process is elevated.<br/>False if it is not.</returns>
+		/// <remarks> TOKEN_INFORMATION_CLASS provides TokenElevationType to check the elevation type (TokenElevationTypeDefault / TokenElevationTypeLimited / TokenElevationTypeFull) of the process.<br/>
+		/// It is different from TokenElevation in that, when UAC is turned off, elevation type always returns TokenElevationTypeDefault even though the process is elevated (Integrity Level == High).<br/>
+		/// In other words, it is not safe to say if the process is elevated based on elevation type. Instead, we should use TokenElevation.
 		/// </remarks>
-		internal static WinAPI.Security.TOKEN_ELEVATION_TYPE GetProcessElevation()
+		internal static WinAPI.security.TOKEN_ELEVATION_TYPE GetProcessElevation()
 		{
 			uom.OS.CheckVistaOrLater();
-			using var hToken = WinAPI.Security.OpenCurrentProcessToken(TokenAccessLevels.Query);
-			return WinAPI.Security.GetTokenInformation_Elevation(hToken);
+			using var hToken = WinAPI.security.OpenCurrentProcessToken(TokenAccessLevels.Query);
+			return WinAPI.security.GetTokenInformation_Elevation(hToken);
 		}
 
 
+		/// <inheritdoc cref="GetProcessElevation" />
 		internal static bool IsProcessElevated()
-			=> GetProcessElevation() == WinAPI.Security.TOKEN_ELEVATION_TYPE.TokenElevationTypeFull;
+			=> GetProcessElevation() == WinAPI.security.TOKEN_ELEVATION_TYPE.TokenElevationTypeFull;
 
 
+		/// <inheritdoc cref="GetProcessElevation" />
 		internal static bool AssertProcessElevated()
-				=> IsProcessElevated()
+			=> IsProcessElevated()
 			? true
-			: throw new Win32Exception((int)uom.WinAPI.Errors.Win32Errors.ERROR_ELEVATION_REQUIRED);
+			: throw new Win32Exception((int)uom.WinAPI.errors.Win32Errors.ERROR_ELEVATION_REQUIRED);
 
 
 
-		/// <summary>The function gets the integrity level of the current process. Integrity level is only available on Windows Vista and newer operating systems, thus 
-		/// GetProcessIntegrityLevel throws a C++ exception if it is called on systems prior to Windows Vista.</summary>
+		/// <summary>The function gets the integrity level of the current process.<br/>
+		/// Integrity level is only available on Windows Vista and newer, thus GetProcessIntegrityLevel throws a C++ exception if it is called on systems prior to Windows Vista.</summary>
 		/// <exception cref="System.ComponentModel.Win32Exception">When any native Windows API call fails, the function throws a Win32Exception with the last error code.</exception>
-		internal static WinAPI.Security.IntegrityLevels GetProcessIntegrityLevel()
+		internal static WinAPI.security.IntegrityLevels GetProcessIntegrityLevel()
 		{
 			OS.CheckVistaOrLater();
 
-			WinAPI.Security.IntegrityLevels IL;//= WinAPI.Security.IntegrityLevels.ERROR;
-			using var hToken = WinAPI.Security.OpenCurrentProcessToken(TokenAccessLevels.Query); // Open the access token of the current process with TOKEN_QUERY.
+			WinAPI.security.IntegrityLevels IL;//= WinAPI.security.IntegrityLevels.ERROR;
+			using var hToken = WinAPI.security.OpenCurrentProcessToken(TokenAccessLevels.Query); // Open the access token of the current process with TOKEN_QUERY.
 
 			// Then we must query the size of the integrity level information 
 			// associated with the token. Note that we expect GetTokenInformation to 
@@ -158,30 +180,30 @@ namespace uom
 			// the group information.
 
 			int cbTokenIL = 0;
-			WinAPI.Security.GetTokenInformation(hToken, WinAPI.Security.TOKEN_INFORMATION_CLASS.TokenIntegrityLevel, IntPtr.Zero, 0, ref cbTokenIL)
-				.e_ThrowLastWin32Exception_AssertFalse(WinAPI.Errors.Win32Errors.ERROR_INSUFFICIENT_BUFFER);
+			WinAPI.security.GetTokenInformation(hToken, WinAPI.security.TOKEN_INFORMATION_CLASS.TokenIntegrityLevel, IntPtr.Zero, 0, ref cbTokenIL)
+				.eThrowLastWin32Exception_AssertFalse(WinAPI.errors.Win32Errors.ERROR_INSUFFICIENT_BUFFER);
 
 
 			// Now we allocate a buffer for the integrity level information.
-			using var rTokenIL = new WinAPI.Memory.WinApiMemory(cbTokenIL);
+			using var rTokenIL = new WinAPI.memory.WinApiMemory(cbTokenIL);
 			// Now we ask for the integrity level information again. This may fail if an administrator has added this account to an additional group between our first call to GetTokenInformation and this one.
-			WinAPI.Security.GetTokenInformation(hToken,
-				WinAPI.Security.TOKEN_INFORMATION_CLASS.TokenIntegrityLevel,
+			WinAPI.security.GetTokenInformation(hToken,
+				WinAPI.security.TOKEN_INFORMATION_CLASS.TokenIntegrityLevel,
 				(IntPtr)rTokenIL,
 				cbTokenIL,
-				ref cbTokenIL).e_ThrowLastWin32Exception_AssertFalse();
+				ref cbTokenIL).eThrowLastWin32Exception_AssertFalse();
 
-			var tokenIL = rTokenIL.DangerousGetHandle().e_ToStructure<WinAPI.Security.TOKEN_MANDATORY_LABEL>();
+			var tokenIL = rTokenIL.DangerousGetHandle().eToStructure<WinAPI.security.TOKEN_MANDATORY_LABEL>();
 
 			// Integrity Level SIDs are in the form of S-1-16-0xXXXX. (e.g. S-1-16-0x1000 stands for low integrity level SID). There is one and only one subauthority.
-			var pIL = WinAPI.Security.GetSidSubAuthority(tokenIL.Label.Sid, 0);
+			var pIL = WinAPI.security.GetSidSubAuthority(tokenIL.Label.Sid, 0);
 			int iIL = Marshal.ReadInt32(pIL);
-			IL = (WinAPI.Security.IntegrityLevels)iIL;
+			IL = (WinAPI.security.IntegrityLevels)iIL;
 			return IL;
 		}
 
-		#endregion
 
+		#endregion
 
 	}
 
@@ -192,104 +214,226 @@ namespace uom
 		internal static partial class AppSettings
 		{
 
-			internal static RegistryKey OpenRegKey() => Application.UserAppDataRegistry;
+			[DebuggerNonUserCode]
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private static string RegBuildProductPath(Version? ver = null)
+			{
+				FileVersionInfo fvi = uom.AppInfo.AssemblyFileVersionInfo;
+				if (fvi.CompanyName.eIsNullOrWhiteSpace()) throw new ArgumentNullException("AssemblyFileVersionInfo.CompanyName");
+				if (fvi.ProductName.eIsNullOrWhiteSpace()) throw new ArgumentNullException("AssemblyFileVersionInfo.ProductName");
 
-			internal static void Save<T>(string name, T? val) where T : unmanaged
-			{
-				RegistryKey keySetting = OpenRegKey();
-				keySetting!.e_SetValue<T>(name, val);
-				keySetting!.Flush();
-			}
-			internal static void Save(string name, string? val)
-			{
-				RegistryKey keySetting = OpenRegKey();
-				keySetting!.e_SetValueString(name, val);
-				keySetting!.Flush();
-			}
-			internal static void Save(string name, string[]? val)
-			{
-				RegistryKey keySetting = OpenRegKey();
-				keySetting!.e_SetValueStrings(name, val);
-				keySetting!.Flush();
+				string productPath = @$"Software\{fvi.CompanyName}\{fvi.ProductName}";
+
+				if (ver != null) productPath += @$"\{ver.Major}";
+				return productPath;
 			}
 
-			internal static void Delete(string name)
+
+			[DebuggerNonUserCode]
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private static RegistryKey? OpenProductKey(string subKey = "", Version? ver = null, bool writable = true)
 			{
-				RegistryKey keySetting = OpenRegKey();
+				if (ver == null)
+				{
+					FileVersionInfo fvi = uom.AppInfo.AssemblyFileVersionInfo;
+					if (!Version.TryParse(fvi.FileVersion, out ver)) throw new ArgumentException($"AssemblyFileVersionInfo.FileVersion = '{fvi.FileVersion}' is invalid!");
+					//return Application.UserAppDataRegistry;
+				}
+				string path = RegBuildProductPath(ver);
+
+				if (subKey.eIsNotNullOrWhiteSpace()) path += '\\' + subKey;
+				var keyProduct = global::Microsoft.Win32.Registry.CurrentUser.OpenSubKey(path, writable);
+
+				if (keyProduct == null && writable)
+				{
+					keyProduct = global::Microsoft.Win32.Registry.CurrentUser.CreateSubKey(path, true);
+					if (keyProduct == null) throw new Exception($"Failed to create key '{path}'!");
+				}
+
+				return keyProduct!;
+			}
+
+			[DebuggerNonUserCode]
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private static RegistryKey? OpenProductRootKey(bool writable = true)
+			{
+				string path = RegBuildProductPath(null);
+				var keyProduct = global::Microsoft.Win32.Registry.CurrentUser.OpenSubKey(path, writable);
+				return keyProduct!;
+			}
+
+
+			#region Save / Delete
+
+			/// <summary>if value == null, reg value will be deleted!</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void Save<T>(string name, T? val, string subKey = "") where T : unmanaged
+			{
+				using RegistryKey keySetting = OpenProductKey(subKey, writable: true)!;
+				keySetting.eSetValue<T>(name, val);
+				keySetting.Flush();
+			}
+
+			/// <summary>if value == null, reg value will be deleted!</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void Save(string name, string? val, string subKey = "")
+			{
+				using RegistryKey keySetting = OpenProductKey(subKey, writable: true)!;
+				keySetting.eSetValueString(name, val);
+				keySetting.Flush();
+			}
+
+			/// <inheritdoc cref="Save" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void SaveMultiString(string name, string? val, string subKey = "")
+			{
+				var lines = val.eSplitToLines(true);
+				Save(name, lines.ToArray(), subKey);
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void Save(string name, string[]? val, string subKey = "")
+			{
+				using RegistryKey keySetting = OpenProductKey(subKey, writable: true)!;
+				keySetting.eSetValueStrings(name, val);
+				keySetting.Flush();
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void Save(string name, DateTime? val, string subKey = "")
+				=> Save<DateTime>(name, val, subKey);
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void Delete(string name, string subKey = "")
+			{
+				using RegistryKey? keySetting = OpenProductKey(subKey, writable: true);
 				keySetting?.DeleteValue(name);
 				keySetting?.Flush();
 			}
 
-			internal static T? Get_T<T>(
-				string name,
-				T? defaultValue = default,
-				bool searchAllVersions = true,
-				Version? searchVersionBelowOrEqual = null)
+
+
+
+
+			#endregion
+
+
+			[DebuggerNonUserCode]
+			internal static T? Get_T<T>(string name, T? defaultValue = default, string subKey = "", bool searchPreviousVersions = true)
 			{
-
-				RegistryKey keyVersionedSettings = OpenRegKey();
-				var versionedValue = keyVersionedSettings.e_GetValueT<T>(name, defaultValue);
-				if (versionedValue.ValueFound) return versionedValue.Value;
-
-				if (searchAllVersions)
+				using (RegistryKey? keyCurrentVersion = OpenProductKey(subKey, writable: false))
 				{
-					//Search other versions...
-					_ = Application.ProductVersion ?? throw new Exception("Application.ProductVersion = null!");
-					searchVersionBelowOrEqual ??= new Version(Application.ProductVersion);
-
-					string fullSettingsKeyPathWithVersion = keyVersionedSettings.ToString();
-					string[] pathParts = fullSettingsKeyPathWithVersion.Split('\\');
-					pathParts = pathParts.e_RemoveLast(); //  .tak [0..^1];
-					string fullSettingsKeyPathNoVersion = string.Join(@"\", pathParts);
-					RegistryKey keyAppSettingsNoVersion = fullSettingsKeyPathNoVersion.e_RegOpenKeyByPath(false)!;
-					string[] versionKeyNames = keyAppSettingsNoVersion.GetSubKeyNames();
-					if (!versionKeyNames.Any()) return defaultValue;
-
-					var allVersionsKeys = versionKeyNames
-						.Select(versionKeyName =>
-						{
-							Version? vi = null;
-							try
-							{
-								vi = new(versionKeyName);
-							}
-							catch { }
-							return (KeyName: versionKeyName, KeyVersion: vi);
-						})
-						.Where(v => ((v.KeyVersion != null) && (v.KeyVersion <= searchVersionBelowOrEqual!)))
-						.Select(v =>
-						{
-							Boolean ValueFound = false;
-							T? settingValueInKey = default;
-							try
-							{
-								RegistryKey? keyVersioned = keyAppSettingsNoVersion.OpenSubKey(v.KeyName);
-								if (keyVersioned != null)
-								{
-									var valueInReg = keyVersioned.e_GetValueT<T>(name, defaultValue);
-									ValueFound = valueInReg.ValueFound;
-									if (ValueFound) settingValueInKey = valueInReg.Value;
-								}
-							}
-							catch { }
-							return (v.KeyName, v.KeyVersion, ValueFound, Value: settingValueInKey);
-						})
-						.Where(v => v.ValueFound)
-						.OrderBy(v => v.KeyVersion)
-						.ToArray();
-
-					if (allVersionsKeys.Any())
+					if (keyCurrentVersion != null)
 					{
-						var (KeyName, KeyVersion, ValueFound, Value) = allVersionsKeys.Last();
-						return Value;
+						var (valueFound, _, value) = keyCurrentVersion.eGetValueT<T>(name, defaultValue);
+						if (valueFound) return value;
 					}
+				}
+
+				if (!searchPreviousVersions) return defaultValue;
+
+				//Searching Previous Versions
+				FileVersionInfo fvi = uom.AppInfo.AssemblyFileVersionInfo;
+
+				int verCurrent = fvi.FileMajorPart;
+
+				using RegistryKey? keyProductRoot = OpenProductRootKey(false);
+				if (keyProductRoot == null) return defaultValue;
+
+				int[] foundVersionNumbers = [..
+					keyProductRoot
+					.GetSubKeyNames()
+					.Select(s =>
+					{
+						Int32 ver = -1;
+						if (UInt32.TryParse(s, out var uintVal)) ver = (Int32)uintVal;
+						return (ver);
+					}
+					)
+					.Where(verFound => verFound > 0)
+					.OrderByDescending(k => k)
+					];
+
+				foundVersionNumbers = [..
+					foundVersionNumbers
+					.Where(verFound => verFound < verCurrent)
+					.OrderByDescending(k => k)
+					];
+
+				foreach (var major in foundVersionNumbers)
+				{
+					Version v = new Version(major, 0, 0, 0);
+					using (RegistryKey? keyVersioned = OpenProductKey(subKey, v, false))
+					{
+						if (keyVersioned != null)
+						{
+							var (valueFound, _, value) = keyVersioned.eGetValueT<T>(name, defaultValue);
+							if (valueFound) return value;
+						}
+					}
+				}
+
+				return defaultValue;
+			}
+
+
+
+			internal static string Get_string(string name, string defaultValue, string subKey = "", bool searchPreviousVersions = true)
+				=> Get_T<string>(name, defaultValue, subKey, searchPreviousVersions)!;
+
+			internal static string[] Get_strings(string name, string[] defaultValue, string subKey = "", bool searchPreviousVersions = true)
+				=> Get_T<string[]>(name, defaultValue, subKey, searchPreviousVersions)!;
+
+			internal static string Get_stringsAsText(string name, string defaultValue, string subKey = "", bool searchPreviousVersions = true)
+			{
+				var lines = Get_strings(name, [], subKey, searchPreviousVersions);
+				if (lines != null && lines.Any())
+				{
+					var s = lines.eJoin(Environment.NewLine)!;
+					return s;
 				}
 				return defaultValue;
 			}
+
+			internal static bool Get_bool(string name, bool defaultValue, string subKey = "", bool searchPreviousVersions = true)
+				=> Get_T<bool>(name, defaultValue, subKey, searchPreviousVersions)!;
+
+			internal static Int32 Get_Int32(string name, Int32 defaultValue, string subKey = "", bool searchPreviousVersions = true)
+				=> Get_T<Int32>(name, defaultValue, subKey, searchPreviousVersions);
+
+			internal static Int64 Get_Int64(string name, Int64 defaultValue, string subKey = "", bool searchPreviousVersions = true)
+				=> Get_T<Int64>(name, defaultValue, subKey, searchPreviousVersions);
+
+
+			internal static DateTime Get_DateTime(string name, DateTime defaultValue, string subKey = "", bool searchPreviousVersions = true)
+			{
+				long dtBinary = Get_Int64(name, 0L, subKey, searchPreviousVersions);
+				return (dtBinary == 0)
+					? defaultValue
+					: DateTime.FromBinary(dtBinary);
+			}
+
+
 		}
 
 
-		/// <summary> Ищет во всей сборке классы, унаследованные от заданного </summary>
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		internal static FileInfo GetFileIn_AppStartupDir(string FileName)
+			=> new(Path.Combine(System.Windows.Forms.Application.StartupPath, FileName));
+
+
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		internal static FileInfo GetFileIn_AppData(string FileName, bool roaming)
+			=> new(Path.Combine(AppInfo.UserAppDataPath(roaming).FullName, FileName));
+
+
+
 		internal static TypeInfo[] GetAllAssemblyClassesDerivedFrom(Type T)
 			=> Assembly
 			.GetExecutingAssembly()
@@ -309,14 +453,14 @@ namespace uom
 			var T = M!.DeclaringType!;
 			string NS = T.Namespace!;
 			var aNS = NS.Split('.').Reverse().Take(Count).Reverse();
-			return aNS.e_Join(".", NS)!;
+			return aNS.eJoin(".", NS)!;
 		}
 
 		internal static IntPtr GetCurrentModuleHandle()
 		{
 			using Process cp = Process.GetCurrentProcess();
 			using ProcessModule cm = cp.MainModule!;
-			return uom.WinAPI.SafeHandles.Win32LibHandle.GetModuleHandle(cm.ModuleName!);
+			return uom.WinAPI.safeHandles.Win32LibHandle.GetModuleHandle(cm.ModuleName!);
 		}
 
 
@@ -327,7 +471,6 @@ namespace uom
 		}
 
 
-		/// <summary>Есть ли другие экземпляры этого процесса?</summary>
 		public static bool HasOtherInstancesOfThisProcess()
 		{
 			using Process cp = Process.GetCurrentProcess();
@@ -336,7 +479,7 @@ namespace uom
 		}
 
 		#region StartProcess...
-		internal partial class ElevationCanceledByUser : Win32Exception { public ElevationCanceledByUser() : base((int)WinAPI.Errors.Win32Errors.ERROR_CANCELLED) { } }
+		internal partial class ElevationCanceledByUser : Win32Exception { public ElevationCanceledByUser() : base((int)WinAPI.errors.Win32Errors.ERROR_CANCELLED) { } }
 
 		public enum ConsoleAppErrorMode : int
 		{
@@ -353,7 +496,7 @@ namespace uom
 			Encoding? StandardOutputEncoding = null,
 			ConsoleAppErrorMode cem = ConsoleAppErrorMode.ErrorMustThrowException)
 		{
-			Debug.WriteLine("*** e_run '" + sExe + "' with args: '" + sArguments + "'");
+			Debug.WriteLine("*** erun '" + sExe + "' with args: '" + sArguments + "'");
 			FileInfo fiExe = new(sExe);
 			var PSI = new ProcessStartInfo
 			{
@@ -365,20 +508,17 @@ namespace uom
 				RedirectStandardError = true
 			};
 
-			// .LoadUserProfile = True
-			// .WindowStyle = ProcessWindowStyle.Hidden
-			// .CreateNoWindow = True
-
 			if (StandardOutputEncoding != null) PSI.StandardOutputEncoding = StandardOutputEncoding;
 			int iWaitMilliseconds = WAIT_TIMEOUT_SEC * 1000;
 			using var prcExe = Process.Start(PSI);
 			_ = prcExe ?? throw new Exception($"Process.Start({fiExe}) Failed!");
 
 			string sError = prcExe.StandardError.ReadToEnd();
-			if (sError.e_IsNOTNullOrWhiteSpace() && cem == ConsoleAppErrorMode.ErrorMustThrowException)
+			if (sError.eIsNotNullOrWhiteSpace() && cem == ConsoleAppErrorMode.ErrorMustThrowException)
 				throw new Exception(sError);
+
 			string sOutput = prcExe.StandardOutput.ReadToEnd();
-			if (sOutput.e_IsNullOrWhiteSpace())
+			if (sOutput.eIsNullOrWhiteSpace())
 				sOutput = "";
 			else
 			{
@@ -404,7 +544,7 @@ namespace uom
 			return sOutput;
 		}
 
-		/// <summary>Restart the current process with administrator credentials</summary>
+		/// <summary>Start copy of current process</summary>
 		internal static Process? StartMyProcess(
 			string? Arguments = null,
 			bool elevated = false,
@@ -458,9 +598,9 @@ namespace uom
 			bool ThrowExceptionOnError = false,
 			bool WaitExit = false)
 			=> StartProcess(
-				OS.GetWinSyst32Path(FileName),
+				OS.GetWinSys32Path(FileName),
 				Arguments,
-				OS.GetWinSys32Folder(),
+				OS.GetWinSys32Path(),
 				elevated,
 				CloseThisApp,
 				ThrowExceptionOnError,
@@ -495,10 +635,10 @@ namespace uom
 		{
 			try
 			{
-				file = file.e_EncloseC();
+				file = file.eEncloseC();
 				var StartInfo = new ProcessStartInfo() { UseShellExecute = true, FileName = file };
-				if (arguments.e_IsNOTNullOrWhiteSpace()) StartInfo.Arguments = arguments;
-				if (workingDirectory.e_IsNOTNullOrWhiteSpace()) StartInfo.WorkingDirectory = workingDirectory;
+				if (arguments.eIsNotNullOrWhiteSpace()) StartInfo.Arguments = arguments;
+				if (workingDirectory.eIsNotNullOrWhiteSpace()) StartInfo.WorkingDirectory = workingDirectory;
 				if (elevated && !uom.AppInfo.IsProcessElevated())
 				{
 					//needElevation = !uom.AppInfo.IsProcessElevated();
@@ -520,7 +660,7 @@ namespace uom
 			}
 			catch (Win32Exception wex)
 			{
-				if (wex.e_ToWin32Error() == WinAPI.Errors.Win32Errors.ERROR_CANCELLED)
+				if (wex.eToWin32Error() == WinAPI.errors.Win32Errors.ERROR_CANCELLED)
 					wex = new ElevationCanceledByUser();// Пользователь нажал 'нет' при запросе на повышение прав
 
 				if (throwExceptionOnError) throw wex;
@@ -541,17 +681,19 @@ namespace uom
 			OpenPath,
 			SelectItem
 		}
+
 		internal const WindowsExplorerPathModes C_DEFAULT_EXPLORER_MODE = WindowsExplorerPathModes.SelectItem;
+
 		internal static void StartWinSysTool_Explorer(
 			string? pathToShow = null,
 			WindowsExplorerPathModes pathMode = C_DEFAULT_EXPLORER_MODE)
 		{
 			string? explorerArgs = null;
 
-			FileSystemInfo? fsi = pathToShow?.e_FindFirstExistingFileSystemInfo();
+			FileSystemInfo? fsi = pathToShow?.eFindFirstExistingFileSystemInfo();
 			if (fsi != null)
 			{
-				pathToShow = fsi.FullName.e_Enclose();
+				pathToShow = fsi.FullName.eEnclose();
 				explorerArgs = pathMode switch
 				{
 					WindowsExplorerPathModes.OpenPath => pathToShow,
@@ -630,7 +772,7 @@ namespace uom
 
 		#endregion
 
-		/// <summary>"sfc /scannow Проверка целостности системных файлов Windows"</summary>
+		/// <summary>"sfc /scannow"</summary>
 		internal static void StartWinSysTool_CMD_SFC()
 			=> StartCMDProcess(
 				@"sfc /scannow",
@@ -665,85 +807,10 @@ namespace uom
 		internal static void StartWinSysTool_MMC_devmgmt()
 			=> StartMMCProcess("devmgmt.msc", true, ThrowExceptionOnError: true);
 
-		#endregion
+		internal static void StartWinSysTool_MMC_diskmgmt()
+			=> StartMMCProcess("diskmgmt.msc", true, ThrowExceptionOnError: true);
 
 		#endregion
-
-		#region Helper Functions for Admin Privileges and Elevation Status
-
-
-		/// <summary>The function gets the elevation information of the current process. 
-		/// It dictates whether the process is elevated or not. 
-		/// Token elevation is only available on Windows Vista and newer operating systems, thus IsProcessElevated throws a C++ exception if it is called on systems prior to Windows Vista. 
-		/// It is not appropriate to use this function to determine whether a process is run as administartor.
-		/// </summary>
-		/// <returns>Returns True if the process is elevated. Returns False if it is not.</returns>
-		/// <remarks> TOKEN_INFORMATION_CLASS provides TokenElevationType to check the elevation 
-		/// type (TokenElevationTypeDefault / TokenElevationTypeLimited / TokenElevationTypeFull) of the process. 
-		/// It is different from TokenElevation in that, when UAC is turned off, elevation type always returns 
-		/// TokenElevationTypeDefault even though the process is elevated (Integrity 
-		/// Level == High). In other words, it is not safe to say if the process is 
-		/// elevated based on elevation type. Instead, we should use TokenElevation.
-		/// </remarks>
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static WinAPI.Security.TOKEN_ELEVATION_TYPE GetProcessElevation()
-		{
-			uom.OS.CheckVistaOrLater();
-			using SafeFileHandle hToken = WinAPI.Security.OpenCurrentProcessToken(TokenAccessLevels.Query);
-			return WinAPI.Security.GetTokenInformation_Elevation(hToken);
-		}
-
-
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static bool IsProcessElevated()
-			=> GetProcessElevation() == uom.WinAPI.Security.TOKEN_ELEVATION_TYPE.TokenElevationTypeFull;
-
-
-		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static bool AssertProcessElevated()
-			=> IsProcessElevated()
-			? true
-			: throw new Win32Exception((int)uom.WinAPI.Errors.Win32Errors.ERROR_ELEVATION_REQUIRED);
-
-
-		/// <summary>The function gets the integrity level of the current process. Integrity level is only available on Windows Vista and newer operating systems, thus 
-		/// GetProcessIntegrityLevel throws a C++ exception if it is called on systems prior to Windows Vista.</summary>
-		/// <exception cref="System.ComponentModel.Win32Exception">When any native Windows API call fails, the function throws a Win32Exception with the last error code.</exception>
-		internal static WinAPI.Security.IntegrityLevels GetProcessIntegrityLevel()
-		{
-			OS.CheckVistaOrLater();
-
-			WinAPI.Security.IntegrityLevels IL;//= WinAPI.Security.IntegrityLevels.ERROR;
-			using var hToken = WinAPI.Security.OpenCurrentProcessToken(TokenAccessLevels.Query); // Open the access token of the current process with TOKEN_QUERY.
-
-			// Then we must query the size of the integrity level information 
-			// associated with the token. Note that we expect GetTokenInformation to 
-			// return False with the ERROR_INSUFFICIENT_BUFFER error code because we 
-			// have given it a null buffer. On exit cbTokenIL will tell the size of 
-			// the group information.
-
-			int cbTokenIL = 0;
-			WinAPI.Security.GetTokenInformation(hToken, WinAPI.Security.TOKEN_INFORMATION_CLASS.TokenIntegrityLevel, IntPtr.Zero, 0, ref cbTokenIL)
-				.e_ThrowLastWin32Exception_AssertFalse(WinAPI.Errors.Win32Errors.ERROR_INSUFFICIENT_BUFFER);
-
-
-			// Now we allocate a buffer for the integrity level information.
-			using var rTokenIL = new WinAPI.Memory.WinApiMemory(cbTokenIL);
-			// Now we ask for the integrity level information again. This may fail if an administrator has added this account to an additional group between our first call to GetTokenInformation and this one.
-			WinAPI.Security.GetTokenInformation(hToken,
-				WinAPI.Security.TOKEN_INFORMATION_CLASS.TokenIntegrityLevel,
-				(IntPtr)rTokenIL,
-				cbTokenIL,
-				ref cbTokenIL).e_ThrowLastWin32Exception_AssertFalse();
-
-			var tokenIL = rTokenIL.DangerousGetHandle().e_ToStructure<WinAPI.Security.TOKEN_MANDATORY_LABEL>();
-
-			// Integrity Level SIDs are in the form of S-1-16-0xXXXX. (e.g. S-1-16-0x1000 stands for low integrity level SID). There is one and only one subauthority.
-			var pIL = WinAPI.Security.GetSidSubAuthority(tokenIL.Label.Sid, 0);
-			int iIL = Marshal.ReadInt32(pIL);
-			IL = (WinAPI.Security.IntegrityLevels)iIL;
-			return IL;
-		}
 
 		#endregion
 
@@ -766,55 +833,37 @@ namespace uom
 			/// <summary>Logical pixels inch in Y</summary>
 			LOGPIXELSY = 90
 		}
-		[DllImport("gdi32.dll", CharSet = CharSet.Auto, SetLastError = true, ExactSpelling = true)]
-		private static extern int GetDeviceCaps(IntPtr hDC, DeviceCap nIndex);
+		[DllImport(WinAPI.core.WINDLL_GDI, CharSet = CharSet.Auto, SetLastError = true, ExactSpelling = true)]
+		private static extern int GetDeviceCaps(
+			[In] IntPtr hDC,
+			[In] DeviceCap nIndex);
 
-		[DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true, ExactSpelling = true)]
-		static extern int GetDpiForWindow(IntPtr hWnd);
 
-		private const int DEFAULT_SCREEN_DPI = 96;
+		internal const int DEFAULT_SCREEN_DPI = 96;
 		/// <summary>Used when system uses High DPI modes</summary>
 		/// <returns>
 		/// 1.25 = 125%
 		/// 1.5 = 150%
 		/// </returns>
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public static float GetScreenScalingFactor()
 		{
 			Graphics g = Graphics.FromHwnd(IntPtr.Zero);
 			IntPtr hdcDesktop = g.GetHdc();
-			//int LogicalScreenHeight = GetDeviceCaps(desktop, DeviceCap.VERTRES);
-			//int PhysicalScreenHeight = GetDeviceCaps(desktop, DeviceCap.DESKTOPVERTRES);
-			//float screenScalingFactor = (float)PhysicalScreenHeight / (float)LogicalScreenHeight;
-			int logpixelsy = GetDeviceCaps(hdcDesktop, DeviceCap.LOGPIXELSY);
-			float dpiScalingFactor = (float)logpixelsy / (float)DEFAULT_SCREEN_DPI;
-			return dpiScalingFactor;
-		}
-
-		/// <summary>
-		/// https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows
-		/// Used when system uses High DPI modes since Windows 8.1
-		/// For this to work correctly on Windows 10 anniversary, 
-		///		you need to add dpiAwareness to app.manifest of your project:
-		/// </summary>
-		/// <returns>
-		/// 1.25 = 125%
-		/// 1.5 = 150%
-		/// </returns>
-		public static float GetHighDPIScaleFactor(IntPtr windowHandle)
-		{
 			try
 			{
-				return GetDpiForWindow(windowHandle) / (float)DEFAULT_SCREEN_DPI;
+				//int LogicalScreenHeight = GetDeviceCaps(desktop, DeviceCap.VERTRES);
+				//int PhysicalScreenHeight = GetDeviceCaps(desktop, DeviceCap.DESKTOPVERTRES);
+				//float screenScalingFactor = (float)PhysicalScreenHeight / (float)LogicalScreenHeight;
+				int logpixelsy = GetDeviceCaps(hdcDesktop, DeviceCap.LOGPIXELSY);
+				float dpiScalingFactor = (float)logpixelsy / (float)DEFAULT_SCREEN_DPI;
+				return dpiScalingFactor;
 			}
-			catch
-			{// Or fallback to GDI solutions above
-				return 1f;
-			}
+			finally { g.ReleaseHdc(hdcDesktop); }
 		}
 
 
-
-
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public static Bitmap[] GetScreenshots()
 			=> System.Windows.Forms.Screen.AllScreens
 			.Select(scr =>
@@ -827,6 +876,7 @@ namespace uom
 				return bmCapt;
 			}).ToArray();
 
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public static System.IO.FileInfo[] GetScreenshotsAsFiles(ImageFormat fmt, string fileExt = "jpg")
 			=> System.Windows.Forms.Screen.AllScreens
 			.Select(scr =>
@@ -852,16 +902,10 @@ namespace uom
 		{
 			get
 			{
-
-
-
-
 #if NET5_0_OR_GREATER || NET6_0_OR_GREATER || NETCOREAPP3_0_OR_GREATER
-				//Use new builtin Net function
-				return (ulong)Environment.TickCount64;//net 5, 6, Core 3.0, Core 3.1
-
+				return (ulong)Environment.TickCount64;//Use new builtin Net function (net 5, 6, Core 3.0, Core 3.1)
 #else
-				return WinAPI.IO.GetTickCount64();//old net versions
+				return WinAPI.io.GetTickCount64();//old net versions
 #endif
 			}
 		}
@@ -893,7 +937,7 @@ namespace uom
 						{
 							const string KEY_RUN_PATH = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
 
-							var fiEXE = System.Windows.Forms.Application.ExecutablePath.e_ToFileInfo();
+							var fiEXE = System.Windows.Forms.Application.ExecutablePath.eToFileInfo();
 							_ = fiEXE ?? throw new Exception("Application.ExecutablePath = NULL!");
 
 							using var keyAutoRun = (forAllUsers ? Registry.LocalMachine : Registry.CurrentUser)
@@ -906,12 +950,12 @@ namespace uom
 								keyAutoRun
 									.GetValueNames()?
 									.Where(s => s.ToLower() == fiEXE.Name.ToLower())?
-									.e_ForEach(foundFile => keyAutoRun.DeleteValue(foundFile));
+									.eForEach(foundFile => keyAutoRun.DeleteValue(foundFile));
 							}
 							else
 							{
 								keyAutoRun
-									.SetValue(fiEXE.Name, fiEXE.FullName.e_Enclose());
+									.SetValue(fiEXE.Name, fiEXE.FullName.eEnclose());
 							}
 
 							keyAutoRun.Flush();
@@ -948,9 +992,9 @@ namespace uom
 				string? cmdLineArgsPrefix = "",
 				string cmdLineArgs = CS_DEFAULT_CMDLINE_ARG)
 			{
-				if (HCCRClass.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(HCCRClass));
-				if (RegistryActionName.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(RegistryActionName));
-				if (ActionDisplayName.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(ActionDisplayName));
+				if (HCCRClass.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(HCCRClass));
+				if (RegistryActionName.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(RegistryActionName));
+				if (ActionDisplayName.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(ActionDisplayName));
 
 				executablePath ??= System.Windows.Forms.Application.ExecutablePath;
 
@@ -981,20 +1025,20 @@ namespace uom
 				string? cmdLineArgsPrefix = "",
 				string cmdLineArgs = CS_DEFAULT_CMDLINE_ARG)
 			{
-				if (HCCRClass.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(HCCRClass));
-				if (RegistryActionName.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(RegistryActionName));
-				if (ActionDisplayName.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(ActionDisplayName));
+				if (HCCRClass.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(HCCRClass));
+				if (RegistryActionName.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(RegistryActionName));
+				if (ActionDisplayName.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(ActionDisplayName));
 
 				executablePath ??= System.Windows.Forms.Application.ExecutablePath;
 
 				string sKey = string.Join(@"\", new[] { HCCRClass, CS_REG_KEY_SHELL, RegistryActionName });
 				using RegistryKey? keyClass = Registry.ClassesRoot.OpenSubKey(sKey, false);
-				string? defVlue = keyClass?.e_GetValue_StringOrEmpty("");
+				string? defVlue = keyClass?.eGetValue_StringOrEmpty("");
 				if (defVlue != ActionDisplayName) return false;
 
 				using RegistryKey? hkCommand = keyClass?.OpenSubKey(CS_REG_KEY_COMMAND, false);
 				string commandString = ContextMenu_CreateRegCommandString(executablePath, cmdLineArgsPrefix, cmdLineArgs);
-				string? regCommandValue = hkCommand?.e_GetValue_StringOrEmpty("");
+				string? regCommandValue = hkCommand?.eGetValue_StringOrEmpty("");
 				if (commandString == regCommandValue) return true;
 				return false;
 			}
@@ -1077,15 +1121,15 @@ namespace uom
 				string cmdLineArgsPrefix = "",
 				string cmdLineArgs = CS_DEFAULT_CMDLINE_ARG)
 			{
-				if (fileExtensionWithDot.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(fileExtensionWithDot));
+				if (fileExtensionWithDot.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(fileExtensionWithDot));
 
 				// Читаем класс файла из HKEY_CLASSES_ROOT\.pdf
-				var fileClass = Extensions_Async_MT.e_tryCatch<string?>(
+				var fileClass = Extensions_DebugAndErrors.etryCatch<string?>(
 					() =>
 					{
 						using var hkeyFileExtension = Registry.ClassesRoot.OpenSubKey(fileExtensionWithDot);
-						return hkeyFileExtension!.e_GetValue_StringOrEmpty("", null);
-					}, (string?)null);
+						return hkeyFileExtension!.eGetValue_StringOrEmpty("", null);
+					}, (string?)null).Result;
 
 				if (Win10OrLater)
 				{
@@ -1094,7 +1138,7 @@ namespace uom
 					fileClass = @"SystemFileAssociations\" + fileExtensionWithDot;
 
 					#region То работает то нет
-					// Dim sW10SystemFileAssociationsClass = e_runOn_TryCatch_Func(Of String)(Function()
+					// Dim sW10SystemFileAssociationsClass = erunOn_TryCatch_Func(Of String)(Function()
 					// Using hkeySystemFileAssociations = Global.Microsoft.WinAPI.Registry.ClassesRoot.OpenSubKey()
 					// Return CStr(hkeyFileExtension.GetValue("", vbNullString, Microsoft.WinAPI.RegistryValueOptions.DoNotExpandEnvironmentNames))
 					// End Using
@@ -1109,7 +1153,7 @@ namespace uom
 					// Dim aOpenProgIDsValues = hkOpenProgIDs.ExtReg_GetAllValues
 
 					// aOpenProgIDsValues = (From T In aOpenProgIDsValues
-					// Where ((T.Kind = RegistryValueKind.String) AndAlso T.ValueName. e_IsNOTNullOrWhiteSpace)).ToArray
+					// Where ((T.Kind = RegistryValueKind.String) AndAlso T.ValueName. eIsNotNullOrWhiteSpace)).ToArray
 
 					// If aOpenProgIDsValues.Any Then
 					// Dim FirstValue = aOpenProgIDsValues.First
@@ -1120,7 +1164,7 @@ namespace uom
 					#endregion
 				}
 
-				if (fileClass.e_IsNullOrWhiteSpace()) fileClass = fileExtensionWithDot; // В разделе не указан Класс файла. Сделаем раздел прямо на самом расширении
+				if (fileClass.eIsNullOrWhiteSpace()) fileClass = fileExtensionWithDot; // В разделе не указан Класс файла. Сделаем раздел прямо на самом расширении
 
 				return ContextMenu_RegisterForClass(
 					fileClass!,
@@ -1135,7 +1179,7 @@ namespace uom
 
 			/// <summary>Unregister this action on every registry class</summary>
 			internal static void ContextMenu_UnRegisterAction(string[]? registryActionNames)
-				=> registryActionNames?.e_ForEach(actionName => ContextMenu_UnRegisterAction(actionName));
+				=> registryActionNames?.eForEach(actionName => ContextMenu_UnRegisterAction(actionName));
 
 			/// <inheritdoc cref="ContextMenu_UnRegisterAction" />
 			internal static int ContextMenu_UnRegisterAction(string RegistryActionName, bool useActionNameAsPrefix = false)
@@ -1174,7 +1218,7 @@ namespace uom
 				string registryActionName,
 				bool useActionNameAsPrefix = false)
 			{
-				if (registryClass.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(registryClass));
+				if (registryClass.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(registryClass));
 
 				string sShellKey = @$"{registryClass}\{CS_REG_KEY_SHELL}";
 
@@ -1237,18 +1281,18 @@ namespace uom
 
 			public static void RegisterSoundSchemeEvent(string EventName, string SoundFile, bool OnlyIfNotExist = true)
 			{
-				string sAppName = System.Windows.Forms.Application.ProductName;
-				var EventKey = Registry.CurrentUser.CreateSubKey(@"AppEvents\Schemes\Apps\" + sAppName);
-				EventKey!.SetValue("", sAppName);
-				var KK = EventKey.OpenSubKey(EventName + @"\.current");
+				string appName = System.Windows.Forms.Application.ProductName!;
+				RegistryKey EventKey = Registry.CurrentUser.CreateSubKey(@"AppEvents\Schemes\Apps\" + appName)!;
+				EventKey.SetValue("", appName);
+				var keyCur = EventKey.OpenSubKey(EventName + @"\.current");
 				bool bNeedCreate = false;
-				if (OnlyIfNotExist) bNeedCreate = (null == KK);
+				if (OnlyIfNotExist) bNeedCreate = (null == keyCur);
 
 				if (bNeedCreate)
 				{
-					KK = EventKey.CreateSubKey(EventName + @"\.current");
-					KK.SetValue("", SoundFile);
-					KK.Flush();
+					keyCur = EventKey.CreateSubKey(EventName + @"\.current");
+					keyCur.SetValue("", SoundFile);
+					keyCur.Flush();
 				}
 			}
 		}
@@ -1275,7 +1319,7 @@ namespace uom
 				return keyFULL?
 					.GetValueNames().Where(
 						sUser =>
-						(keyFULL!.GetValueKind(sUser) == RegistryValueKind.DWord) && (keyFULL!.e_GetValue_Int32(sUser, -1)!.Value! == 0)
+						(keyFULL!.GetValueKind(sUser) == RegistryValueKind.DWord) && (keyFULL!.eGetValue_Int32(sUser, -1)!.Value! == 0)
 					)
 					.ToArray()!;
 			}
@@ -1335,9 +1379,9 @@ namespace uom
 
 				using var keyWINLOGON = OpenWinLogonKey(true);
 				using var keyUserList = OpenUserListKey(keyWINLOGON!, true, !bVisible);
-				int iCurrentValue = keyUserList!.e_GetValue_Int32(UserName, int.MaxValue)!.Value;
+				int iCurrentValue = keyUserList!.eGetValue_Int32(UserName, int.MaxValue)!.Value;
 				if ((iCurrentValue == int.MaxValue) && bVisible) return; //'HIDE' Registry value is not exist, and bVisible=true
-				int iTargetVisible = bVisible.e_ToInt32ABS();
+				int iTargetVisible = bVisible.eToInt32ABS();
 				if (iCurrentValue == iTargetVisible) return;
 				// Call OutString("Меняем значение видимости...")
 				keyUserList!.SetValue(UserName, iTargetVisible, RegistryValueKind.DWord);
@@ -1351,7 +1395,7 @@ namespace uom
 				using RegistryKey keyWINLOGON = OpenWinLogonKey(true);
 				keyWINLOGON?
 					.GetSubKeyNames()?
-					.e_ForEach(sSubKey =>
+					.eForEach(sSubKey =>
 					{
 						if (sSubKey.ToLower() == killSubKeyName.ToLower())
 							keyWINLOGON!.DeleteSubKeyTree(sSubKey);
@@ -1369,11 +1413,11 @@ namespace uom
 
 
 			/// <summary>Возвращает данные о текущем пользователе (из под которого вызывается) ПО-УМОЛЧАНИЮ ИСПОЛЬЗУЕТ КЭШИРОВАНИЕ МЕЖДУ ВЫЗОВАМИ!!!</summary>
-			/// <param name="NotUseCachedInfo">Не использовать ранее кэшированные данные, а запросить новые</param>
+			/// <param name="notUseCache">Не использовать ранее кэшированные данные, а запросить новые</param>
 			/// <returns>Global.System.Security.Principal.WindowsIdentity</returns>
-			internal static WindowsIdentity GetCurrentUser(bool NotUseCachedInfo = false)
+			internal static WindowsIdentity GetCurrentUser(bool notUseCache = false)
 			{
-				if (NotUseCachedInfo) return WindowsIdentity.GetCurrent();
+				if (notUseCache) return WindowsIdentity.GetCurrent();
 				lock (_CurrentUserSyncLock)
 				{
 					_CurrentUser ??= WindowsIdentity.GetCurrent();
@@ -1389,7 +1433,7 @@ namespace uom
 			}
 
 
-			internal static WindowsPrincipal GetCurrentUserPrincipal() => new WindowsPrincipal(GetCurrentUser());
+			internal static WindowsPrincipal GetCurrentUserPrincipal() => new(GetCurrentUser());
 
 
 			internal static bool UserInAdminGroup() => GetCurrentUserPrincipal().IsInRole(WindowsBuiltInRole.Administrator);
@@ -1410,15 +1454,15 @@ namespace uom
 			[DllImport(WinAPI.core.WINDLL_SHELL, EntryPoint = "#261", CharSet = CharSet.Unicode, PreserveSig = false)]
 			private static extern void GetUserTilePath(
 				[In, MarshalAs(UnmanagedType.LPTStr)] string? username,
-				uint whatever,
+				[In] uint whatever,
 				[In, Out, MarshalAs(UnmanagedType.LPTStr)] StringBuilder picpath,
-				int maxLength);
+				[In] int maxLength);
 
-			/// <summary>При вызове этой функции ОС создаёт файл изображения User.bmp 
-			/// в папке C:\Users\User\AppData\Local\temp\ ТЕКУЩЕГО ВЫЗЫВАЮЩЕГО ПОЛЬЗОВАТЕЛЯ!
-			/// на который и возвращается ссылка.
-			/// т.е. в этой папке создаются картинки всех пользователей</summary>
+
+			/// <summary>When called, OS create Userxxx.bmp file in 'C:\Users\xxx\AppData\Local\temp\' (for caller user) and returns path to that file.</summary>
 			/// <param name="UserName">username: use null For current user</param>
+			/// <remarks>User account pictures a placed at 'C:\Users\xxx\AppData\Roaming\Microsoft\Windows\AccountPictures</remarks>
+			/// <completionlist cref=""/>
 			public static string GetUserTilePath(string? UserName = null)
 			{
 				StringBuilder sb = new(1000);
@@ -1426,11 +1470,8 @@ namespace uom
 				return sb.ToString();
 			}
 
-			/// <summary>При вызове этой функции ОС создаёт файл изображения User.bmp 
-			/// в папке C:\Users\User\AppData\Local\temp\ ТЕКУЩЕГО ВЫЗЫВАЮЩЕГО ПОЛЬЗОВАТЕЛЯ!
-			/// на который и возвращается ссылка.
-			/// т.е. в этой папке создаются картинки всех пользователей</summary>
-			/// <param name="UserName">username: use null For current user</param>
+
+			/// <inheritdoc cref="GetUserTilePath(string?)" />
 			public static Image? GetUserTileImage(string? UserName = null)
 			{
 				string sUserImagePath = GetUserTilePath(UserName);
@@ -1438,14 +1479,16 @@ namespace uom
 				{
 					using var imgFile = Image.FromFile(sUserImagePath);
 					// Надо использовать клонирование, чтобы не занимать файл изображения, а освободить его сразу после чтения
-					return imgFile!.e_CloneAsSomeType();
+					return imgFile!.eCloneAsSomeType();
 				}
-				// У пользователя картинки библиотеки его аватаров лежат в 'C:\Users\uom\AppData\Roaming\Microsoft\Windows\AccountPictures
+
 				return null;
 
-				// ********************** А так картинку пользователя в домене хранит Outlook
+				// ********************** Domain UserAccountPicture stored in Outlook:
 				// Newer versions of Office (2010+) use Active Directory to retrieve And display user photos. 
-				// It 's a useful feature that also adds visual interest. I can look quickly at the thumbnails at the bottom of an email or meeting request in Outlook to see who’s invited; this is much faster than reading through the semi-colon delimited list of email addresses.
+				// It 's a useful feature that also adds visual interest.
+				// I can look quickly at the thumbnails at the bottom of an email or meeting request in Outlook to see who’s invited;
+				// this is much faster than reading through the semi-colon delimited list of email addresses.
 				/*                 
 				Private void GetUserPicture(String userName)
 				{
@@ -1468,23 +1511,6 @@ namespace uom
 				}
 				*/
 			}
-
-
-			// Динамическая загрузка библиотеки
-			// HMODULE shell32Dll = : LoadLibrary(L"shell32.dll");
-			// HRESULT (__stdcall *getUserImage)(LPCWSTR userName,
-			// DWORD zero, LPWSTR outPath, UINT size);
-
-			// (FARPROC&)getUserImage = GetProcAddress(shell32Dll, MAKEINTRESOURCEA(261));
-			// If (getUserImage)
-			// {
-			// WCHAR outPath[MAX_PATH];
-			// getUserImage(NULL,0x80000000,outPath,MAX_PATH);
-			// }
-			// (FARPROC&)getUserImage = GetProcAddress(shell32Dll, MAKEINTRESOURCE(261));
-
-
-
 
 			// [DllImport("shell32.dll", EntryPoint = "#262", CharSet = CharSet.Unicode, PreserveSig = false)]
 			// Public Static extern void SetUserTile(String username, int whatever, String picpath);
@@ -1529,6 +1555,7 @@ namespace uom
 
 
 		#region SYSTEM_INFO
+
 		[StructLayout(LayoutKind.Sequential)]
 		public struct SYSTEM_INFO
 		{
@@ -1545,13 +1572,14 @@ namespace uom
 			public short wProcessorRevision;
 
 			[DllImport(WinAPI.core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			private static extern void GetNativeSystemInfo([In, Out] ref SYSTEM_INFO lpSystemInfo);
+			private static extern void GetNativeSystemInfo([Out] out SYSTEM_INFO lpSystemInfo);
 
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static SYSTEM_INFO GetNativeSystemInfo()
 			{
-				var VVV = new SYSTEM_INFO();
-				SYSTEM_INFO.GetNativeSystemInfo(ref VVV);
-				return VVV;
+				GetNativeSystemInfo(out SYSTEM_INFO si);
+				return si;
 			}
 		}
 		#endregion
@@ -1559,18 +1587,24 @@ namespace uom
 
 
 		#region SystemUpTime
-		/// <summary>OS до Windows 8: При гибернации счётчик сбрасывается в 0
-		/// 
-		/// Windows 10: Incorrect Uptime Reported by Task Manager and WMI
-		/// Task Manager 's Performance tab (CPU section) shows the Up time information of the system, but you may be wondering why your boot up time doesn’t match the Up time data reported.
+
+
+		/// <summary>
+		/// Task Manager 's Performance tab (CPU section) shows the Up time information of the system, but you may be wondering why your boot up time doesn’t match the Up time data reported.<br/>
 		/// This Is because Task Manager Or WMI wouldn't deduct the sleep/hibernation time when calculating up time, 
 		/// and with Fast Startup introduced and enabled by default in Windows 8 (and higher), the Up time reported may not match with your actual last boot up time.
-		/// 
+		/// <c>
 		/// Fast startup Is a hybrid Of cold startup + hibernate; 
-		/// When you shutdown the computer With fast startup enabled, the user accounts are logged off completely.
-		/// Then the system goes To hibernate mode (instead Of traditional cold shutdown), so that the Next boot up till the logon screen will be quicker (30-70 % faster). 
+		/// </c><br/>
+		/// When you shutdown the computer With fast startup enabled, the user accounts are logged off completely.<br/>
+		/// Then the system goes To hibernate mode (instead Of traditional cold shutdown), so that the Next boot up till the logon screen will be quicker (30-70 % faster). <br/>
 		/// If you have old hardware you may Not see much difference In startup times.
 		/// </summary>
+		/// <remarks>
+		/// Windows 8 and old, hibernation reset this counter to zerro.
+		/// <br/>		
+		/// Windows 10: Incorrect Uptime Reported by Task Manager and WMI
+		/// </remarks>
 		public static TimeSpan GetSystemUpTime_FromSystemCounters()
 		{
 			using var rUpTime = new PerformanceCounter(
@@ -1579,7 +1613,7 @@ namespace uom
 			rUpTime.NextValue(); // Call this an extra time before reading its value
 			return TimeSpan.FromSeconds(rUpTime.NextValue());
 
-			// В Win10, WMI тоже даёт неверный результат, если используется 
+			// Windows 10: Incorrect Uptime Reported by Task Manager and WMI
 			// Using OS As New ROOT.CIMV2.OperatingSystem
 			// Dim dtBoot = OS.LastBootUpTime
 			// Return dtBoot
@@ -1587,29 +1621,28 @@ namespace uom
 		}
 
 		public static async Task<TimeSpan> GetSystemUpTime_FromSystemCountersAsync()
-		{
-			return await uom.Extensions.Extensions_Async_MT.e_RunAsync(() => GetSystemUpTime_FromSystemCounters());
-		}
+			=> await Task.Factory.StartNew(() => GetSystemUpTime_FromSystemCounters(), TaskCreationOptions.LongRunning);
 
-		/// <summary>При гибернации счётчик НЕ сбрасывается и считается что комп не выключался
-		/// На W8+ тот же косяк с fastboot, что и у GetSystemUpTime_FromSystemCounters</summary>
+
+		/// <summary>On hybernation counter is not resets and looks like PC was not shutting down</summary>
+		/// <remarks>
+		/// Windows 8 and old, hibernation reset this counter to zerro.
+		/// </remarks>
 		public static TimeSpan GetSystemUpTime_FromTickCount64()
-		{
-			return TimeSpan.FromMilliseconds(uom.OS.TickCount_64);
-		}
+			=> TimeSpan.FromMilliseconds(uom.OS.TickCount_64);
+
 
 		internal static DateTime GetOSBootDate_FromSystemCounters()
-		{
-			var tsUpTime = GetSystemUpTime_FromSystemCounters();
-			var dtOSBoot = DateTime.Now.Subtract(tsUpTime);
-			return dtOSBoot;
-		}
+			=> DateTime.Now.Subtract(GetSystemUpTime_FromSystemCounters());
+
 		#endregion
 
-		internal static string GetWinSys32Folder() => Environment.GetFolderPath(Environment.SpecialFolder.System);
 
+		internal static string GetWinSys32Path(string? childPath = null)
+			=> childPath.eIsNullOrWhiteSpace()
+			? Environment.GetFolderPath(Environment.SpecialFolder.System)
+			: Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), childPath!);
 
-		internal static string GetWinSyst32Path(string sPath) => Path.Combine(GetWinSys32Folder(), sPath);
 
 		#region Win Version
 
@@ -1722,13 +1755,11 @@ namespace uom
 			}
 		}
 
-		/// <summary>Important!!!
-		/// Environment.OSVersion.Version - Starting with Windows 8, the OSVersion Property returns the same major And minor version numbers For all Windows platforms. Therefore, we do Not recommend that you retrieve the value of this property to determine the operating system version.</summary>
-		/// <param name="NeedOSVersion"></param>
-		/// Important
-		/// Environment.OSVersion.Version - Starting with Windows 8, the OSVersion Property returns the same major And minor version numbers For all Windows platforms. Therefore, we do Not recommend that you retrieve the value of this property to determine the operating system version.
-		/// https://docs.microsoft.com/en-us/dotnet/api/system.environment.osversion?f1url=https%3A%2F%2Fmsdn.microsoft.com%2Fquery%2Fdev15.query%3FappId%3DDev15IDEF1%26l%3DEN-US%26k%3Dk(System.Environment.OSVersion);k(TargetFrameworkMoniker-.NETFramework,Version%3Dv4.5.2);k(DevLang-VB)%26rd%3Dtrue&view=netframework-4.7.1
-		public static bool CheckOS(Version NeedOSVersion) => (CurrentOS.ToVersion() >= NeedOSVersion);
+		/// <summary><c>Starting with Windows 8, the OSVersion Property returns the same major And minor version numbers For all Windows platforms!</c><br/>
+		/// Therefore, we do Not recommend that you retrieve the value of this property to determine the operating system version.<br/>
+		/// <see href="https://docs.microsoft.com/en-us/dotnet/api/system.environment.osversion"/>
+		/// </summary>
+		public static bool CheckOS(Version NeedOSVersion) => (CurrentOS.Version >= NeedOSVersion);
 
 		internal static void CheckVistaOrLater()
 		{
@@ -1743,35 +1774,55 @@ namespace uom
 		#endregion
 
 
-
-
-
 		#region OSVERSIONINFOEX
 
 		// https://msdn.microsoft.com/ru-ru/library/windows/desktop/ms724833(v=vs.85).aspx
 		/// <summary>
-		/// Remarks
-		/// Relying on version information Is Not the best way to test for a feature. Instead, refer to the documentation for the feature of interest. For more information on common techniques for feature detection, see Operating System Version.
-		/// If you must require a particular operating system, be sure To use it As a minimum supported version, rather than design the test For the one operating system. This way, your detection code will Continue To work On future versions Of Windows.
-		/// The following table summarizes the values returned by supported versions Of Windows. Use the information In the column labeled "Other" To distinguish between operating systems With identical version numbers.
-		/// Operating system	Version number	dwMajorVersion	dwMinorVersion	Other
-		/// Windows 10	10.0*	10	0	OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION
-		/// Windows Server 2016	10.0*	10	0	OSVERSIONINFOEX.wProductType != VER_NT_WORKSTATION
-		/// Windows 8.1	6.3*	6	3	OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION
-		/// Windows Server 2012 R2	6.3*	6	3	OSVERSIONINFOEX.wProductType != VER_NT_WORKSTATION
-		/// Windows 8	6.2	6	2	OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION
-		/// Windows Server 2012	6.2	6	2	OSVERSIONINFOEX.wProductType != VER_NT_WORKSTATION
-		/// Windows 7	6.1	6	1	OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION
-		/// Windows Server 2008 R2	6.1	6	1	OSVERSIONINFOEX.wProductType != VER_NT_WORKSTATION
-		/// Windows Server 2008	6.0	6	0	OSVERSIONINFOEX.wProductType != VER_NT_WORKSTATION
-		/// Windows Vista	6.0	6	0	OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION
-		/// Windows Server 2003 R2	5.2	5	2	GetSystemMetrics(SM_SERVERR2) != 0
-		/// Windows Home Server	5.2	5	2	OSVERSIONINFOEX.wSuiteMask OR VER_SUITE_WH_SERVER
-		/// Windows Server 2003	5.2	5	2	GetSystemMetrics(SM_SERVERR2) == 0
-		/// Windows XP Professional x64 Edition	5.2	5	2	(OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION) AND (SYSTEM_INFO.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_AMD64)
-		/// Windows XP	5.1	5	1	Not applicable
-		/// Windows 2000	5.0	5	0	Not applicable
-		/// * For applications that have been manifested for Windows 8.1 Or Windows 10. Applications Not manifested for Windows 8.1 Or Windows 10 will return the Windows 8 OS version value (6.2). To manifest your applications for Windows 8.1 Or Windows 10, refer to Targeting your application for Windows.
+		/// <see href="https://learn.microsoft.com/ru-ru/windows/win32/api/winnt/ns-winnt-osversioninfoexw"/><br/>
+		/// Relying on version information Is Not the best way to test for a feature. Instead, refer to the documentation for the feature of interest. <br/>
+		/// For more information on common techniques for feature detection, see Operating System Version.<br/>
+		/// If you must require a particular operating system, be sure To use it As a minimum supported version, rather than design the test For the one operating system. This way, your detection code will Continue To work On future versions Of Windows.<br/>
+		/// The following table summarizes the values returned by supported versions Of Windows. Use the information In the column labeled "Other" To distinguish between operating systems With identical version numbers.<br/>
+		/// 	
+		/// <list type="table">
+		///  <listheader>
+		///  <term>Operating system, Version number	[dwMajorVersion.dwMinorVersion]</term>
+		///  <description>Other</description>
+		///  </listheader>
+		/// <item><term>Windows 10 10.0* [10.0]</term>
+		/// <description>OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION</description></item>
+		/// <item><term>Windows Server 2016	10.0* [10.0]</term>
+		/// <description>OSVERSIONINFOEX.wProductType != VER_NT_WORKSTATION</description></item>
+		/// <item><term>Windows 8.1	6.3* [6.3]</term>
+		/// <description>OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION</description></item>
+		/// <item><term>Windows Server 2012 R2 6.3 [6.3]</term>
+		/// <description>OSVERSIONINFOEX.wProductType != VER_NT_WORKSTATION</description></item>
+		/// <item><term>Windows 8	6.2	[6.2]</term>
+		/// <description>OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION</description></item>
+		/// <item><term>Windows Server 2012	6.2	6	2	</term>
+		/// <description>OSVERSIONINFOEX.wProductType != VER_NT_WORKSTATION</description></item>		
+		/// <item><term>Windows 7	6.1	6	1			</term>
+		/// <description>OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION</description></item>
+		/// <item><term>Windows Server 2008 R2	6.1	6.1</term>
+		/// <description>OSVERSIONINFOEX.wProductType != VER_NT_WORKSTATION</description></item>
+		/// <item><term>Windows Server 2008	6.0	[6	0]</term>
+		/// <description>OSVERSIONINFOEX.wProductType != VER_NT_WORKSTATION</description></item>
+		/// <item><term>Windows Vista	6.0	[6	0	]</term>
+		/// <description>OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION</description></item>
+		/// <item><term>Windows Server 2003 R2	5.2	[5	2]</term>
+		/// <description>GetSystemMetrics(SM_SERVERR2) != 0</description></item>
+		/// <item><term>Windows Home Server	5.2	[5	2]</term>
+		/// <description>OSVERSIONINFOEX.wSuiteMask OR VER_SUITE_WH_SERVER</description></item>
+		/// <item><term>Windows Server 2003	5.2	[5	2]</term>
+		/// <description>GetSystemMetrics(SM_SERVERR2) == 0</description></item>
+		/// <item><term>Windows XP Professional x64 Edition	5.2	[5	2]
+		/// </term><description>(OSVERSIONINFOEX.wProductType == VER_NT_WORKSTATION) AND (SYSTEM_INFO.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_AMD64)</description></item>
+		/// <item><term>Windows XP	5.1	[5	1]	</term>
+		/// <description>Not applicable</description></item>
+		/// <item><term>Windows 2000	5.0	[5	0]	</term>
+		/// <description>Not applicable</description></item>
+		/// </list>
+		/// * <c>For applications that have been manifested for Windows 8.1 Or Windows 10</c>:<br/>Applications Not manifested for Windows 8.1 Or Windows 10 will return the Windows 8 OS version value (6.2). To manifest your applications for Windows 8.1 Or Windows 10, refer to Targeting your application for Windows.
 		/// </summary>
 		[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
 		internal struct OSVERSIONINFOEX
@@ -1789,7 +1840,7 @@ namespace uom
 
 			/// <summary>A null-terminated string, such as "Service Pack 3", that indicates the latest Service Pack installed on the system. If no Service Pack has been installed, the string is empty.</summary>
 			[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-			public string szCSDVersion;
+			public string szCSDVersion = string.Empty;
 
 			/// <summary>The major version number of the latest Service Pack installed on the system. For example, for Service Pack 3, the major version number is 3. If no Service Pack has been installed, the value is zero.</summary>
 			public ushort wServicePackMajor;
@@ -1801,6 +1852,11 @@ namespace uom
 			public ProductTypes wProductType;
 			/// <summary>Reserved for future use.</summary>
 			public byte wReserved;
+
+			public OSVERSIONINFOEX()
+			{
+				dwOSVersionInfoSize = Marshal.SizeOf(typeof(OSVERSIONINFOEX));
+			}
 
 
 			/// <summary>A bit mask that identifies the product suites available on the system. This member can be a combination of the following values.</summary>
@@ -1861,14 +1917,16 @@ namespace uom
 
 			[DllImport(WinAPI.core.WINDLL_NTDLL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
 			private static extern int RtlGetVersion([In, Out] ref OSVERSIONINFOEX lpVersionInfo);
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static OSVERSIONINFOEX RtlGetVersion()
 			{
-				var OVI = new OSVERSIONINFOEX() { dwOSVersionInfoSize = Marshal.SizeOf(typeof(OSVERSIONINFOEX)) };
-				//int iResult = OSVERSIONINFOEX.RtlGetVersion(ref OVI);
-				//if (iResult != 0) throw new Exception("RtlGetVersion Failed!");
-				OSVERSIONINFOEX.RtlGetVersion(ref OVI).e_ThrowIfError();
+				OSVERSIONINFOEX OVI = new();
+				RtlGetVersion(ref OVI).eThrowIfError();
 				return OVI;
 			}
+
 
 			#region RtlGetNtVersionNumbers
 
@@ -1891,28 +1949,30 @@ namespace uom
 			#endregion
 
 
-			public Version SPVersion() => new(wServicePackMajor, wServicePackMinor);
-			public string SPVersionString()
+			public readonly Version SPVersion => new(wServicePackMajor, wServicePackMinor);
+			public string SPVersionString
 			{
-				var sSPVersion = "";
-				if (wServicePackMajor != 0) sSPVersion += SPVersion().ToString();
-				if (szCSDVersion.e_IsNOTNullOrWhiteSpace()) sSPVersion += $" {szCSDVersion}";
-				return sSPVersion;
+				get
+				{
+					var sSPVersion = "";
+					if (wServicePackMajor != 0) sSPVersion += SPVersion.ToString();
+					if (szCSDVersion.eIsNotNullOrWhiteSpace()) sSPVersion += $" {szCSDVersion}";
+					return sSPVersion;
+				}
 
 			}
+
 			public override string ToString()
 			{
-				var spVersion = SPVersionString(); if (spVersion.e_IsNOTNullOrWhiteSpace()) spVersion = ", SP:" + spVersion;
-				return $"Version: {ToVersion()}{spVersion}\n" +
-					$"Known Name: {KnownName()}\n" +
+				var spVersion = SPVersionString; if (spVersion.eIsNotNullOrWhiteSpace()) spVersion = ", SP:" + spVersion;
+				return $"Version: {Version}{spVersion}\n" +
+					$"Known Name: {KnownName}\n" +
 					$"Platform Id: {dwPlatformId}\n" +
 					$"Suite Mask: {wSuiteMask}\n" +
 					$"Product Type: {wProductType}";
 			}
 
-			public Version ToVersion() => new(dwMajorVersion, dwMinorVersion, dwBuildNumber);
-
-
+			public readonly Version Version => new(dwMajorVersion, dwMinorVersion, dwBuildNumber);
 
 
 			internal enum KnownVersionNames : int
@@ -1960,44 +2020,45 @@ namespace uom
 				Win11_21H2_SunValley = 22000,
 			}
 
-			public KnownVersionNames KnownName()
+			public KnownVersionNames KnownName
 			{
-				try
+				get
 				{
-					if (dwMajorVersion != 0)
+					try
 					{
-						int ifullver = dwMajorVersion << 8 | dwMinorVersion;
-						var efullver = (KnownVersionNames)ifullver;
-
-						switch (efullver)
+						if (dwMajorVersion != 0)
 						{
-							case KnownVersionNames.Win10:
-								{
-									var Win10_ = KnownVersionNames.Win10.ToString() + "_";
-									var Win11_ = KnownVersionNames.Win11_21H2_SunValley.ToString().Split('_').First() + "_";
+							int ifullver = dwMajorVersion << 8 | dwMinorVersion;
+							var efullver = (KnownVersionNames)ifullver;
+
+							switch (efullver)
+							{
+								case KnownVersionNames.Win10:
+									{
+										var Win10_ = KnownVersionNames.Win10.ToString() + "_";
+										var Win11_ = KnownVersionNames.Win11_21H2_SunValley.ToString().Split('_').First() + "_";
 
 
-									var aW10Builds = (from KnownVersionNames E in Enum.GetValues(typeof(KnownVersionNames))
-													  where (E.ToString().StartsWith(Win10_) || E.ToString().StartsWith(Win11_))
-													  orderby (int)E descending
-													  select E).ToArray();
+										var aW10Builds = (from KnownVersionNames E in Enum.GetValues(typeof(KnownVersionNames))
+														  where (E.ToString().StartsWith(Win10_) || E.ToString().StartsWith(Win11_))
+														  orderby (int)E descending
+														  select E).ToArray();
 
 
-									var iBuild = dwBuildNumber;
-									var eVerFound = aW10Builds.Where(e => (iBuild >= (int)e)).FirstOrDefault();
-									if (eVerFound != default) return eVerFound;
-									break;
-								}
+										var iBuild = dwBuildNumber;
+										var eVerFound = aW10Builds.FirstOrDefault(e => (iBuild >= (int)e));
+										if (eVerFound != default) return eVerFound;
+										break;
+									}
 
-							default:
-								return efullver;
+								default:
+									return efullver;
+							}
 						}
-
 					}
+					catch { }//ignore any errors
+					return KnownVersionNames.Unknown;
 				}
-				catch { }//ignore any errors
-
-				return KnownVersionNames.Unknown;
 			}
 		} // OSVERSIONINFOEX
 		#endregion
@@ -2035,44 +2096,54 @@ namespace uom
 	}
 
 
-	/// <summary>Создаёт мутекс вида 'AppTitle[_UserSID][_Suffix]'
-	/// Пример: 'UOM Network Center_S-1-5-21-3677865666-450531355-3649671759-1002_UOMNetworkCenter.Tools.Apps.WOL.ToolLauncher'</summary>
+	/// <summary>Creates mutex like 'AppTitle[_UserSID][_Suffix]'
+	/// <example>
+	/// <code>
+	/// "UOM Network Center_S-1-5-21-3677865666-450531355-3649671759-1002_UOMNetworkCenter.Tools.Apps.WOL.ToolLauncher"
+	/// </code>
+	/// </example>
+	/// </summary>
 	internal class AppMutex : AutoDisposable1T<Mutex>
 	{
+		private const char C_MUTEX_PARTS_SEPARATOR = '_';
+
 		public readonly Mutex Mutex;
 
 		/// <summary>Signal that mutex is created there. If false - mutex was already exist.</summary>
 		public readonly bool IsMutexCreated;
+
+		/// <summary>If <see langword="true"/> - Mutex name is diferent for each logged on user. (Session ID is not used)</summary>
 		public readonly bool ForCurrentUser;
+
 		public readonly string? Suffix;
 		public readonly string MutexName;
 
-		/// <summary>Create Mutex with name like 'AppTitle[_UserSID][_Suffix]'
-		/// Пример: 'App1_S-1-5-21-3677865666-450531355-3649671759-1002_suffix'</summary>
-		/// <param name="ForCurrentUser">Mutex name will; be diferent for each logged on user !!! Session ID is not used!!!</param>
-		/// <param name="Suffix">Mutex ID suffix - any string or null</param>
-		public AppMutex(
-			string? suffix = null,
-			bool forCurrentUser = true,
-			bool throwIfNotCrated = false) : base()
+		/// <inheritdoc cref="AppMutex" />
+		/// <param name="suffix">Any string or null</param>
+		/// <param name="currentUser">If <see langword="true"/> - Mutex name will be diferent for each logged on user. (Session ID is not used)</param>
+		/// <param name="throwAlreadyExist">If <see langword="true"/> - throws AppMutexAlreadyExistException if mutex already exist</param>
+		/// <exception cref="AppMutexAlreadyExistException">
+		/// Thrown when mutex already exist and throwAlreadyExist = true.
+		/// </exception>
+		public AppMutex(string? suffix = null, bool currentUser = true, bool throwAlreadyExist = false) : base()
 		{
-			(Mutex, IsMutexCreated, MutexName) = CreateAppMutex(forCurrentUser, suffix);
-			ForCurrentUser = forCurrentUser;
+			(Mutex, IsMutexCreated, MutexName) = CreateAppMutex(currentUser, suffix);
+			ForCurrentUser = currentUser;
 			Suffix = suffix;
 
 			if (IsMutexCreated)
 				RegisterDisposableObject(Mutex, true);
-			else if (throwIfNotCrated)
+			else if (throwAlreadyExist)
 				throw new AppMutexAlreadyExistException();
 		}
 
-		/// <inheritdoc />
+		/// <inheritdoc cref="AppMutex" />
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		private static (Mutex Mutex, bool MutexCreated, string MutexID) CreateAppMutex(
-			bool forCurrentUser,
+			bool currentUser,
 			string? suffix = null)
 		{
-			string mutexID = CreateAppIDString(forCurrentUser, suffix);
+			string mutexID = CreateAppIDString(currentUser, suffix);
 			var mtx = new Mutex(
 				true,
 				mutexID,
@@ -2082,63 +2153,54 @@ namespace uom
 		}
 
 		/// <summary>Create MutexID string with name like 'AppTitle[_UserSID][_Suffix]'
-		/// Пример: 'App1_S-1-5-21-3677865666-450531355-3649671759-1002_suffix'</summary>
+		/// <example>
+		/// <code>
+		/// "App1_S-1-5-21-3677865666-450531355-3649671759-1002_suffix"
+		/// </code>
+		/// </example>
+		/// </summary>
 		/// <param name="ForCurrentUser">Mutex name will; be diferent for each logged on user !!! Session ID is not used!!!</param>
-		/// <param name="Suffix">Mutex ID suffix - any string or null</param>
+		/// <param name="suffix">Mutex ID suffix - any string or null</param>
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		internal static string CreateAppIDString(
-			bool forCurrentUser,
-			string? Suffix = null)
+		internal static string CreateAppIDString(bool currentUser, string? suffix = null)
 		{
-			const char C_PART_SEPARATOR = '_';
+			string appID = AppInfo.Title ?? string.Empty;
+			if (appID.eIsNullOrWhiteSpace()) throw new Exception("Application.Title = null!");
 
-			string AppIDString = AppInfo.Title ?? "";
-			if (AppIDString.e_IsNullOrWhiteSpace()) throw new Exception("Application.Title = null!");
+			if (currentUser) appID += C_MUTEX_PARTS_SEPARATOR + OS.UserAccounts.GetCurrentUserSID().ToString();
 
-			if (forCurrentUser)
-				AppIDString += C_PART_SEPARATOR + OS.UserAccounts.GetCurrentUserSID().ToString();
-
-			if (Suffix.e_IsNOTNullOrWhiteSpace())
-				AppIDString += (C_PART_SEPARATOR + Suffix);
-
-			return AppIDString;
+			if (suffix.eIsNotNullOrWhiteSpace()) appID += (C_MUTEX_PARTS_SEPARATOR + suffix);
+			return appID;
 		}
 
 		public override string ToString() => MutexName;
 
-		internal partial class AppMutexAlreadyExistException : Exception
-		{
-			public AppMutexAlreadyExistException() : base(uom.WinAPI.Errors.Win32Errors.ERROR_SERVICE_EXISTS.e_ToWin32Exception().Message) { }
-		}
+
+		internal partial class AppMutexAlreadyExistException() : Exception(uom.WinAPI.errors.Win32Errors.ERROR_SERVICE_EXISTS.eToWin32Exception().Message) { }
+
 	}
 
+
 	/// <summary>MT safe FPS counter</summary>
-	internal class FPSCounter
+	internal class FPSCounter(string sTitle = "")
 	{
-
-
 		private ulong _lLastSecondTimestamp = uom.OS.TickCount_64;
 
-
-		private int _iCurrentSecondFramesCounter = 0;
-		private int _iFPS = 0;
-		private readonly string _sTitle = "";
-
+		private int _currentSecondFramesCounter = 0;
+		private int _fps = 0;
+		private readonly string _title = sTitle;
 		private readonly EventArgs _lock = new();
 
-
-		public FPSCounter(string sTitle = "") : base() { _sTitle = sTitle; }
-
-		public int FPS { get { lock (_lock) return _iFPS; } }
-		public string Title { get { lock (_lock) return _sTitle; } }
+		public int FPS { get { lock (_lock) return _fps; } }
+		public string Title { get { lock (_lock) return _title; } }
 
 		public void Reset()
 		{
 			lock (_lock)
 			{
 				_lLastSecondTimestamp = CurrentSecond;
-				_iCurrentSecondFramesCounter = 0;
-				_iFPS = 0;
+				_currentSecondFramesCounter = 0;
+				_fps = 0;
 			}
 		}
 
@@ -2153,442 +2215,583 @@ namespace uom
 			{
 				var lCurrentTimestamp = CurrentSecond;
 				if (lCurrentTimestamp == _lLastSecondTimestamp)
-					_iCurrentSecondFramesCounter++;
+					_currentSecondFramesCounter++;
 				else
 				{
-					_iFPS = _iCurrentSecondFramesCounter;
-					_iCurrentSecondFramesCounter = 1;
+					_fps = _currentSecondFramesCounter;
+					_currentSecondFramesCounter = 1;
 					_lLastSecondTimestamp = lCurrentTimestamp;
 				}
 			}
 		}
 
-		public override string ToString() { lock (_lock) return $"FPS{(_sTitle == "" ? "" : $" ({_sTitle})")}: {_iFPS}"; }
+		public override string ToString() { lock (_lock) return $"FPS{(_title == "" ? "" : $" ({_title})")}: {_fps}"; }
 	}
 
 
-	[DefaultProperty("Value")]
-	internal class ComboboxItemContainer<T>
+	namespace ComboboxItems
 	{
-		public readonly T Value;
-		private readonly string _displayName = string.Empty;
-		private readonly Func<T, string>? _dynamicDisplayNameProvider = null;
 
-		public ComboboxItemContainer(T wrappedValue) : base()
+
+		[DefaultProperty("Value")]
+		internal class ComboboxItemContainer<T>
 		{
-			if (wrappedValue == null) throw new ArgumentNullException(nameof(wrappedValue));
-			Value = wrappedValue;
-		}
+			public readonly T Value;
+			private readonly string _displayName = string.Empty;
+			private readonly Func<T, string>? _dynamicDisplayNameProvider = null;
 
-		public ComboboxItemContainer(T wrappedValue, string displayName) : this(wrappedValue) => _displayName = displayName;
+			public ComboboxItemContainer(T wrappedValue) : base()
+				=> Value = wrappedValue ?? throw new ArgumentNullException(nameof(wrappedValue));
 
-		public ComboboxItemContainer(T wrappedValue, Func<T, string> dynamicDisplayNameProvider) : this(wrappedValue) => _dynamicDisplayNameProvider = dynamicDisplayNameProvider;
+			public ComboboxItemContainer(T wrappedValue, string displayName) : this(wrappedValue) => _displayName = displayName;
 
-		public string DisplayName
-		{
-			get
+			public ComboboxItemContainer(T wrappedValue, Func<T, string> dynamicDisplayNameProvider) : this(wrappedValue) => _dynamicDisplayNameProvider = dynamicDisplayNameProvider;
+
+			public string DisplayName
 			{
-				if (_dynamicDisplayNameProvider != null) return _dynamicDisplayNameProvider.Invoke(Value);
-				if (!string.IsNullOrEmpty(_displayName)) return _displayName;
+				get
+				{
+					if (_dynamicDisplayNameProvider != null) return _dynamicDisplayNameProvider.Invoke(Value);
+					if (!string.IsNullOrEmpty(_displayName)) return _displayName;
 #pragma warning disable CS8603 // Dereference of a possibly null reference.
-				return Value!.ToString();
+					return Value!.ToString();
 #pragma warning restore CS8603 // Dereference of a possibly null reference.
+				}
 			}
+
+			public override string ToString() => DisplayName;
 		}
 
-		public override string ToString() => DisplayName;
-	}
 
-
-	/// <summary>The wrapper class for any objects which need to be displayed in Comboboxes with custum text</summary>
-	[DefaultProperty("Value")]
-	internal class ComboboxItemEnumContainer<T> : ComboboxItemContainer<T> where T : Enum
-	{
-		public ComboboxItemEnumContainer(T val)
-			: base(val, (enumValue => enumValue.e_GetDescriptionValue() ?? enumValue.ToString()))
+		/// <summary>The wrapper class for any objects which need to be displayed in Comboboxes with custom text</summary>
+		[DefaultProperty("Value")]
+		internal class ComboboxItemEnumContainer<T>(T val)
+			: ComboboxItemContainer<T>(val, enumValue => enumValue.eGetDescriptionValue()) where T : Enum
 		{ }
+
 	}
 
 
-	/// <summary> Class than automaticaly disposes 1 attached COM value </summary>
-	internal class AutoDisposableCOM : AutoDisposableUniversal
+	namespace AutoDisposable
 	{
-		protected readonly Stack<object> COMObjectsToDispose = new();
 
-		public AutoDisposableCOM() : base() { RegisterDisposeCallback(FreeCOMObjects, true); }
 
-		/// <summary>Register COM objects which need to be destroyed</summary>
-		protected internal void RegisterDisposableCOMObject(object COMObject)
+		/// <summary> Class than automaticaly disposes 1 attached COM value </summary>
+		internal class AutoDisposableCOM : AutoDisposableUniversal
 		{
-			_ = COMObject ?? throw new ArgumentNullException(nameof(COMObject));
-			if (COMObjectsToDispose.Contains(COMObject)) throw new ArgumentException($"'{COMObject}' already in dispose list!", nameof(COMObject));
-			COMObjectsToDispose.Push(COMObject);
+			protected readonly Stack<object> COMObjectsToDispose = new();
 
+			public AutoDisposableCOM() : base() => RegisterDisposeCallback(FreeCOMObjects, true);
 
-			//FreeUnmanagedObjects
-		}
-
-
-		protected virtual void FreeCOMObjects()
-		{
-			OnBeforeFreeCOMObjects(COMObjectsToDispose);
-			while (COMObjectsToDispose.Any())
+			/// <summary>Register COM objects which need to be destroyed</summary>
+			protected internal void RegisterDisposableCOMObject(object COMObject)
 			{
-				var rObjectToKill = COMObjectsToDispose.Pop();
-				Marshal.ReleaseComObject(rObjectToKill);
+				_ = COMObject ?? throw new ArgumentNullException(nameof(COMObject));
+				if (COMObjectsToDispose.Contains(COMObject)) throw new ArgumentException($"'{COMObject}' already in dispose list!", nameof(COMObject));
+				COMObjectsToDispose.Push(COMObject);
+
+
+				//FreeUnmanagedObjects
 			}
-			OnAfterFreeCOMObjects(COMObjectsToDispose);
+
+
+			protected virtual void FreeCOMObjects()
+			{
+				OnBeforeFreeCOMObjects(COMObjectsToDispose);
+				while (COMObjectsToDispose.Any())
+				{
+					var rObjectToKill = COMObjectsToDispose.Pop();
+					Marshal.ReleaseComObject(rObjectToKill);
+				}
+				OnAfterFreeCOMObjects(COMObjectsToDispose);
+			}
+
+			/// <summary>Just template, override if need</summary>            
+			protected virtual void OnBeforeFreeCOMObjects(Stack<object> rCOMObjectsToDispose) { }
+
+			/// <summary>Just template, override if need</summary>            
+			protected virtual void OnAfterFreeCOMObjects(Stack<object> rCOMObjectsToDispose) { }
 		}
 
-		/// <summary>Just template, override if need</summary>            
-		protected virtual void OnBeforeFreeCOMObjects(Stack<object> rCOMObjectsToDispose) { }
-
-		/// <summary>Just template, override if need</summary>            
-		protected virtual void OnAfterFreeCOMObjects(Stack<object> rCOMObjectsToDispose) { }
-	}
-
-	internal abstract partial class MTSafeContainerBase<T> : AutoDisposableUniversal
-	{
 
 
-		#region AttachToUI
-
-		/// <summary>Прицепляет обработку изменения значения, к потоку заданного элемента управления</summary>
-		/// <param name="ValueDisplayControl">Элемент управления, в потоке которого будет выполнен обработчик изменения значения</param>
-		/// <param name="OnValueChanged">Будет вызываться в потоке ValueDisplayControl</param>
-		/// <returns>При CTL.HandleDestroyed отслеживание изменения значения автоматически прекращается</returns>
-		public ValueChangedUINotifer AttachToUI(Control ValueDisplayControl, Action<T?> OnValueChanged)
-			=> new(this, ValueDisplayControl, OnValueChanged);
-
-		/// <summary>Прицепляет обработку изменения значения, к отображению его в текстовом поле, с возможностью форматирования</summary>
-		/// <param name="ValueDisplayControl">Элемент управления, в потоке которого будет выполнен обработчик изменения значения</param>
-		/// <param name="TemplateFormatString">Шаблон строки для отображения</param>
-		/// <returns>При CTL.HandleDestroyed отслеживание изменения значения автоматически прекращается</returns>
-		public ValueChangedUINotifer AttachToUI(TextBox ValueDisplayControl, string? TemplateFormatString = null)
+		namespace SafeContainers
 		{
-			//var VT = Value.GetType();
-			switch (Value!)
+
+			internal abstract partial class MTSafeContainerBase<T> : AutoDisposableUniversal
 			{
-				case string sV:
-				case int iV:
-				case long lV:
-				case short srtV:
-				case StringBuilder sb:
-				case DateTime dt:
-				case Guid g:
+
+				#region AttachToUI
+
+				/// <summary>Прицепляет обработку изменения значения, к потоку заданного элемента управления</summary>
+				/// <param name="ValueDisplayControl">Элемент управления, в потоке которого будет выполнен обработчик изменения значения</param>
+				/// <param name="OnValueChanged">Будет вызываться в потоке ValueDisplayControl</param>
+				/// <returns>При CTL.HandleDestroyed отслеживание изменения значения автоматически прекращается</returns>
+				public ValueChangedUINotifer AttachToUI(Control ValueDisplayControl, Action<T?> OnValueChanged)
+					=> new(this, ValueDisplayControl, OnValueChanged);
+
+				/// <summary>Прицепляет обработку изменения значения, к отображению его в текстовом поле, с возможностью форматирования</summary>
+				/// <param name="ValueDisplayControl">Элемент управления, в потоке которого будет выполнен обработчик изменения значения</param>
+				/// <param name="TemplateFormatString">Шаблон строки для отображения</param>
+				/// <returns>При CTL.HandleDestroyed отслеживание изменения значения автоматически прекращается</returns>
+				public ValueChangedUINotifer AttachToUI(TextBox ValueDisplayControl, string? TemplateFormatString = null)
+				{
+					//var VT = Value.GetType();
+					switch (Value!)
 					{
-						Action<T?> CB = new(NewVal =>
-					   {
-						   if (TemplateFormatString.e_IsNOTNullOrWhiteSpace())
-						   {
-							   string S = TemplateFormatString!.e_Format(NewVal?.ToString()!);
-							   ValueDisplayControl.Text = S;
-						   }
-						   else
-						   {
-							   ValueDisplayControl.Text = NewVal!.ToString();
-						   }
-					   });
-						return AttachToUI(ValueDisplayControl, CB);
-					}
+						case string sV:
+						case int iV:
+						case long lV:
+						case short srtV:
+						case StringBuilder sb:
+						case DateTime dt:
+						case Guid g:
+							{
+								Action<T?> CB = new(NewVal =>
+							   {
+								   if (TemplateFormatString.eIsNotNullOrWhiteSpace())
+								   {
+									   string S = TemplateFormatString!.eFormat(NewVal?.ToString()!);
+									   ValueDisplayControl.Text = S;
+								   }
+								   else
+								   {
+									   ValueDisplayControl.Text = NewVal!.ToString();
+								   }
+							   });
+								return AttachToUI(ValueDisplayControl, CB);
+							}
 
-				default:
-					throw new ArgumentOutOfRangeException($"Элемент управления {ValueDisplayControl.GetType()}, не может отобразить тип значения {Value!.GetType()}");
-			}
-		}
-
-		/// <summary>Прицепляет обработку изменения значения, к установке ProgressBar.Value</summary>
-		/// <param name="pb">Элемент управления, в потоке которого будет выполнен обработчик изменения значения</param>
-		/// <returns>При CTL.HandleDestroyed отслеживание изменения значения автоматически прекращается</returns>
-		public ValueChangedUINotifer AttachToUI(ProgressBar pb)
-			=> Value! switch
-			{
-				int iVal => AttachToUI(pb, NewVal => pb.Value = iVal),
-				_ => throw new ArgumentOutOfRangeException($"Элемент управления {pb.GetType()}, не может отобразить тип значения {Value!.GetType()}"),
-			};
-
-		public partial class ValueChangedUINotifer : AutoDisposableUniversal
-		{
-			private MTSafeContainerBase<T>? __changedNotifer = null;
-
-			private MTSafeContainerBase<T>? _ChangedNotifer
-			{
-				[MethodImpl(MethodImplOptions.Synchronized)]
-				get => __changedNotifer;
-
-				[MethodImpl(MethodImplOptions.Synchronized)]
-				set
-				{
-					if (__changedNotifer != null) __changedNotifer.AfterValueChanged -= _VCN_OnAfterValueChanged!;
-
-					__changedNotifer = value;
-					if (__changedNotifer != null) __changedNotifer.AfterValueChanged += _VCN_OnAfterValueChanged!;
-				}
-			}
-
-			public readonly Control control;
-			public readonly Action<T?> OnValueChangedCallBack;//{ get; private set; } = null;
-
-			protected internal ValueChangedUINotifer(MTSafeContainerBase<T> MTSC, Control ValueDisplayControl, Action<T?> cbValueChangedCallBack) : base()
-			{
-				_ChangedNotifer = MTSC;
-				control = ValueDisplayControl;
-				OnValueChangedCallBack = cbValueChangedCallBack;
-
-				// Отключаем слежение за изменением значения для этого элемента управления, и освобождаем ресурсы
-				control.HandleDestroyed += (_, _) => Dispose();
-				RegisterDisposeCallback(Destroy);
-			}
-
-			/// <summary> IDisposable</summary>
-			private void Destroy()
-			{
-				_ChangedNotifer = null;
-				//control = null;
-				//OnValueChangedCallBack = null;
-			}
-			/// <summary>Обновляем показания в UI</summary>
-			private void _VCN_OnAfterValueChanged(object sender, ValueChangedEventArgs e)
-			{
-				if (null == OnValueChangedCallBack) return;
-				control?.e_RunInUIThread(() => OnValueChangedCallBack?.Invoke(e.NewValue!));
-			}
-
-			public MTSafeContainerBase<T> ChangedNotifer { get => ChangedNotifer; }
-		}
-		#endregion
-
-
-
-	}
-
-
-	namespace MessageBoxWithCheckbox
-	{
-
-		namespace WinAPI_Internals
-		{
-			internal enum CbtHookAction
-			{
-				HCBT_MOVESIZE,
-				HCBT_MINMAX,
-				HCBT_QS,
-				HCBT_CREATEWND,
-				HCBT_DESTROYWND,
-				HCBT_ACTIVATE,
-				HCBT_CLICKSKIPPED,
-				HCBT_KEYSKIPPED,
-				HCBT_SYSCOMMAND,
-				HCBT_SETFOCUS
-			}
-			internal enum HookType
-			{
-				WH_JOURNALRECORD,
-				WH_JOURNALPLAYBACK,
-				WH_KEYBOARD,
-				WH_GETMESSAGE,
-				WH_CALLWNDPROC,
-				WH_CBT,
-				WH_SYSMSGFILTER,
-				WH_MOUSE,
-				WH_HARDWARE,
-				WH_DEBUG,
-				WH_SHELL,
-				WH_FOREGROUNDIDLE,
-				WH_CALLWNDPROCRET,
-				WH_KEYBOARD_LL,
-				WH_MOUSE_LL
-			}
-
-			internal class CbtEventArgs : EventArgs
-			{
-				public IntPtr Handle;
-				public string Title;
-				public string ClassName;
-				public bool IsDialogWindow;
-				public CbtEventArgs(IntPtr hwnd, string title, string className, bool isDialog) : base()
-				{
-					Handle = hwnd;
-					Title = title;
-					ClassName = className;
-					IsDialogWindow = isDialog;
-				}
-			}
-
-			internal class HookEventArgs : EventArgs
-			{
-				public int HookCode;
-				public IntPtr wParam;
-				public IntPtr lParam;
-				public HookEventArgs(int code, IntPtr wp, IntPtr lp) : base()
-				{
-					HookCode = code;
-					wParam = wp;
-					lParam = lp;
-				}
-			}
-
-			internal class LocalWindowsHook : uom.AutoDisposableUniversal
-			{
-				public delegate int HookProc(int code, IntPtr wParam, IntPtr lParam);
-				public delegate void HookEventHandler(object sender, HookEventArgs e);
-
-				protected IntPtr _hhook = IntPtr.Zero;
-				protected HookProc _filterFunc;
-				protected HookType _hookType;
-				public event HookEventHandler HookInvoked = delegate { };
-
-				protected void OnHookInvoked(HookEventArgs e) => HookInvoked?.Invoke(this, e);
-
-				private LocalWindowsHook(HookProc? func) : base()
-				{
-					_filterFunc = func ?? CoreHookProc;
-					this.RegisterDisposeCallback(() => Uninstall(), false);
-				}
-				public LocalWindowsHook(HookType hook) : this(null)
-				{
-					_hookType = hook;
-					//_filterFunc = CoreHookProc;
-				}
-
-				public LocalWindowsHook(HookType hook, HookProc func) : this(func)
-				{
-					_hookType = hook;
-					//_filterFunc = func;
-				}
-
-				protected int CoreHookProc(int code, IntPtr wParam, IntPtr lParam)
-				{
-					if (code < 0) return CallNextHookEx(_hhook, code, wParam, lParam);
-					HookEventArgs hookEventArgs = new(code, wParam, lParam);
-					OnHookInvoked(hookEventArgs);
-					return CallNextHookEx(_hhook, code, wParam, lParam);
-				}
-
-				public void Install()
-				{
-#pragma warning disable CS0618 // Type or member is obsolete
-					#region This is Does Not Work!
-					//m_hhook = SetWindowsHookEx(m_hookType, m_filterFunc, IntPtr.Zero, System.Threading.Thread.CurrentThread.ManagedThreadId);
-					#endregion
-					//int iThread = AppDomain.GetCurrentThreadId();
-					int iThread = GetCurrentThreadId();
-					_hhook = SetWindowsHookEx(_hookType, _filterFunc, IntPtr.Zero, iThread);
-#pragma warning restore CS0618 // Type or member is obsolete
-
-				}
-
-				public void Uninstall()
-				{
-					if (_hhook.e_IsValid()) UnhookWindowsHookEx(_hhook); _hhook = IntPtr.Zero;
-				}
-
-				[DllImport("Kernel32.dll")]
-				static extern int GetCurrentThreadId();
-
-				[DllImport("user32.dll")]
-				protected static extern IntPtr SetWindowsHookEx(HookType code, HookProc func, IntPtr hInstance, int threadID);
-
-				[DllImport("user32.dll")]
-				protected static extern int UnhookWindowsHookEx(IntPtr hhook);
-
-				[DllImport("user32.dll")]
-				protected static extern int CallNextHookEx(IntPtr hhook, int code, IntPtr wParam, IntPtr lParam);
-			}
-
-			internal class LocalCbtHook : LocalWindowsHook
-			{
-				public delegate void CbtEventHandler(object sender, CbtEventArgs e);
-				protected IntPtr _hwnd = IntPtr.Zero;
-				protected string _title = "";
-				protected string _class = "";
-				protected bool _isDialog = false;
-				public event CbtEventHandler WindowCreated = delegate { };
-				public event CbtEventHandler WindowDestroyed = delegate { };
-				public event CbtEventHandler WindowActivated = delegate { };
-
-				public LocalCbtHook() : base(HookType.WH_CBT) { base.HookInvoked += CbtHookInvoked; }
-
-				public LocalCbtHook(HookProc func) : base(HookType.WH_CBT, func) { base.HookInvoked += CbtHookInvoked; }
-
-				private void CbtHookInvoked(object sender, HookEventArgs e)
-				{
-					CbtHookAction hookCode = (CbtHookAction)e.HookCode;
-					IntPtr wParam = e.wParam;
-					IntPtr lParam = e.lParam;
-					switch (hookCode)
-					{
-						case CbtHookAction.HCBT_CREATEWND:
-							HandleCreateWndEvent(wParam, lParam);
-							break;
-						case CbtHookAction.HCBT_DESTROYWND:
-							HandleDestroyWndEvent(wParam, lParam);
-							break;
-						case CbtHookAction.HCBT_ACTIVATE:
-							HandleActivateEvent(wParam, lParam);
-							break;
+						default:
+							throw new ArgumentOutOfRangeException($"Элемент управления {ValueDisplayControl.GetType()}, не может отобразить тип значения {Value!.GetType()}");
 					}
 				}
 
-				private void HandleCreateWndEvent(IntPtr wParam, IntPtr lParam)
+				/// <summary>Прицепляет обработку изменения значения, к установке ProgressBar.Value</summary>
+				/// <param name="pb">Элемент управления, в потоке которого будет выполнен обработчик изменения значения</param>
+				/// <returns>При CTL.HandleDestroyed отслеживание изменения значения автоматически прекращается</returns>
+				public ValueChangedUINotifer AttachToUI(ProgressBar pb)
+					=> Value! switch
+					{
+						int iVal => AttachToUI(pb, NewVal => pb.Value = iVal),
+						_ => throw new ArgumentOutOfRangeException($"Элемент управления {pb.GetType()}, не может отобразить тип значения {Value!.GetType()}"),
+					};
+
+				public partial class ValueChangedUINotifer : AutoDisposableUniversal
 				{
-					UpdateWindowData(wParam);
-					OnWindowCreated();
+					private MTSafeContainerBase<T>? __changedNotifer = null;
+
+					private MTSafeContainerBase<T>? _ChangedNotifer
+					{
+						[MethodImpl(MethodImplOptions.Synchronized)]
+						get => __changedNotifer;
+
+						[MethodImpl(MethodImplOptions.Synchronized)]
+						set
+						{
+							if (__changedNotifer != null) __changedNotifer.AfterValueChanged -= _VCN_OnAfterValueChanged!;
+
+							__changedNotifer = value;
+							if (__changedNotifer != null) __changedNotifer.AfterValueChanged += _VCN_OnAfterValueChanged!;
+						}
+					}
+
+					public readonly Control control;
+					public readonly Action<T?> OnValueChangedCallBack;//{ get; private set; } = null;
+
+					protected internal ValueChangedUINotifer(MTSafeContainerBase<T> MTSC, Control ValueDisplayControl, Action<T?> cbValueChangedCallBack) : base()
+					{
+						_ChangedNotifer = MTSC;
+						control = ValueDisplayControl;
+						OnValueChangedCallBack = cbValueChangedCallBack;
+
+						// Отключаем слежение за изменением значения для этого элемента управления, и освобождаем ресурсы
+						control.HandleDestroyed += (_, _) => Dispose();
+						RegisterDisposeCallback(Destroy);
+					}
+
+					/// <summary> IDisposable</summary>
+					private void Destroy()
+					{
+						_ChangedNotifer = null;
+						//control = null;
+						//OnValueChangedCallBack = null;
+					}
+					/// <summary>Обновляем показания в UI</summary>
+					private void _VCN_OnAfterValueChanged(object sender, ValueChangedEventArgs e)
+					{
+						if (null == OnValueChangedCallBack) return;
+						control?.eRunInUIThread(() => OnValueChangedCallBack?.Invoke(e.NewValue!));
+					}
+
+					public MTSafeContainerBase<T> ChangedNotifer { get => ChangedNotifer; }
 				}
-
-				private void HandleDestroyWndEvent(IntPtr wParam, IntPtr lParam)
-				{
-					UpdateWindowData(wParam);
-					OnWindowDestroyed();
-				}
-
-				private void HandleActivateEvent(IntPtr wParam, IntPtr lParam)
-				{
-					UpdateWindowData(wParam);
-					OnWindowActivated();
-				}
-
-				private void UpdateWindowData(IntPtr wParam)
-				{
-					_hwnd = wParam;
-					_class = uom.WinAPI.Windows.GetClassName(_hwnd);
-					_title = uom.WinAPI.Windows.GetWindowText(_hwnd);
-					_isDialog = _class == "#32770";
-				}
-
-				protected virtual void OnWindowCreated() => WindowCreated?.Invoke(this, PrepareEventData());
-
-				protected virtual void OnWindowDestroyed() => WindowDestroyed?.Invoke(this, PrepareEventData());
-
-				protected virtual void OnWindowActivated() => WindowActivated?.Invoke(this, PrepareEventData());
-
-				private CbtEventArgs PrepareEventData() => new(_hwnd, _title, _class, _isDialog);
+				#endregion
 
 			}
 		}
 
-		internal class MessageBox : AutoDisposable1T<WinAPI_Internals.LocalCbtHook>
+	}
+
+
+
+
+	namespace controls
+	{
+		internal class ListViewItemT<T>(T? value) : ListViewItem()
 		{
-			protected WinAPI_Internals.LocalCbtHook _apiHook;
+			public T? Value = value;
+
+			/// <summary>Value Not Null</summary>
+			public T Value2 = value!;
+		}
+
+
+		internal class ListViewItemTRO<T>(T value) : ListViewItem()
+		{
+			public readonly T Value = value;
+		}
+
+	}
+
+
+
+	namespace UI
+	{
+
+
+		///<summary>Saves From Position and size. Process Moved/Sized Events</summary>
+		[Serializable]
+		public class FormPositionInfo()
+		{
+			private const string FORMS_SETTTINGS = "Windows";
+
+			/// <summary>Internal storage for avoid GC</summary>
+			private static Lazy<Dictionary<Form, FormPositionInfo>> _lll = new(() => []);
+
+			[NonSerialized] private Form? _form;
+			[NonSerialized] private bool _canSave = false;
+
+			public DateTime Timestamp = DateTime.Now;
+			public FormWindowState State;
+			public FormStartPosition StartPosition;
+			public System.Drawing.Rectangle RectOnDesktop;
+			public System.Drawing.Rectangle RectOnCurrentDisplay;
+			public System.Drawing.Rectangle CurrentDisplayBounds;
+
+
+			//public System.Drawing.Rectangle Restore;
+			public string Display = string.Empty;
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void Attach(Form f, [CallerMemberName] string caller = "")
+			{
+				if (caller != ".ctor") throw new Exception("e_AttachFormPositionSaver() must be called ONLY FROM form Constructor!");
+
+				string id = GetID(f);
+				var fpi = Load(f);
+				if (fpi != null)
+				{
+					fpi._form = f;
+
+					//Found previous saved settings - load and apply it to the form
+					f.SuspendLayout();
+					try
+					{
+						fpi.Apply(f);
+					}
+					finally
+					{
+						f.ResumeLayout();
+					}
+				}
+				fpi ??= new FormPositionInfo(f);
+				fpi!.AttachEvents();
+
+				lock (_lll.Value)
+				{
+					var dic = _lll.Value;
+					if (dic.ContainsKey(f))
+						dic[f] = fpi!;
+					else
+						dic.Add(f, fpi!);
+				}
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private static FormPositionInfo? Load(Form f)
+			{
+				string id = GetID(f);
+				try
+				{
+					var lines = uom.AppTools.AppSettings.Get_stringsAsText(id, string.Empty, FORMS_SETTTINGS);
+					if (lines != null && lines.eIsNotNullOrWhiteSpace())
+					{
+						return lines!.eDeSerializeXML<FormPositionInfo>();
+					}
+				}
+				catch { }
+
+				return null;
+			}
+
+
+			private FormPositionInfo(Form f) : this() { _form = f; }
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private void AttachEvents()
+			{
+				_form!.ResizeEnd += (_, _) => Save();
+				_form!.LocationChanged += (_, _) => Save();
+
+				_form!.Shown += (_, _) => { _canSave = true; };
+				_form!.FormClosed += (_, _) =>
+				{
+					_canSave = false;
+
+					//Removing from temp storage
+					lock (_lll.Value)
+					{
+						var dic = _lll.Value;
+						if (dic.ContainsKey(_form)) dic.Remove(_form);
+					}
+					_form = null;
+				};
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private static string GetID(Form f) => f.GetType().FullName!;
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private string GetID() => GetID(this._form!);
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private void FromUI()
+			{
+				if (!_canSave || !_form!.IsHandleCreated || _form!.IsDisposed || _form.WindowState == FormWindowState.Minimized || Screen.AllScreens.Length < 1) return;
+
+				//Debug.WriteLine("");
+
+				Timestamp = DateTime.Now;
+
+				StartPosition = _form.StartPosition;
+				State = _form.WindowState;
+
+				RectOnDesktop = uom.WinAPI.windows.GetWindowRectWithoutShadow(_form.Handle);
+				RectOnCurrentDisplay = RectOnDesktop;
+				CurrentDisplayBounds = Screen.PrimaryScreen!.Bounds;
+				Display = string.Empty;
+				if (Screen.AllScreens.Length > 1)
+				{
+					Screen scr = Screen.FromHandle(_form.Handle);
+					Display = scr.DeviceName;
+
+					CurrentDisplayBounds = scr.Bounds;
+					RectOnCurrentDisplay.Offset(-CurrentDisplayBounds.Left, -CurrentDisplayBounds.Top);
+
+					/*
+
+					Debug.WriteLine($"CurrentDisplay Bounds: {scr.Bounds}");
+					Debug.WriteLine($"CurrentDisplay WorkingArea: {scr.WorkingArea}");
+					Debug.WriteLine($"RectOnCurrentDisplay: {RectOnCurrentDisplay}");
+
+					//var rr = uom.WinAPI.windows.GetWindowRectWithoutShadow(_f.Handle);
+					//Debug.WriteLine($"GetWindowRect: {rr}");
+					
+					 */
+				}
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private void Apply(Form f)
+			{
+				if (f.IsDisposed || State == FormWindowState.Minimized) return;
+
+				f.StartPosition = FormStartPosition.Manual;
+
+				Screen targetDisplay = Screen
+					.AllScreens
+					.Where(d => d.DeviceName.Equals(Display, StringComparison.InvariantCultureIgnoreCase))
+					.FirstOrDefault() ?? Screen.PrimaryScreen!;
+
+				if (State != FormWindowState.Maximized)
+				{
+					//Checking that bounds is not out of screen
+					{
+						int minX = Screen.AllScreens.Select(d => d.WorkingArea.Left).Min();
+						int minY = Screen.AllScreens.Select(d => d.WorkingArea.Top).Min();
+						int maxX = Screen.AllScreens.Select(d => d.WorkingArea.Right).Max();
+						int maxY = Screen.AllScreens.Select(d => d.WorkingArea.Bottom).Max();
+
+						if (RectOnDesktop.X < minX) RectOnDesktop.X = minX;
+						if (RectOnDesktop.Y < minY) RectOnDesktop.Y = minY;
+
+						//Ensuring window Size in not more than Current display Size
+						{
+							if (RectOnDesktop.Width > targetDisplay.WorkingArea.Width) RectOnDesktop.Width = targetDisplay.WorkingArea.Width;
+							if (RectOnDesktop.Height > targetDisplay.WorkingArea.Height) RectOnDesktop.Height = targetDisplay.WorkingArea.Height;
+						}
+
+
+						//Slide window left and top if out of right and bonttom bounds
+						if (RectOnDesktop.Right > maxX) RectOnDesktop.X = maxX - RectOnDesktop.Width;
+						if (RectOnDesktop.Bottom > maxY) RectOnDesktop.Y = maxY - RectOnDesktop.Height;
+					}
+
+					uom.WinAPI.windows.SetWindowRectWithoutShadow(f.Handle, RectOnDesktop);
+					var bb = targetDisplay.Bounds;
+
+					if (Screen.AllScreens.Length > 1)
+					{
+						//
+					}
+				}
+				else
+				{
+					//Maximized
+					if (Screen.AllScreens.Length > 1 && !targetDisplay.Primary)
+					{
+						//need maximize on proper display!
+						var r = _form!.Bounds;
+						r = r.eCenterTo(targetDisplay.WorkingArea.eGetCenter().eToPoint());
+						_form!.Bounds = r;
+					}
+				}
+				f.WindowState = State;
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private void Save()
+			{
+				if (!_canSave || !_form!.IsHandleCreated || _form!.IsDisposed || _form.WindowState == FormWindowState.Minimized) return;
+
+				FromUI();
+				string xml = this.eSerializeAsXML();
+				uom.AppTools.AppSettings.SaveMultiString(GetID(), xml, FORMS_SETTTINGS);
+				//Debug.WriteLine($"*********** Save\n{xml}");
+			}
+
+
+			/*
+
+Public Sub Load()
+If (Me._Form?.IsDisposed) Then Return
+
+Dim sRecordName = Me.GetID
+If(sRecordName.eIsNullOrWhiteSpace) Then Return
+
+Dim aRows = uomvb.Settings.GetSetting_Strings(sRecordName,,,, CS_SETTTINGS_FOLDER).Value
+If(aRows Is Nothing) OrElse(Not aRows.Any) Then Return
+
+Dim sRows = aRows.eJoin(vbCrLf)
+Dim fps As FormPositionSaver = Nothing
+Try
+fps = sRows.eDeSerializeXML(Of FormPositionSaver)
+Catch ex As Exception 'Any error - ignore
+'Debug.WriteLine("*********** Load ERROR")
+'Debug.WriteLine(ex.Message)
+Return
+End Try
+If(fps Is Nothing) Then Return
+
+'Debug.WriteLine("*********** Load ")
+'Debug.WriteLine(rFP.ToString)
+
+With Me._Form
+Call.SuspendLayout()
+Try
+
+	'Ищем монитор, на котором последний раз было окно (могли отключить или удалить - тогда используем основной)
+	Dim scrnDisplay = Screen.PrimaryScreen
+	If (fps.Display.eIsNotNullOrWhiteSpace()) Then
+		Dim lastDisplay = (From SC In Screen.AllScreens
+						   Where(SC.DeviceName.eIsNotNullOrWhiteSpace AndAlso (SC.DeviceName.Equals(fps.Display, StringComparison.OrdinalIgnoreCase)))).FirstOrDefault()
+
+		If(lastDisplay IsNot Nothing) Then scrnDisplay = lastDisplay 'Найден!
+	End If
+	Dim rcDisplay = scrnDisplay.Bounds 'Размеры экрана монитора
+
+
+	Select Case fps.State
+		Case FormWindowState.Maximized
+			If(.WindowState<> FormWindowState.Normal) Then.WindowState = FormWindowState.Normal
+			'разворачиваем на том мониторе, что был последним
+			.Location = rcDisplay.Location
+			.WindowState = FormWindowState.Maximized
+
+		Case FormWindowState.Minimized
+			'.WindowState = FormWindowState.Normal
+	'
+		Case FormWindowState.Normal
+			Dim rcBounds As Rectangle = fps.Bounds
+
+			'Проверяем чтобы окно не выходило за размеры экрана
+			'//rcDisplay
+			rcBounds = rcBounds.eEnsureInRect(rcDisplay)
+			If (rcBounds.Width< 100) Then
+				rcBounds.Width = 100
+				rcBounds.X = rcBounds.Right - rcBounds.Width
+			End If
+			If (rcBounds.Height< 100) Then
+				rcBounds.Height = 100
+				rcBounds.Y = rcBounds.Bottom - rcBounds.Height
+			End If
+
+			.Bounds = rcBounds
+			If (.WindowState<> FormWindowState.Normal) Then.WindowState = FormWindowState.Normal
+			'.Location = rcBounds.Location
+			'.Size = rcBounds.Size
+	End Select
+
+Catch ex As Exception
+	'
+Finally
+	Call.ResumeLayout()
+End Try
+End With
+End Sub
+
+
+Public Overrides Function ToString() As String
+Dim sData = Me.eSerializeXML()
+Return sData
+End Function
+
+*/
+
+
+		}
+
+
+		internal class MessageBoxWithCheckbox : AutoDisposable1T<uom.WinAPI.hooks.LocalCbtHook>
+		{
+			protected uom.WinAPI.hooks.LocalCbtHook _apiHook;
 			protected IntPtr _hwndDialogWindow = IntPtr.Zero;
 			protected IntPtr _hwndCheckBox = IntPtr.Zero;
 			protected bool _bInit = false;
 			protected bool _dialogCheckBoxValue = false;
 			protected string? _checkBoxText;
 
-			public MessageBox() : base()
+			public MessageBoxWithCheckbox() : base()
 			{
-				_apiHook = new WinAPI_Internals.LocalCbtHook();
-				_apiHook.WindowCreated += OnWndCreated;
-				_apiHook.WindowDestroyed += OnWndDestroyed;
-				_apiHook.WindowActivated += OnWndActivated;
+				_apiHook = new();
+				_apiHook.WindowCreated += OnWndCreated!;
+				_apiHook.WindowDestroyed += OnWndDestroyed!;
+				_apiHook.WindowActivated += OnWndActivated!;
 
 				RegisterDisposableObject(_apiHook, false);
 			}
 
 			public static void ClearLastUserAnswer(string dialogID)
 			{
-				try { dialogID.e_DeleteSettings(); }
+				try { uom.AppTools.AppSettings.Delete(dialogID); }
 				catch
 				{
 					// No processing needed...the convert might throw an exception,
@@ -2599,24 +2802,23 @@ namespace uom
 			public const string DEFAULT_CHECKBOX_TEXT = "Don't ask me this again";
 
 			private DialogResult Show(
-			string dialogID,
-			string text,
-			string? title = null,
-			string? checkBoxText = DEFAULT_CHECKBOX_TEXT,
-			MessageBoxButtons buttons = MessageBoxButtons.OK,
-			MessageBoxIcon icon = MessageBoxIcon.Information,
-			MessageBoxDefaultButton defbtn = MessageBoxDefaultButton.Button1)
+				string dialogID,
+				string text,
+				string? title = null,
+				string? checkBoxText = DEFAULT_CHECKBOX_TEXT,
+				MessageBoxButtons buttons = MessageBoxButtons.OK,
+				MessageBoxIcon icon = MessageBoxIcon.Information,
+				MessageBoxDefaultButton defbtn = MessageBoxDefaultButton.Button1)
 			{
-				//_ = keyDialogStateStorage ?? throw new ArgumentNullException(nameof(keyDialogStateStorage));
-				if (string.IsNullOrWhiteSpace(dialogID)) throw new ArgumentNullException(nameof(dialogID));
 
+				if (string.IsNullOrWhiteSpace(dialogID)) throw new ArgumentNullException(nameof(dialogID));
 				if (string.IsNullOrWhiteSpace(checkBoxText)) checkBoxText = DEFAULT_CHECKBOX_TEXT;
 				if (string.IsNullOrWhiteSpace(title)) title = Application.ProductName;
 
 				try
 				{
 					const int VALUE_INVALID = -1;
-					int? regOldCheckBoxValue = dialogID.e_GetSettings_int(VALUE_INVALID, true);
+					int? regOldCheckBoxValue = uom.AppTools.AppSettings.Get_Int32(dialogID, VALUE_INVALID, "MessageBoxWithCheckbox");
 
 					if (regOldCheckBoxValue.HasValue
 						&& regOldCheckBoxValue.Value != VALUE_INVALID
@@ -2639,7 +2841,7 @@ namespace uom
 				{
 					DialogResult dr = System.Windows.Forms.MessageBox.Show(text, title, buttons, icon, defbtn);
 					//Save User Answer to registry
-					if (_dialogCheckBoxValue) uom.AppTools.AppSettings.Save<int>(dialogID, (int)dr);
+					if (_dialogCheckBoxValue) uom.AppTools.AppSettings.Save<int>(dialogID, (int)dr, "MessageBoxWithCheckbox");
 
 					return dr;
 				}
@@ -2649,26 +2851,6 @@ namespace uom
 				}
 			}
 
-			/*
-
-			public DialogResult Show(
-				string dialogID,
-				string text,
-				string title = "",
-				string checkBoxText = DEFAULT_CHECKBOX_TEXT,
-				MessageBoxButtons buttons = MessageBoxButtons.OK,
-				MessageBoxIcon icon = MessageBoxIcon.Information,
-				MessageBoxDefaultButton defbtn = MessageBoxDefaultButton.Button1)
-				=> Show(
-					Application.UserAppDataRegistry,
-					dialogID,
-					text,
-					title,
-					checkBoxText,
-					buttons,
-					icon,
-					defbtn);
-			 */
 
 			public static DialogResult ShowDialog(
 				string dialogID,
@@ -2679,12 +2861,12 @@ namespace uom
 				MessageBoxIcon icon = MessageBoxIcon.Information,
 				MessageBoxDefaultButton defbtn = MessageBoxDefaultButton.Button1)
 			{
-				using MessageBox dlg = new();
+				using MessageBoxWithCheckbox dlg = new();
 				return dlg.Show(dialogID, text, title, checkBoxText ?? DEFAULT_CHECKBOX_TEXT, buttons, icon, defbtn);
 			}
 
 
-			private void OnWndCreated(object sender, WinAPI_Internals.CbtEventArgs e)
+			private void OnWndCreated(object sender, uom.WinAPI.hooks.CbtEventArgs e)
 			{
 				if (e.IsDialogWindow)
 				{
@@ -2693,53 +2875,52 @@ namespace uom
 				}
 			}
 
-			private void OnWndDestroyed(object sender, WinAPI_Internals.CbtEventArgs e)
+			private void OnWndDestroyed(object sender, uom.WinAPI.hooks.CbtEventArgs e)
 			{
 				if (e.Handle == _hwndDialogWindow)
 				{
 					_bInit = false;
 					_hwndDialogWindow = IntPtr.Zero;
-					if (BST_CHECKED == (int)uom.WinAPI.Windows.SendMessage(_hwndCheckBox, BM_GETCHECK, IntPtr.Zero, IntPtr.Zero))
+					if (BST_CHECKED == (int)uom.WinAPI.windows.SendMessage(_hwndCheckBox, BM_GETCHECK, IntPtr.Zero, IntPtr.Zero))
 						_dialogCheckBoxValue = true;
 				}
 			}
 
-			private void OnWndActivated(object sender, WinAPI_Internals.CbtEventArgs e)
+			private void OnWndActivated(object sender, uom.WinAPI.hooks.CbtEventArgs e)
 			{
 				if (_hwndDialogWindow != e.Handle || _bInit) return;
 
 				_bInit = true;
 				// Get the current font, either from the static text window or the message box itself
-				IntPtr hwndText = uom.WinAPI.Windows.GetDlgItem(_hwndDialogWindow, 0xFFFF);
-				IntPtr hFont = uom.WinAPI.Windows.SendMessage(
-					hwndText.e_IsValid() ? hwndText : _hwndDialogWindow,
-					WinAPI.Windows.WindowMessages.WM_GETFONT, IntPtr.Zero, IntPtr.Zero);
+				IntPtr hwndText = uom.WinAPI.windows.GetDlgItem(_hwndDialogWindow, 0xFFFF);
+				IntPtr hFont = uom.WinAPI.windows.SendMessage(
+					hwndText.eIsValid() ? hwndText : _hwndDialogWindow,
+					WinAPI.windows.WindowMessages.WM_GETFONT, IntPtr.Zero, IntPtr.Zero);
 
 				Font fCur = Font.FromHfont(hFont);
 
 				// Get the x coordinate for the check box.  Align it with the icon if possible, or one character height in
 				Point ptCheckBoxLocation = new();
-				IntPtr hwndIcon = uom.WinAPI.Windows.GetDlgItem(_hwndDialogWindow, 0x0014);
+				IntPtr hwndIcon = uom.WinAPI.windows.GetDlgItem(_hwndDialogWindow, 0x0014);
 				if (hwndIcon != IntPtr.Zero)
 				{
-					Rectangle rcIcon = uom.WinAPI.Windows.GetWindowRect(hwndIcon);
+					Rectangle rcIcon = uom.WinAPI.windows.GetWindowRect(hwndIcon);
 					Point pt = rcIcon.Location;
-					uom.WinAPI.Windows.ScreenToClient(_hwndDialogWindow, ref pt);
+					uom.WinAPI.windows.ScreenToClient(_hwndDialogWindow, ref pt);
 					ptCheckBoxLocation.X = pt.X + (rcIcon.Width / 2) - 4;
 				}
 				else
 					ptCheckBoxLocation.X = (int)fCur.GetHeight();
 
-				// Get the y coordinate for the check box, which is the bottom of the
-				// current message box client area
-				System.Drawing.Rectangle rcLicent = uom.WinAPI.Windows.GetClientRect(_hwndDialogWindow);
+				// Get the y coordinate for the check box, which is the bottom of the current message box client area
+				System.Drawing.Rectangle rcLicent = uom.WinAPI.windows.GetClientRect(_hwndDialogWindow);
 				int fontHeight = (int)fCur.GetHeight();
 				ptCheckBoxLocation.Y = rcLicent.Height + fontHeight;
 
 
 				// Resize the message box with room for the check box
-				Rectangle rc = uom.WinAPI.Windows.GetWindowRect(_hwndDialogWindow);
-				uom.WinAPI.Windows.MoveWindow(_hwndDialogWindow,
+				Rectangle rc = uom.WinAPI.windows.GetWindowRect(_hwndDialogWindow);
+				uom.WinAPI.windows.MoveWindow(_hwndDialogWindow,
 					rc.Left,
 					rc.Top,
 					rc.Width,
@@ -2747,15 +2928,15 @@ namespace uom
 					true);
 
 
-				_hwndCheckBox = uom.WinAPI.Windows.CreateWindowEx(
+				_hwndCheckBox = uom.WinAPI.windows.CreateWindowEx(
 					0,
 					"button",
 					_checkBoxText!,
 
-					WinAPI.Windows.WindowStyles.BS_AUTOCHECKBOX |
-					WinAPI.Windows.WindowStyles.WS_CHILD |
-					WinAPI.Windows.WindowStyles.WS_VISIBLE |
-					WinAPI.Windows.WindowStyles.WS_TABSTOP,
+					WinAPI.windows.WindowStyles.BS_AUTOCHECKBOX |
+					WinAPI.windows.WindowStyles.WS_CHILD |
+					WinAPI.windows.WindowStyles.WS_VISIBLE |
+					WinAPI.windows.WindowStyles.WS_TABSTOP,
 
 					ptCheckBoxLocation.X,
 					ptCheckBoxLocation.Y,
@@ -2765,10 +2946,11 @@ namespace uom
 					IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
 
 
-				uom.WinAPI.Windows.SendMessage(_hwndCheckBox, WM_SETFONT, hFont, new IntPtr(1));
+				uom.WinAPI.windows.SendMessage(_hwndCheckBox, WM_SETFONT, hFont, new IntPtr(1));
 			}
 
 			#region Win32 Imports
+
 			private const int WM_SETFONT = 0x00000030;
 			//private const int WM_GETFONT = 0x00000031;
 			private const int BM_GETCHECK = 0x00F0;
@@ -2776,11 +2958,11 @@ namespace uom
 
 			#endregion
 		}
+
+
 	}
 
 
-
-#pragma warning disable IDE1006 // Naming Styles
 
 	namespace Extensions
 	{
@@ -2792,7 +2974,54 @@ namespace uom
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_DumpHex(this uom.WinAPI.Memory.WinApiMemory mem) => mem.DangerousGetHandle().e_DumpHexToString(mem.Lenght);
+			internal static string eDumpHex(this uom.WinAPI.memory.WinApiMemory mem) => mem.DangerousGetHandle().eDumpHexToString(mem.Lenght);
+
+
+			private static readonly Size _defaultPropertyGridFormSize = new(600, 800);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void ePropertyGrid_DisplayInUI(this object o)
+			{
+				using Form f = new()
+				{
+					StartPosition = FormStartPosition.CenterScreen,
+					Text = $"{o.GetType()}",
+					Size = _defaultPropertyGridFormSize
+				};
+				f.eAttach_CloseOnEsc();
+
+				using PropertyGrid pg = new()
+				{
+					Dock = DockStyle.Fill,
+					SelectedObject = o
+				};
+
+				f.Controls.Add(pg);
+				f.ShowDialog();
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void ePropertyGrid_DisplayInUI<T>(this T[] o) where T : class
+			{
+				if (o.Length < 1) return;
+
+				using Form f = new()
+				{
+					StartPosition = FormStartPosition.CenterScreen,
+					Text = $"{o.First().GetType()} ({o.Length})",
+					Size = _defaultPropertyGridFormSize
+				};
+				f.eAttach_CloseOnEsc();
+
+				using PropertyGrid pg = new()
+				{
+					Dock = DockStyle.Fill,
+					SelectedObjects = o
+				};
+
+				f.Controls.Add(pg);
+				f.ShowDialog();
+			}
 
 		}
 
@@ -2803,7 +3032,7 @@ namespace uom
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunOnDisabled(this Control ctl, Action a)
+			public static void eRunOnDisabled(this Control ctl, Action a)
 			{
 				_ = a ?? throw new ArgumentNullException(nameof(a));
 
@@ -2821,7 +3050,7 @@ namespace uom
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunOnDisabled(this IEnumerable<Control> actls, Action a)
+			public static void eRunOnDisabled(this IEnumerable<Control> actls, Action a)
 			{
 				_ = a ?? throw new ArgumentNullException(nameof(a));
 
@@ -2839,11 +3068,11 @@ namespace uom
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_Enable(this IEnumerable<Control> actls, bool e)
+			public static void eEnable(this IEnumerable<Control> actls, bool e)
 				=> actls.ToList().ForEach(ctl => ctl.Enabled = e);
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_EnableItems(this ToolStrip ts, bool e)
+			public static void eEnableItems(this ToolStrip ts, bool e)
 			{
 				foreach (ToolStripItem ctl in ts.Items) ctl.Enabled = e;
 			}
@@ -2854,7 +3083,7 @@ namespace uom
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static async Task e_RunOnDisabledAsync(
+			public static async Task eRunOnDisabledAsync(
 				this IEnumerable<Control>? actls,
 				Func<Task> a,
 				Form? waitCursorForm = null)
@@ -2887,97 +3116,23 @@ namespace uom
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static async Task e_RunOnDisabledAsync(
+			public static async Task eRunOnDisabledAsync(
 				this Control ctl,
 				Func<Task> a,
 				Form? waitCursorForm = null)
-				=> await ctl.e_ToArrayOf().e_RunOnDisabledAsync(a, waitCursorForm);
+				=> await ctl.eToArrayOf().eRunOnDisabledAsync(a, waitCursorForm);
 
 
-			#region e_RunDelayed
 
-			public const int DEFAULT_FORM_SHOWN_DELAY = 500;
+
 
 			/// <summary>
-			/// Usually used when you need to do an action with a slight delay after exiting the current method. 
-			/// For example, if some data will be ready only after exiting the control event handler processing branch
+			/// Awaiting specifed total 'timeToWait' with delays by 'stepInterval' and checking periodicaly cancelationFunc
 			/// </summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunDelayed(
-				this Action delayedAction,
-				int delay = DEFAULT_FORM_SHOWN_DELAY)
+			public static async Task eDelayWithCancelation(this int timeToWait, int stepInterval, Func<bool> cancelationFunc)
 			{
-				_ = delayedAction ?? throw new ArgumentNullException(nameof(delayedAction));
+				if (stepInterval >= timeToWait) throw new ArgumentOutOfRangeException(nameof(stepInterval), "stepInterval must be < than timeToWait");
 
-				//Use 'System.Windows.Forms.Timer' that uses some thread with caller to raise events
-				System.Windows.Forms.Timer tmrDelay = new()
-				{
-					Interval = delay,
-					Enabled = false //do not start timer untill we finish it's setup
-				};
-				tmrDelay.Tick += (s, te) =>
-				{
-					//first stop and dispose our timer, to avoid double e_runution
-					tmrDelay.Stop();
-					tmrDelay.Dispose();
-
-					//Now start action
-					delayedAction.Invoke();
-				};
-
-				//Start delay timer
-				tmrDelay.Start();
-			}
-
-
-			/// <summary>
-			/// Shedule Action to run in Form.Shown event with specifed delay. 
-			/// </summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunDelayedOnShown(
-				this Form f,
-				Task[] tasks,
-				int delay = DEFAULT_FORM_SHOWN_DELAY,
-				Action<Exception>? onError = null,
-				bool useWaitCursor = true)
-			{
-				f.Shown += async (s, e) =>
-				{
-					await Task.Delay(delay);
-
-					if (useWaitCursor) f.UseWaitCursor = true;
-					try
-					{
-						try { await Task.WhenAll(tasks); }
-						finally { if (useWaitCursor) f.UseWaitCursor = false; }
-					}
-					catch (Exception ex)
-					{
-						onError?.Invoke(ex);
-					}
-				};
-			}
-
-			/// <summary>
-			/// Shedule Action to run in Form.Shown event with specifed delay. 
-			/// </summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunDelayedOnShown(
-				this Form f,
-				Task task,
-				int delay = DEFAULT_FORM_SHOWN_DELAY,
-				Action<Exception>? onError = null,
-				bool useWaitCursor = true)
-					=> f.e_RunDelayedOnShown(task.e_ToArrayOf(), delay, onError, useWaitCursor);
-
-			#endregion
-
-
-			/// <summary>
-			/// AWaiting specifed pause with cancelation ability. 
-			/// </summary>
-			public static async Task e_DelayWithCancelation(this int timeToWait, int stepInterval, Func<bool> cancelationFunc)
-			{
 				int timeSpent = 0;
 				while (true)
 				{
@@ -2990,31 +3145,10 @@ namespace uom
 
 
 
-
-
-			[DebuggerNonUserCode, DebuggerStepThrough]
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static async Task<T?> e_RunAsync<T>(this Func<T?> f, TaskCreationOptions taskFlags = TaskCreationOptions.LongRunning)
-			{
-				using Task<T?> tskAsync = new(() => f.Invoke(), taskFlags);
-				tskAsync.Start();
-				return await tskAsync;
-			}
-
-
-
-
-
-
-
-
-
-
-
-			/// <summary>Run Task synchronously using SynchronizationContext helpers</summary>
+			/// <summary>Run Task synchronously, using SynchronizationContext helpers</summary>
 			/// <param name="func">Task<T> method to run</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunSync(this Func<Task> func)
+			public static void eRunSync(this Func<Task> func)
 			{
 				SynchronizationContext? oldContext = SynchronizationContext.Current;
 				ExclusiveSynchronizationContext synCtx = new();
@@ -3031,17 +3165,15 @@ namespace uom
 						throw;
 					}
 					finally
-					{
-						synCtx.EndMessageLoop();
-					}
+					{ synCtx.EndMessageLoop(); }
 				}, null);
 				synCtx.BeginMessageLoop();
 				SynchronizationContext.SetSynchronizationContext(oldContext);
 			}
 
-			/// <inheritdoc cref="e_RunSync"/>
+			/// <inheritdoc cref="eRunSync"/>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T? e_RunSync<T>(this Func<Task<T?>> func)
+			public static T? eRunSync<T>(this Func<Task<T?>> func)
 			{
 				var oldContext = SynchronizationContext.Current;
 				var synch = new ExclusiveSynchronizationContext();
@@ -3071,21 +3203,17 @@ namespace uom
 
 
 
-			/// <inheritdoc cref="e_RunSync"/>
+			/// <inheritdoc cref="eRunSync"/>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunSync(this Task tsk)
-			{
-				Func<Task> ft = new(() => tsk);
-				ft.e_RunSync();
-			}
+			public static void eRunSync(this Task tsk)
+				=> eRunSync(() => tsk);
 
-			/// <inheritdoc cref="e_RunSync"/>
+
+			/// <inheritdoc cref="eRunSync"/>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T e_RunSync<T>(this Task<T> task)
-			{
-				T ret = e_RunSync(() => task!)!;
-				return ret;
-			}
+			public static T eRunSync<T>(this Task<T> task)
+				=> eRunSync(() => task!)!;
+
 
 			private class ExclusiveSynchronizationContext : SynchronizationContext
 			{
@@ -3148,32 +3276,21 @@ namespace uom
 
 
 
-
-
-
-
-
-
 			/// <summary>Run Task synchronously using Task.Run helpers</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunSync2(this Task tsk)
+			public static void eRunSync2(this Task t1)
 			{
-				var tsk2 = Task.Run(async () => await tsk);
-				tsk2.Wait();
+				using Task t2 = Task.Run(async () => await t1);
+				t2.Wait();
 			}
 
-			/// <inheritdoc cref="e_RunSync2"/>
+			/// <inheritdoc cref="eRunSync2"/>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T e_RunSync2<T>(this Task<T> tsk)
+			public static T eRunSync2<T>(this Task<T> t1)
 			{
-				var tsk2 = Task.Run(async () =>
-				{
-					await tsk;
-				});
-
-				tsk2.Wait();
-				var res = tsk.Result;
-				return res;
+				using Task t2 = Task.Run(async () => await t1);
+				t2.Wait();
+				return t1.Result;
 			}
 
 
@@ -3190,8 +3307,8 @@ namespace uom
 
 
 
-
-			public static Task e_AsTask(this WaitHandle handle, int timeout = Timeout.Infinite)
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static Task eAsTask(this WaitHandle handle, int timeout = Timeout.Infinite)
 			{
 				TaskCompletionSource<object> tcs = new();
 				RegisteredWaitHandle registration = ThreadPool.RegisterWaitForSingleObject(handle,
@@ -3214,15 +3331,26 @@ namespace uom
 				return tcs.Task;
 			}
 
-			public static Task e_WaitAsync(this WaitHandle handle, int timeout = Timeout.Infinite) => handle.e_AsTask(timeout);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static Task eWaitAsync(this WaitHandle handle, int timeout = Timeout.Infinite) => handle.eAsTask(timeout);
 
 
 		}
 
 
+
 		[EditorBrowsable(EditorBrowsableState.Never)]
 		internal static class Extensions_StringAndFormat_Win
 		{
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void eSetClipboardSafe(this string text)
+			{
+				try { Clipboard.SetText(text); }
+				catch { }
+			}
+
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -3234,7 +3362,7 @@ namespace uom
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string ToString_WxH(this PointF PT, int iRound) => $"{PT.X.e_Round(iRound)}x{PT.Y.e_Round(iRound)}";
+			internal static string ToString_WxH(this PointF PT, int iRound) => $"{PT.X.eRound(iRound)}x{PT.Y.eRound(iRound)}";
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -3246,18 +3374,15 @@ namespace uom
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string ToString_WxH(this SizeF PT, int iRound) => $"{PT.Width.e_Round(iRound)}x{PT.Height.e_Round(iRound)}";
+			internal static string ToString_WxH(this SizeF PT, int iRound) => $"{PT.Width.eRound(iRound)}x{PT.Height.eRound(iRound)}";
 
-			/// <summary>Ограничивает длинну строки по заданному количеству символов</summary>
+
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static (string Result, bool StringWasTrimmed) e_LimitLenght(this string SourceText, int MaxLenght = WinAPI.IO.MAX_PATH)
+			internal static (string Result, bool StringWasTrimmed) eLimitLenght(this string source, int maxLen = WinAPI.io.MAX_PATH)
 			{
-				if (SourceText.e_IsNOTNullOrWhiteSpace() && (SourceText.Length > MaxLenght))
-					return (SourceText.Substring(0, MaxLenght), true);
-
-				return (SourceText, false);
+				if (source.eIsNotNullOrWhiteSpace() && (source.Length > maxLen)) return (source.Substring(0, maxLen), true);
+				return (source, false);
 			}
-
 
 		}
 
@@ -3267,23 +3392,24 @@ namespace uom
 		internal static class Extensions_Arrays_Win
 		{
 
-			#region PInvoke, для CRT функции memcmp()	 
+			#region PInvoke, for CRT memcmp()	 
 
-			/// <summary>PInvoke memcmp() from msvcrt.dll
-			/// ! Most Fastest Method !</summary>
+			/// <summary>PInvoke memcmp() from msvcrt.dll<br/>
+			/// <c>! Most Fastest Method !</c>
+			/// </summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_CompareArrays_MemCmp(this byte[] a, byte[] b, UInt64 bytesToCompare) => uom.WinAPI.Memory.memcmp(a, b, bytesToCompare) == 0;
+			internal static bool eCompareArrays_MemCmp(this byte[] a, byte[] b, UInt64 bytesToCompare) => uom.WinAPI.memory.memcmp(a, b, bytesToCompare) == 0;
 
-			/// <inheritdoc cref="e_CompareArrays_MemCmp" />
+			/// <inheritdoc cref="eCompareArrays_MemCmp" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_CompareArrays_MemCmp(this byte[] a, byte[] b) => a.e_CompareArrays_MemCmp(b, (UInt64)a.Length);
+			internal static bool eCompareArrays_MemCmp(this byte[] a, byte[] b) => a.eCompareArrays_MemCmp(b, (UInt64)a.Length);
 
 
 
 #if NET6_0_OR_GREATER
 			/// <summary>Проверяет заканчивается ли массив байт на указанные байты</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_EndsWith(this byte[] A, byte[] B)
+			internal static bool eEndsWith(this byte[] A, byte[] B)
 			{
 				// Validate buffers are the same length. This also ensures that the count does not exceed the length of either buffer.  
 				int elementsToCompare = B.Length;
@@ -3291,60 +3417,52 @@ namespace uom
 				if (A.Length == 0 && elementsToCompare == 0) return true;
 
 				A = A.TakeLast(elementsToCompare).ToArray();
-				bool bEq = A.e_CompareArrays_MemCmp(B);
+				bool bEq = A.eCompareArrays_MemCmp(B);
 				return bEq;
 			}
 
 
-			/// <inheritdoc cref="e_EndsWith" />
+			/// <inheritdoc cref="eEndsWith" />
 			/// <param name="A"></param>
 			/// <param name="abFinishHex">Строка байт вида 0D-0A-2B-43-53-51-3A</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_EndsWith(this byte[] A, string abFinishHex)
+			internal static bool eEndsWith(this byte[] A, string abFinishHex)
 			{
-				var abFinish = abFinishHex.e_HexStringToBytes();
-				bool bEq = A.e_EndsWith(abFinish);
+				var abFinish = abFinishHex.eHexStringToBytes();
+				bool bEq = A.eEndsWith(abFinish);
 				return bEq;
 			}
 #endif
 
-			/// <summary>Проверяет начинается ли массив байт на указанные байты</summary>
+			/// <summary>Checks if a begins with b</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_StartsWith(this byte[] A, byte[] B)
+			internal static bool eStartsWith(this byte[] A, byte[] B)
 			{
+				// Validate buffers length. This also ensures that the count does not exceed the length of either buffer.  
+				int elementsToCompare = B.Length;
+				if (A.Length < elementsToCompare) return false;
+				if (A.Length == 0 && elementsToCompare == 0) return true;
 
-				// Validate buffers are the same length. This also ensures that the count does not exceed the length of either buffer.  
-				int iElementsToCompare = B.Length;
-				if (A.Length < iElementsToCompare)
-					return false;
-				if (A.Length == 0 && iElementsToCompare == 0)
-					return true;
-
-				A = A.Take(iElementsToCompare).ToArray();
-				bool bEq = A.e_CompareArrays_MemCmp(B);
-				return bEq;
+				//if (A.Length != elementsToCompare) A = [.. A.Take(elementsToCompare)];
+				return A.eCompareArrays_MemCmp(B, (ulong)elementsToCompare);
 			}
 
 
-			/// <inheritdoc cref="e_StartsWith" />
-			/// <param name="A"></param>
-			/// <param name="abFinishHex">Строка байт вида 0D-0A-2B-43-53-51-3A</param>
+			/// <inheritdoc cref="eStartsWith" />
+			/// <param name="hexString">bytes string like "0D-0A-2B-43-53-51-3A..."</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_StartsWith(this byte[] A, string abFinishHex)
-			{
-				var abFinish = abFinishHex.e_HexStringToBytes();
-				return A.e_StartsWith(abFinish);
-			}
+			internal static bool eStartsWith(this byte[] A, string hexString)
+				=> A.eStartsWith(hexString.eHexStringToBytes());
 
 
 			/// <summary>Проверяет равна ли строка двоичному образцу</summary>
 			/// <param name="sTargetHexString">Строка байт вида 0D-0A-2B-43-53-51-3A</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_EqualToHex(this byte[] A, string sTargetHexString)
+			internal static bool eEqualToHex(this byte[] A, string sTargetHexString)
 			{
-				var abTarge = sTargetHexString.e_HexStringToBytes();
+				var abTarge = sTargetHexString.eHexStringToBytes();
 				if (A.Length != abTarge.Length) return false;
-				return A.e_StartsWith(abTarge);
+				return A.eStartsWith(abTarge);
 			}
 
 
@@ -3353,33 +3471,34 @@ namespace uom
 			/// <summary>
 			/// 
 			/// </summary>
-			/// <param name="A"></param>
-			/// <param name="sTemplateStringHex">00-00-XX-01-aa</param>
+			/// <param name="templateHexString">00-00-XX-01-aa</param>
 			/// <returns></returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static byte[] e_SearchTemplate(this byte[] A, string sTemplateStringHex)
+			[Obsolete("Must be rewrited with memoryspans", true)]
+			internal static byte[] eSearchTemplate(this byte[] a, string templateHexString)
 			{
 				char C_SEP = constants.SystemDefaultHexByteSeparator; // Получаем символ-разделитель
-				sTemplateStringHex = sTemplateStringHex.e_NormalizeHexString(null, C_SEP);
-				string sSourceStringHex = A.e_ToStringHex();
-				var aSourceHexBytes = sSourceStringHex.Split(C_SEP);
-				var aTemplateHexBytes = sTemplateStringHex.Split(C_SEP);
-				if (aSourceHexBytes.Length < aTemplateHexBytes.Length)
-					return Array.Empty<byte>();
-				int iEnd = aSourceHexBytes.Length - aTemplateHexBytes.Length;
+				templateHexString = templateHexString.eNormalizeHexString(null, C_SEP);
+				string sSourceStringHex = a.eToStringHex();
+				var sourceHexBytes = sSourceStringHex.Split(C_SEP);
+				var templateHexBytes = templateHexString.Split(C_SEP);
+
+				if (sourceHexBytes.Length < templateHexBytes.Length) return [];
+
+				int iEnd = sourceHexBytes.Length - templateHexBytes.Length;
 				for (int iSourceCharPos = 0, loopTo = iEnd; iSourceCharPos <= loopTo; iSourceCharPos++)
 				{
-					string cSourceChar = aSourceHexBytes[iSourceCharPos];
-					if ((cSourceChar ?? "") == (aTemplateHexBytes[0] ?? ""))
+					string sourceChar = sourceHexBytes[iSourceCharPos];
+					if ((sourceChar ?? "") == (templateHexBytes[0] ?? ""))
 					{
 						// Проверяем все оставшиеся символы на вхождение
-						int iTemplateBytesCount = aTemplateHexBytes.Length;
+						int iTemplateBytesCount = templateHexBytes.Length;
 						int iFound = 0;
 						for (int iSubScanChar = 0; iSubScanChar <= iTemplateBytesCount; iSubScanChar++)
 						{
 							int iFullCharIndex = iSourceCharPos + iSubScanChar;
-							string sTemplateCompareChar = aTemplateHexBytes[iSubScanChar];
-							string sSourceCompareChar = aSourceHexBytes[iFullCharIndex];
+							string sTemplateCompareChar = templateHexBytes[iSubScanChar];
+							string sSourceCompareChar = sourceHexBytes[iFullCharIndex];
 							if (sTemplateCompareChar == "XX" || sTemplateCompareChar == "X")// Шаблонный символ - пропускаем
 								iFound++;
 							else if ((sTemplateCompareChar ?? "") != (sSourceCompareChar ?? ""))// Сравниваем
@@ -3390,14 +3509,14 @@ namespace uom
 
 						if (iFound == iTemplateBytesCount) // найдено!
 						{
-							var abFound = A.e_TakeFrom(iSourceCharPos);
+							var abFound = a.eTakeFrom(iSourceCharPos);
 							abFound = abFound.Take(iTemplateBytesCount).ToArray();
 							return abFound;
 						}
 					}
 				}
 
-				return Array.Empty<byte>();
+				return [];
 			}
 
 
@@ -3416,31 +3535,31 @@ namespace uom
 			////// <remarks>НЕ ИСПОЛЬЗОВАТЬ вот так: typeof(XXX).EnumGetAllValuesAsEnumContainers</remarks>
 
 
-			//public static ComboboxItemEnumContainer<T>[] e_GetAllValuesAsEnumContainers<T>(T EnumItem) where T : Enum
+			//public static ComboboxItemEnumContainer<T>[] eGetAllValuesAsEnumContainers<T>(T EnumItem) where T : Enum
 
 			/*
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-public static ComboboxItemEnumContainer<T>[] e_GetAllValuesAsEnumContainers<T>() where T : Enum
-{
-T[] enumValues = Enum.GetValues(typeof(T)).Cast<T>().ToArray();
-ComboboxItemEnumContainer<T>[]? cItems = enumValues.Select(v => new ComboboxItemEnumContainer<T>(v)).ToArray();
-return cItems;
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public static ComboboxItemEnumContainer<T>[] eGetAllValuesAsEnumContainers<T>() where T : Enum
+	{
+	T[] enumValues = Enum.GetValues(typeof(T)).Cast<T>().ToArray();
+	ComboboxItemEnumContainer<T>[]? cItems = enumValues.Select(v => new ComboboxItemEnumContainer<T>(v)).ToArray();
+	return cItems;
 
-//***ВОТ ТАК РАБОТАЕТ!
-//Private Enum FILE_LOG_RECORDS_GROUPING As Integer
-//    <DescriptionAttribute("Имя файла")> ByFile
-//    <DescriptionAttribute("GUID")> ByGUID
-//    <DescriptionAttribute("Вызвавший процесс")> ByCaller
-//End Enum
-//var aContainers = FILE_LOG_RECORDS_GROUPING.ByCaller.EnumGetAllValuesAsEnumContainers
+	//***ВОТ ТАК РАБОТАЕТ!
+	//Private Enum FILE_LOG_RECORDS_GROUPING As Integer
+	//    <DescriptionAttribute("Имя файла")> ByFile
+	//    <DescriptionAttribute("GUID")> ByGUID
+	//    <DescriptionAttribute("Вызвавший процесс")> ByCaller
+	//End Enum
+	//var aContainers = FILE_LOG_RECORDS_GROUPING.ByCaller.EnumGetAllValuesAsEnumContainers
 
-//*** А ВОТ ТАК НЕ БУДЕТ РАБОТАТЬ!!! 
-//var eAA2 = typeof(XXX).EnumGetAllValuesArray
-}
+	//*** А ВОТ ТАК НЕ БУДЕТ РАБОТАТЬ!!! 
+	//var eAA2 = typeof(XXX).EnumGetAllValuesArray
+	}
 			 */
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ComboboxItemEnumContainer<T>[] e_GetAllValuesAsEnumContainers<T>(this T anyEnumItem) where T : Enum
+			public static ComboboxItemEnumContainer<T>[] eGetAllValuesAsEnumContainers<T>(this T anyEnumItem) where T : Enum
 			{
 				T[] enumValues = Enum.GetValues(typeof(T)).Cast<T>().ToArray();
 				ComboboxItemEnumContainer<T>[]? cItems = enumValues.Select(v => new ComboboxItemEnumContainer<T>(v)).ToArray();
@@ -3458,6 +3577,17 @@ return cItems;
 				//var eAA2 = typeof(XXX).EnumGetAllValuesArray
 			}
 
+			public static T eBuildFromFlags<T>(this T initialValue, params (CheckBox flagCondition, T flagToSet)[] flags) where T : Enum
+			{
+				Int64 val = Convert.ToInt64(initialValue);
+				foreach (var item in flags)
+				{
+					if (item.flagCondition.Checked) val |= Convert.ToInt64(item.flagToSet);
+				}
+				T TResult = (T)Enum.ToObject(typeof(T), val);
+				return TResult;
+			}
+
 
 
 		}
@@ -3472,7 +3602,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static RegistryKey e_HiveToKey(this RegistryHive Hive)
+			public static RegistryKey eHiveToKey(this RegistryHive Hive)
 				=> Hive switch
 				{
 					RegistryHive.ClassesRoot => Registry.ClassesRoot,
@@ -3489,7 +3619,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static RegistryKey e_OpenBaseKey(this RegistryHive Hive, RegistryView View = RegistryView.Default) => RegistryKey.OpenBaseKey(Hive, View);
+			public static RegistryKey eOpenBaseKey(this RegistryHive Hive, RegistryView View = RegistryView.Default) => RegistryKey.OpenBaseKey(Hive, View);
 
 
 
@@ -3497,8 +3627,8 @@ return cItems;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static (Boolean ValueFound, RegistryValueKind Kind, object? Value)
-			e_GetValueExt(
-				this RegistryKey hRegKey,
+			eGetValueExt(
+				this RegistryKey key,
 				string? valueName,
 				object? defaultValue,
 				RegistryValueOptions rvo = RegistryValueOptions.DoNotExpandEnvironmentNames)
@@ -3506,9 +3636,9 @@ return cItems;
 				valueName ??= "";
 				try
 				{
-					object? objValue = hRegKey?.GetValue(valueName, null, rvo);
-					_ = objValue ?? throw new Exception($"RegKey.GetValue('{valueName}') Failed! RegKey = '{hRegKey}'!");
-					return (true, (hRegKey?.GetValueKind(valueName) ?? RegistryValueKind.Unknown), objValue);
+					object? objValue = key?.GetValue(valueName, null, rvo);
+					_ = objValue ?? throw new Exception($"RegKey.GetValue('{valueName}') Failed! RegKey = '{key}'!");
+					return (true, (key?.GetValueKind(valueName) ?? RegistryValueKind.Unknown), objValue);
 				}
 				catch { return (false, RegistryValueKind.Unknown, defaultValue); }
 			}
@@ -3516,16 +3646,17 @@ return cItems;
 
 			[DebuggerNonUserCode, DebuggerStepThrough]
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static (Boolean ValueFound, RegistryValueKind Kind, T? Value)
-				e_GetValueT<T>(this RegistryKey hRegKey, string ValueName, T? defaultValue)
+			public static (Boolean ValueFound, RegistryValueKind Kind, T? Value) eGetValueT<T>(this RegistryKey key, string ValueName, T? defaultValue)
 			{
 				try
 				{
-					var (ValueFound, Kind, Value) =
-						hRegKey.e_GetValueExt(
-							ValueName,
-							defaultValue,
-							(typeof(T) == typeof(string)) ? RegistryValueOptions.DoNotExpandEnvironmentNames : RegistryValueOptions.None);
+					var (ValueFound, Kind, Value) = key.eGetValueExt(
+						   ValueName,
+						   defaultValue,
+							(typeof(T) == typeof(string))
+								? RegistryValueOptions.DoNotExpandEnvironmentNames
+								: RegistryValueOptions.None
+							);
 
 					if (ValueFound && (null != Value)) return (true, Kind, (T)Value);
 				}
@@ -3535,11 +3666,15 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string? e_GetValue_String(this RegistryKey? hRegKey, string ValueName, string? DefaultValue = null)
-				=> hRegKey?.e_GetValueT<string>(ValueName, DefaultValue).Value;
+			public static string? eGetValue_String(this RegistryKey? key, string ValueName, string? defaultValue = null)
+				=> key?.eGetValueT<string>(ValueName, defaultValue).Value;
 
-			public static string e_GetValue_StringOrEmpty(this RegistryKey? hRegKey, string ValueName, string? DefaultValue = null)
-				=> hRegKey?.e_GetValue_String(ValueName, DefaultValue)
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string eGetValue_StringOrEmpty(this RegistryKey? key, string ValueName, string? defaultValue = null)
+				=> key?.eGetValue_String(ValueName, defaultValue)
 				?? string.Empty;
 
 
@@ -3554,7 +3689,7 @@ return cItems;
 			}
 
 			[DllImport(WinAPI.core.WINDLL_ADVAPI32, SetLastError = true, ExactSpelling = false, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern uom.WinAPI.Errors.Win32Errors RegOpenKeyEx(
+			internal static extern uom.WinAPI.errors.Win32Errors RegOpenKeyEx(
 				[In] IntPtr hKey,
 				[In, Optional, MarshalAs(UnmanagedType.LPTStr)] string? subKey,
 				[In] int ulOptions,
@@ -3562,16 +3697,16 @@ return cItems;
 				[Out] out IntPtr hkResult);
 
 			[DllImport(WinAPI.core.WINDLL_ADVAPI32, SetLastError = true, ExactSpelling = false, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern uom.WinAPI.Errors.Win32Errors RegCloseKey([In] IntPtr hKey);
+			internal static extern uom.WinAPI.errors.Win32Errors RegCloseKey([In] IntPtr hKey);
 
 			[DllImport(WinAPI.core.WINDLL_ADVAPI32, SetLastError = true, ExactSpelling = false, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern uom.WinAPI.Errors.Win32Errors RegRenameKey(
+			internal static extern uom.WinAPI.errors.Win32Errors RegRenameKey(
 				this IntPtr hKey,
 				[MarshalAs(UnmanagedType.LPTStr)] string? lpSubKeyName,
 				[MarshalAs(UnmanagedType.LPTStr)] string lpNewKeyName);
 
 			[DllImport(WinAPI.core.WINDLL_ADVAPI32, SetLastError = true, ExactSpelling = false, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern uom.WinAPI.Errors.Win32Errors RegCopyTree(
+			internal static extern uom.WinAPI.errors.Win32Errors RegCopyTree(
 				this IntPtr hKeySrc,
 				[In, Optional, MarshalAs(UnmanagedType.LPTStr)] string? lpSubKey,
 				[In] IntPtr hKeyDest);
@@ -3608,7 +3743,7 @@ return cItems;
 			/// The winreg.h header defines RegSaveKeyEx as an alias which automatically selects the ANSI or Unicode version of this function based on the definition of the UNICODE preprocessor constant. Mixing usage of the encoding-neutral alias with code that not encoding-neutral can lead to mismatches that result in compilation or runtime errors. For more information, see Conventions for Function Prototypes.
 			/// </summary>
 			[DllImport(WinAPI.core.WINDLL_ADVAPI32, SetLastError = true, ExactSpelling = false, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern uom.WinAPI.Errors.Win32Errors RegSaveKeyEx(
+			internal static extern uom.WinAPI.errors.Win32Errors RegSaveKeyEx(
 				this IntPtr hKey,
 				[In, MarshalAs(UnmanagedType.LPTStr)] string lpFile,
 				[In, Optional] IntPtr lpSecurityAttributes,
@@ -3616,11 +3751,11 @@ return cItems;
 
 
 			/// <summary>Work ONLY on local registry, dont work on remote connected registry!</summary>
-			public static void e_RenameSubKey(this RegistryKey KeyParent, string Name, string NewName)
+			public static void eRenameSubKey(this RegistryKey KeyParent, string Name, string NewName)
 			{
 				//RegistryKey _keyHKLM = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Default);
 				//KeyParent = _keyHKLM?.OpenSubKey("_uom_Test", true)!;
-				if (NewName.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(NewName));
+				if (NewName.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(NewName));
 				_ = RegRenameKey(
 					KeyParent.Handle.DangerousGetHandle(),
 					Name,
@@ -3630,7 +3765,7 @@ return cItems;
 			}
 
 
-			public static void e_RenameSubKeyViaCopy(this RegistryKey KeyParent, string Name, string newName)
+			public static void eRenameSubKeyViaCopy(this RegistryKey KeyParent, string Name, string newName)
 			{
 				if (string.IsNullOrWhiteSpace(newName)) throw new ArgumentNullException(nameof(newName));
 
@@ -3638,15 +3773,15 @@ return cItems;
 				Name = Name.Trim();
 
 				if (newName == Name) return;//Already has this name
-				if (newName.e_IsDifferOlyInCase(Name)) throw new ArgumentException("New key name differ only in case!", nameof(newName));
+				if (newName.eIsDifferOlyInCase(Name)) throw new ArgumentException("New key name differ only in case!", nameof(newName));
 
-				KeyParent.e_CopySubkey(Name, newName, false);
+				KeyParent.eCopySubkey(Name, newName, false);
 				KeyParent.DeleteSubKeyTree(Name, false);
 				KeyParent.Flush();
 			}
 
 
-			public static void e_CopySubkey(this RegistryKey KeyParent, string subKeyName, string newSubKeyName, bool owerwriteOnExist)
+			public static void eCopySubkey(this RegistryKey KeyParent, string subKeyName, string newSubKeyName, bool owerwriteOnExist)
 			{
 				if (string.IsNullOrWhiteSpace(subKeyName)) throw new ArgumentNullException(nameof(subKeyName));
 				if (string.IsNullOrWhiteSpace(newSubKeyName)) throw new ArgumentNullException(nameof(newSubKeyName));
@@ -3655,7 +3790,7 @@ return cItems;
 				newSubKeyName = newSubKeyName.Trim();
 
 				if (newSubKeyName == subKeyName) throw new ArgumentException($"{nameof(newSubKeyName)} = {nameof(subKeyName)}!");
-				if (subKeyName.e_IsDifferOlyInCase(newSubKeyName))
+				if (subKeyName.eIsDifferOlyInCase(newSubKeyName))
 					throw new ArgumentException($"The {nameof(newSubKeyName)} and {nameof(subKeyName)} differ only in case!", nameof(newSubKeyName));
 
 				RegistryKey? keyOld = KeyParent.OpenSubKey(subKeyName, false);
@@ -3668,11 +3803,11 @@ return cItems;
 					KeyParent.DeleteSubKeyTree(newSubKeyName, false);
 				}
 				using RegistryKey keyNew = KeyParent.CreateSubKey(newSubKeyName, true);
-				keyOld.e_CopyTo(keyNew);
+				keyOld.eCopyTo(keyNew);
 			}
 
 
-			public static void e_CopyTo(this RegistryKey keyOld, RegistryKey keyNew)
+			public static void eCopyTo(this RegistryKey keyOld, RegistryKey keyNew)
 			{
 				//Copy All Values
 				var aValueNames = keyOld.GetValueNames();
@@ -3700,37 +3835,37 @@ return cItems;
 				{
 					using RegistryKey? keyChildOld = keyOld.OpenSubKey(keyName, false);
 					using RegistryKey keyChildNew = keyNew.CreateSubKey(keyName, true);
-					keyChildOld?.e_CopyTo(keyChildNew);
+					keyChildOld?.eCopyTo(keyChildNew);
 				}
 				keyNew.Flush();
 			}
 
 
-			public static void e_Export(this RegistryKey keyOld, string path)
+			public static void eExport(this RegistryKey keyOld, string path)
 			{
-				WinAPI.Security.PRIVELEGE_NAMES.SeBackupPrivilege.e_AdjustProcessPrivilegeAndCloseToken();
+				WinAPI.security.PRIVELEGE_NAMES.SeBackupPrivilege.eAdjustProcessPrivilegeAndCloseToken();
 				var result = RegSaveKeyEx(
 					keyOld.Handle.DangerousGetHandle(),
 					path,
 					IntPtr.Zero,
 					SAVE_REG_FLAGS.REG_LATEST_FORMAT);
 
-				result.e_ThrowIfError();
+				result.eThrowIfError();
 			}
 
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static Int32? e_GetValue_Int32(this RegistryKey? hRegKey, string ValueName, Int32 DefaultValue = 0)
-				=> hRegKey?.e_GetValueT<Int32>(ValueName, DefaultValue).Value;
+			public static Int32? eGetValue_Int32(this RegistryKey? hRegKey, string ValueName, Int32 defaultValue = 0)
+				=> hRegKey?.eGetValueT<Int32>(ValueName, defaultValue).Value;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static bool? e_GetValue_Bool(this RegistryKey? hRegKey, string ValueName, bool DefaultValue = false)
-				=> (1 == e_GetValue_Int32(hRegKey, ValueName, DefaultValue ? 1 : 0));
+			public static bool? eGetValue_Bool(this RegistryKey? hRegKey, string ValueName, bool defaultValue = false)
+				=> (1 == eGetValue_Int32(hRegKey, ValueName, defaultValue ? 1 : 0));
 
 
-			private static void e_SetValueObject(this RegistryKey hRegKey, string name, object? value, RegistryValueKind kind)
+			private static void eSetValueObject(this RegistryKey hRegKey, string name, object? value, RegistryValueKind kind)
 			{
 				if (null == value)
 					hRegKey.DeleteValue(name, false);
@@ -3744,12 +3879,12 @@ return cItems;
 			#region Set Value
 
 
-			/// <summary>if value == null, value will be deleted!</summary>
-			public static void e_SetValue<T>(this RegistryKey hRegKey, string name, T? value) where T : struct
+			/// <summary>if value == null, reg value will be deleted!</summary>
+			public static void eSetValue<T>(this RegistryKey hRegKey, string name, T? value) where T : struct
 			{
 				if (null == value || !value.HasValue)
 				{
-					hRegKey.e_SetValueObject(name, (object?)null, RegistryValueKind.None);//Delete Value
+					hRegKey.eSetValueObject(name, (object?)null, RegistryValueKind.None);//Delete Value
 					return;
 				}
 
@@ -3771,29 +3906,30 @@ return cItems;
 					case uint data: valueToWrite = data; kind = RegistryValueKind.DWord; break;
 					case ulong data: valueToWrite = data; kind = RegistryValueKind.QWord; break;
 					case char data: valueToWrite = data; kind = RegistryValueKind.String; break;
+					case DateTime dt: valueToWrite = dt.ToBinary(); kind = RegistryValueKind.QWord; break;
 
 					// float, double, decimal
 					default: throw new ArgumentOutOfRangeException($"Unknown type of '{nameof(value)}' = '{typeof(T)}'");
 				}
-				hRegKey.e_SetValueObject(name, valueToWrite, kind);
+				hRegKey.eSetValueObject(name, valueToWrite, kind);
 			}
 
 			/// <summary>if value == null, value will be deleted!</summary>
-			public static void e_SetValueString(this RegistryKey hRegKey, string name, string? value)
+			public static void eSetValueString(this RegistryKey hRegKey, string name, string? value)
 			{
 				if (null == value)
 				{
-					hRegKey.e_SetValueObject(name, (object?)null, RegistryValueKind.None);//Delete Value
+					hRegKey.eSetValueObject(name, (object?)null, RegistryValueKind.None);//Delete Value
 					return;
 				}
 				hRegKey.SetValue(name, value!, RegistryValueKind.String);
 			}
 
-			public static void e_SetValueStrings(this RegistryKey hRegKey, string name, string[]? value)
+			public static void eSetValueStrings(this RegistryKey hRegKey, string name, string[]? value)
 			{
 				if (null == value)
 				{
-					hRegKey.e_SetValueObject(name, (object?)null, RegistryValueKind.None);//Delete Value
+					hRegKey.eSetValueObject(name, (object?)null, RegistryValueKind.None);//Delete Value
 					return;
 				}
 				hRegKey.SetValue(name, value!, RegistryValueKind.MultiString);
@@ -3803,52 +3939,15 @@ return cItems;
 			#endregion
 
 
-			/*
-		   [MethodImpl(MethodImplOptions.AggressiveInlining)]
-		   public static void e_SaveSettings<T>(this T? val, string name) where T:unmanaged				=> uom.AppTools.AppSettings.Save<T>(name, val);
-
-		   [MethodImpl(MethodImplOptions.AggressiveInlining)]
-		   public static void e_SaveSettings(this string? val, string name) => uom.AppTools.AppSettings.Save(name, val);
-
-		   [MethodImpl(MethodImplOptions.AggressiveInlining)]
-		   public static void e_SaveSettings(this string[]? val, string name) => uom.AppTools.AppSettings.Save(name, val);
-			 */
-
-
-
-
+			/// <param name="fullPath">HKEY_CLASSES_ROOT/xxx/yyyy...</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_DeleteSettings(this string name) => uom.AppTools.AppSettings.Delete(name);
+			public static RegistryKey? eRegOpenByFullPath(this string fullPath, bool writable)
+			{
+				string[] pathParts = fullPath.Split('\\');
+				string rootKeyName = pathParts[0];
 
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T? e_GetSettings<T>(
-				this string name,
-				T? defaultValue,
-				bool searchAllVersions = true,
-				Version? searchVersionBelowOrEqual = null)
-				=> uom.AppTools.AppSettings.Get_T<T>(name,
-					defaultValue,
-					searchAllVersions,
-					searchVersionBelowOrEqual);
 
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static int e_GetSettings_int(
-				this string name,
-				int defaultValue = 0,
-				bool searchAllVersions = true,
-				Version? searchVersionBelowOrEqual = null)
-				=> name.e_GetSettings<int>(defaultValue, searchAllVersions, searchVersionBelowOrEqual);
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string? e_GetSettings_str(
-				this string name,
-				string? defaultValue = null,
-				bool searchAllVersions = true,
-				Version? searchVersionBelowOrEqual = null)
-				=> name.e_GetSettings<string>(defaultValue, searchAllVersions, searchVersionBelowOrEqual);
-
-			public static RegistryKey e_RegGetRootKey(this string rootKeyName)
-				=> rootKeyName switch
+				RegistryKey keyRoot = rootKeyName switch
 				{
 					"HKEY_CLASSES_ROOT" => Registry.ClassesRoot,
 					"HKEY_CURRENT_USER" => Registry.CurrentUser,
@@ -3857,13 +3956,7 @@ return cItems;
 					_ => throw new ArgumentOutOfRangeException(nameof(rootKeyName))
 				};
 
-			//			[ MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static RegistryKey? e_RegOpenKeyByPath(this string fullPath, bool writable)
-			{
-				string[] pathParts = fullPath.Split('\\');
-				string rootKeyName = pathParts[0];
-				RegistryKey keyRoot = rootKeyName.e_RegGetRootKey();
-				fullPath = String.Join(@"\", pathParts.e_TakeFrom(1));
+				fullPath = string.Join(@"\", pathParts.eTakeFrom(1));
 				return keyRoot.OpenSubKey(fullPath, writable);
 			}
 
@@ -3873,7 +3966,7 @@ return cItems;
 
 
 		[EditorBrowsable(EditorBrowsableState.Never)]
-		internal static class Extensions_UI
+		internal static class Extensions_UI_Win
 		{
 			[Flags]
 			public enum MsgBoxFlags : uint
@@ -3909,7 +4002,6 @@ return cItems;
 
 			[DebuggerNonUserCode, DebuggerStepThrough]
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-
 			private static (
 				MessageBoxButtons Buttons,
 				MessageBoxIcon Icon,
@@ -3917,34 +4009,47 @@ return cItems;
 				) ParseMsgboxFlags(MsgBoxFlags flags)
 			{
 
-				//var aaa = ((MsgBoxFlags[])Enum.GetValues(typeof(MsgBoxFlags))).Select(f => $"{f} = {(uint)f}").ToArray();
 
-				MessageBoxButtons btn = MessageBoxButtons.OK;
-				if (flags.HasFlag(MsgBoxFlags.Btn_OKCancel)) btn = MessageBoxButtons.OKCancel;
-				else if (flags.HasFlag(MsgBoxFlags.Btn_AbortRetryIgnore)) btn = MessageBoxButtons.AbortRetryIgnore;
-				else if (flags.HasFlag(MsgBoxFlags.Btn_YesNoCancel)) btn = MessageBoxButtons.YesNoCancel;
-				else if (flags.HasFlag(MsgBoxFlags.Btn_YesNo)) btn = MessageBoxButtons.YesNo;
-				else if (flags.HasFlag(MsgBoxFlags.Btn_RetryCancel)) btn = MessageBoxButtons.RetryCancel;
+				MsgBoxFlags btnFlags = (MsgBoxFlags)((uint)flags & 0x00_00_00_ff);
+				MessageBoxButtons btn = btnFlags switch
+				{
+					MsgBoxFlags.Btn_OKCancel => MessageBoxButtons.OKCancel,
+					MsgBoxFlags.Btn_AbortRetryIgnore => MessageBoxButtons.AbortRetryIgnore,
+					MsgBoxFlags.Btn_YesNoCancel => MessageBoxButtons.YesNoCancel,
+					MsgBoxFlags.Btn_YesNo => MessageBoxButtons.YesNo,
+					MsgBoxFlags.Btn_RetryCancel => MessageBoxButtons.RetryCancel,
 #if NET6_0_OR_GREATER
-				else if (flags.HasFlag(MsgBoxFlags.Btn_CancelTryContinue)) btn = MessageBoxButtons.CancelTryContinue;
+					MsgBoxFlags.Btn_CancelTryContinue => MessageBoxButtons.CancelTryContinue,
 #endif
+					_ => MessageBoxButtons.OK
+				};
 
-				MessageBoxIcon icn = MessageBoxIcon.None;
-				if (flags.HasFlag(MsgBoxFlags.Icn_Hand)) icn = MessageBoxIcon.Hand;
-				else if (flags.HasFlag(MsgBoxFlags.Icn_Stop)) icn = MessageBoxIcon.Stop;
-				else if (flags.HasFlag(MsgBoxFlags.Icn_Error)) icn = MessageBoxIcon.Error;
-				else if (flags.HasFlag(MsgBoxFlags.Icn_Question)) icn = MessageBoxIcon.Question;
-				else if (flags.HasFlag(MsgBoxFlags.Icn_Exclamation)) icn = MessageBoxIcon.Exclamation;
-				else if (flags.HasFlag(MsgBoxFlags.Icn_Warning)) icn = MessageBoxIcon.Warning;
-				else if (flags.HasFlag(MsgBoxFlags.Icn_Asterisk)) icn = MessageBoxIcon.Asterisk;
-				else if (flags.HasFlag(MsgBoxFlags.Icn_Information)) icn = MessageBoxIcon.Information;
+				MsgBoxFlags iconFlags = (MsgBoxFlags)((uint)flags & 0x00_00_ff_00);
+				MessageBoxIcon icn = iconFlags switch
+				{
+					MsgBoxFlags.Icn_Hand => MessageBoxIcon.Hand,
+					MsgBoxFlags.Icn_Stop => MessageBoxIcon.Stop,
+					MsgBoxFlags.Icn_Error => MessageBoxIcon.Error,
+					MsgBoxFlags.Icn_Question => MessageBoxIcon.Question,
+					MsgBoxFlags.Icn_Exclamation => MessageBoxIcon.Exclamation,
+					MsgBoxFlags.Icn_Warning => MessageBoxIcon.Warning,
+					MsgBoxFlags.Icn_Asterisk => MessageBoxIcon.Asterisk,
+					MsgBoxFlags.Icn_Information => MessageBoxIcon.Information,
+					_ => MessageBoxIcon.None
+				};
 
-				MessageBoxDefaultButton dbtn = MessageBoxDefaultButton.Button1;
-				if (flags.HasFlag(MsgBoxFlags.DefBtn_2)) dbtn = MessageBoxDefaultButton.Button2;
-				else if (flags.HasFlag(MsgBoxFlags.DefBtn_3)) dbtn = MessageBoxDefaultButton.Button3;
+
+
+				MsgBoxFlags defBtnFlags = (MsgBoxFlags)((uint)flags & 0x00_ff_00_00);
+				MessageBoxDefaultButton dbtn = defBtnFlags switch
+				{
+					MsgBoxFlags.DefBtn_2 => MessageBoxDefaultButton.Button2,
+					MsgBoxFlags.DefBtn_3 => MessageBoxDefaultButton.Button3,
 #if NET6_0_OR_GREATER
-				else if (flags.HasFlag(MsgBoxFlags.DefBtn_4)) dbtn = MessageBoxDefaultButton.Button4;
+					MsgBoxFlags.DefBtn_4 => MessageBoxDefaultButton.Button4,
 #endif
+					_ => MessageBoxDefaultButton.Button1
+				};
 
 				return (btn, icn, dbtn);
 			}
@@ -3952,7 +4057,7 @@ return cItems;
 
 			[DebuggerNonUserCode, DebuggerStepThrough]
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static DialogResult e_MsgboxShow(
+			public static DialogResult eMsgboxShow(
 				this string msg,
 				MsgBoxFlags? flags = MsgBoxFlags.Btn_OK | MsgBoxFlags.Icn_Information | MsgBoxFlags.DefBtn_1,
 				string? title = null)
@@ -3968,13 +4073,15 @@ return cItems;
 
 			[DebuggerNonUserCode, DebuggerStepThrough]
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_MsgboxError(this Exception ex, string? title = null)
+			public static void eMsgboxError(this Exception ex, string? title = null)
 			{
-				ex.Message.e_MsgboxShow((MsgBoxFlags.Btn_OK | MsgBoxFlags.Icn_Error));
+				ex.Message.eMsgboxShow((MsgBoxFlags.Btn_OK | MsgBoxFlags.Icn_Error));
 			}
 
 
-			public static DialogResult e_MsgboxAsk(
+			[DebuggerNonUserCode, DebuggerStepThrough]
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static DialogResult eMsgboxAsk(
 				this string question,
 				bool defButtonYes = true,
 				string? title = null)
@@ -3984,21 +4091,25 @@ return cItems;
 					? MsgBoxFlags.DefBtn_1
 					: MsgBoxFlags.DefBtn_2);
 
-				return question.e_MsgboxShow(flg, title);
+				return question.eMsgboxShow(flg, title);
 			}
 
-			public static bool e_MsgboxAskIsYes(
+			[DebuggerNonUserCode, DebuggerStepThrough]
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static bool eMsgboxAskIsYes(
 				this string question,
 				bool defButtonYes = true,
 				string? title = null)
-				=> question.e_MsgboxAsk(defButtonYes, title) == DialogResult.Yes;
+				=> question.eMsgboxAsk(defButtonYes, title) == DialogResult.Yes;
 
 
-			public static DialogResult e_MsgboxWithCheckboxAsk(
+			[DebuggerNonUserCode, DebuggerStepThrough]
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static DialogResult eMsgboxWithCheckboxAsk(
 				this string question,
 				string dialogID,
 				bool defButtonYes = true,
-				string? checkBoxText = DEFAULT_CHECKBOX_TEXT,
+				string? checkBoxText = uom.UI.MessageBoxWithCheckbox.DEFAULT_CHECKBOX_TEXT,
 				string? title = null)
 			{
 				MsgBoxFlags flg = MsgBoxFlags.Btn_YesNo | MsgBoxFlags.Icn_Question
@@ -4008,47 +4119,46 @@ return cItems;
 
 				var ff = ParseMsgboxFlags(flg);
 
-				DialogResult dr = uom.MessageBoxWithCheckbox.MessageBox.ShowDialog(
-						dialogID,
-						question,
-						title,
-						checkBoxText,
-						ff.Buttons,
-						ff.Icon,
-						ff.DefaultButton);
+				DialogResult dr = uom.UI.MessageBoxWithCheckbox.ShowDialog(
+					dialogID,
+					question,
+					title,
+					checkBoxText,
+					ff.Buttons,
+					ff.Icon,
+					ff.DefaultButton);
 
 				return dr;
 			}
 
-			public static void e_MsgboxWithCheckboxClearLastUserAnswer(this string dialogID)
-				=> uom.MessageBoxWithCheckbox.MessageBox.ClearLastUserAnswer(dialogID);
 
-		}
-
-
-		[EditorBrowsable(EditorBrowsableState.Never)]
-		internal static class Extensions_Controls
-		{
-
-
-
-			/// <inheritdoc cref="uom.OS.GetHighDPIScaleFactor" />
+			[DebuggerNonUserCode, DebuggerStepThrough]
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static float e_GetHighDPIScaleFactor(this Control ctl)
-				=> uom.OS.GetHighDPIScaleFactor(ctl.Handle);
+			public static void eMsgboxWithCheckboxClearLastUserAnswer(this string dialogID)
+				=> uom.UI.MessageBoxWithCheckbox.ClearLastUserAnswer(dialogID);
+
+
+
+
+
+
+			/// <inheritdoc cref="uom.WinAPI.windows.GetHighDPIScaleFactor" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static float eGetHighDPIScaleFactor(this Control ctl)
+				=> uom.WinAPI.windows.GetHighDPIScaleFactor(ctl.Handle);
 
 			#region ShortcutKeys to/from string
 
 			/// <summary>Converts Keys value to shortcut keys string like 'Ctrl+I' </summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_ToShortcutKeysString(this System.Windows.Forms.Keys eKey)
+			public static string eToShortcutKeysString(this System.Windows.Forms.Keys eKey)
 				=> (string)(new KeysConverter().ConvertTo(eKey, typeof(string))!);
 
 
 			/// <summary>Converts shortcut keys string to Keys value</summary>
 			/// <param name="sKeys">Sample 'Ctrl+I'</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static System.Windows.Forms.Keys e_ToShortcutKeys(this string sKeys)
+			public static System.Windows.Forms.Keys eToShortcutKeys(this string sKeys)
 				=> (Keys)(new KeysConverter().ConvertFrom(sKeys)!);
 
 			#endregion
@@ -4066,70 +4176,133 @@ return cItems;
 
 
 
+			/*
+	/// <summary>MT Safe call code in UI thread.</summary>
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public static void eRunInUIThread(this Control context, System.Windows.Forms.MethodInvoker code)
+	{
+	#region SAMPLE WITH RETURN VALUE:
 
-			/// <summary>MT Safe call code in UI thread.</summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunInUIThread(this Control context, MethodInvoker code)
-			{
-				#region SAMPLE WITH RETURN VALUE:
-				/*
-				lstvwgrp.ListView.e_RunInUIThread(delegate
-				{
-					result = SendMessage(lstvwgrp.ListView.Handle, ListViewMessages.LVM_SETGROUPINFO, groupId, ref group);
-				});
-				return result;
-				 */
-				#endregion
+	//lstvwgrp.ListView.eRunInUIThread(delegate
+	//{
+	//	result = SendMessage(lstvwgrp.ListView.Handle, ListViewMessages.LVM_SETGROUPINFO, groupId, ref group);
+	//});
+	//return result;
 
-				#region SAMPLE WITHOUT RETURN VALUE:
-				/*
-				  lstvwgrp.ListView.e_RunInUIThread(delegate
-				  {
-					  SendMessage(lstvwgrp.ListView.Handle, ListViewMessages.LVM_SETGROUPINFO, groupId, ref group);
-				  });
-				  */
-				#endregion
+	#endregion
 
-				_ = context ?? throw new ArgumentNullException(nameof(context));
-				_ = code ?? throw new ArgumentNullException(nameof(code));
+	#region SAMPLE WITHOUT RETURN VALUE:
 
-				if (!context.IsHandleCreated || context.IsDisposed) return;
+	//lstvwgrp.ListView.eRunInUIThread(delegate
+	//{
+	//	SendMessage(lstvwgrp.ListView.Handle, ListViewMessages.LVM_SETGROUPINFO, groupId, ref group);
+	//});
 
-				if (context.InvokeRequired)
-				{
-					try { context.Invoke(code); }
-					/*
-					catch (System.ObjectDisposedException odex) { }
-					 */
-					catch { }
-					return;
-				}
-				code.Invoke();
-			}
+	#endregion
+
+	_ = context ?? throw new ArgumentNullException(nameof(context));
+	_ = code ?? throw new ArgumentNullException(nameof(code));
+
+	if (!context.IsHandleCreated || context.IsDisposed) return;
+	if (context.InvokeRequired)
+	{
+	try { context.Invoke(code); }
+	catch { }
+	}
+	else
+	code.Invoke();
+	}
+			 */
+
+
 
 
 			/// <summary>ThreadSafe excute action in control UI thread
-			/// <param name="context">Control in which UI thread action e_runutes</param>
-			/// <param name="useBeginInvoke">If true - used BeginInvoke, else used Invoke</param>
+			/// <param name="context">Control in which UI thread action erunutes</param>
+			/// <param name="asyncInvoke">If true - used BeginInvoke, else used Invoke</param>
 			/// <param name="onError">Any action when Error occurs</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunInUIThread(this Control context, Action a, bool useBeginInvoke = false, Action<Exception>? onError = null)
+			public static void eRunInUIThread(this Control context, Action a, bool asyncInvoke = false, Action<Exception>? onError = null)
 			{
 				_ = context ?? throw new ArgumentNullException(nameof(context));
 				_ = a ?? throw new ArgumentNullException(nameof(a));
 				if (!context.IsHandleCreated || context.IsDisposed) return;
 				try
 				{
-					if (useBeginInvoke) { context.BeginInvoke(a); return; }
-					if (context.InvokeRequired) { context.Invoke(a); return; }
-					a.Invoke();
+					if (asyncInvoke)
+					{
+						context.BeginInvoke(a);
+					}
+					else if (context.InvokeRequired)
+					{
+						context.Invoke(a);
+					}
+					else
+					{
+						a.Invoke();
+					}
+				}
+				catch (Exception EX) { onError?.Invoke(EX); }
+			}
+
+
+			/// <summary>ThreadSafe excute action in control UI thread
+			/// <param name="context">Control in which UI thread action erunutes</param>
+			/// <param name="useBeginInvoke">If true - used BeginInvoke, else used Invoke</param>
+			/// <param name="onError">Any action when Error occurs</param>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static T? eRunInUIThread<T>(this Control context, Func<T> a, Action<Exception>? onError = null)
+			{
+				_ = context ?? throw new ArgumentNullException(nameof(context));
+				_ = a ?? throw new ArgumentNullException(nameof(a));
+				if (!context.IsHandleCreated || context.IsDisposed) return default;
+				try
+				{
+					if (context.InvokeRequired)
+					{
+						return (T)context.Invoke(a);
+					}
+					return a.Invoke();
+				}
+				catch (Exception EX)
+				{
+					onError?.Invoke(EX);
+					return default;
+				}
+			}
+
+			/// <summary>ThreadSafe excute action in control UI thread
+			/// <param name="context">Control in which UI thread action erunutes</param>
+			/// <param name="onError">Any action when Error occurs</param>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static async Task eRunInUIThreadAsync(this Control context, Func<Task> a, Action<Exception>? onError = null)
+			{
+				_ = context ?? throw new ArgumentNullException(nameof(context));
+				_ = a ?? throw new ArgumentNullException(nameof(a));
+
+				if (!context.IsHandleCreated || context.IsDisposed) return;
+				try
+				{
+					if (context.InvokeRequired)
+					{
+#if NET
+						await context.Invoke(a);
+#else
+						await Task.Delay(1);
+						context.Invoke(a);
+#endif
+					}
+					else
+					{
+						await a.Invoke();
+					}
 				}
 				catch (Exception EX) { onError?.Invoke(EX); }
 			}
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunWhenHandleReady<T>(this T ctl, Action<Control> HandleReadyAction) where T : Control
+			public static void eRunWhenHandleReady<T>(this T ctl, Action<Control> HandleReadyAction) where T : Control
 			{
 				_ = ctl ?? throw new ArgumentNullException(nameof(ctl));
 
@@ -4152,14 +4325,14 @@ return cItems;
 
 			/// <summary>MT Safe</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunInUIThread_AppendText(this TextBox ctl, string Text)
-				=> ctl.e_RunInUIThread(() => { ctl.AppendText(Text); ctl.Update(); });
+			public static void eRunInUIThread_AppendText(this TextBox ctl, string Text)
+				=> ctl.eRunInUIThread(() => { ctl.AppendText(Text); ctl.Update(); });
 
 #if NET6_0_OR_GREATER
 			/// <summary>MT Safe</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunInUIThread_AppendLine(this TextBox ctl, string Text, int limitLinesCount = 0)
-				=> ctl.e_RunInUIThread(() =>
+			public static void eRunInUIThread_AppendLine(this TextBox ctl, string Text, int limitLinesCount = 0)
+				=> ctl.eRunInUIThread(() =>
 				{
 					if (limitLinesCount > 0)
 					{
@@ -4172,50 +4345,20 @@ return cItems;
 
 			/// <summary>MT Safe</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunInUIThread_SetText(this Control ctl, string Text)
-				=> ctl.e_RunInUIThread(() => { ctl.Text = Text; ctl.Update(); });
+			public static void eRunInUIThread_SetText(this Control ctl, string Text)
+				=> ctl.eRunInUIThread(() => { ctl.Text = Text; ctl.Update(); });
 
 			/// <summary>MT Safe</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunInUIThread_SetText(this ToolStripItem ctl, string Text, Form? frmUI = null)
+			public static void eRunInUIThread_SetText(this ToolStripItem ctl, string Text, Form? frmUI = null)
 			{
 				_ = ctl ?? throw new ArgumentNullException(nameof(ctl));
 				frmUI ??= ctl.GetCurrentParent()?.FindForm();//If form not specifed = search form...
 															 //_ = frmUI ?? throw new ArgumentNullException("ToolStripItem.GetCurrentParent.FindForm() = NULL!");
-				frmUI?.e_RunInUIThread(() => { if (frmUI.IsHandleCreated && !frmUI.IsDisposed && !ctl.IsDisposed) ctl.Text = Text; });
+				frmUI?.eRunInUIThread(() => { if (frmUI.IsHandleCreated && !frmUI.IsDisposed && !ctl.IsDisposed) ctl.Text = Text; });
 			}
 
-			// TODO: List View NF
-			///// <summary>Потокобезопасное обновление свойства</summary>
-			////[ MethodImpl(MethodImplOptions.AggressiveInlining)]
-			////public static void e_RunInUIThread_SetEmptyText(this UOM.WinAPI.WinControls.ListView.ListViewNF Ctl, string Text) => Ctl.e_RunInUIThread(new Action(() => { Ctl.EmptyText = Text; Ctl.Update(); }));
-			//// ''<summary>Потокобезопасный вызов процедуры в потоке UI элемента, без параметра.
-			//// ''Любые ошибки игнорируются</summary>
-			//// '' <param name="ctlUIThreadControl">Элемент, в потоке которого будет вызываться код</param>
-			//// '' <param name="bAsync">Если асинхронно, то будет использоваться BeginInvoke, иначе Invoke</param>
-			// <DebuggerNonUserCode, DebuggerStepThrough>
-			// <MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
-			// Public Async Sub e_RunInUIThreadAwait(ByVal ctlUIThreadControl As Control,
-			// ByVal A As Task,
-			// Optional ByVal bAsync As bool  = False)
-			// If (UIThreadCtl Is Nothing) OrElse (A Is Nothing) Then Return
-			// If (ctlUIThreadControl Is Nothing) Then Throw New ArgumentNullException("UIThreadCtl")
-			// If (A Is Nothing) Then Throw New ArgumentNullException("Action")
-			// If (Not ctlUIThreadControl.IsHandleCreated) OrElse (ctlUIThreadControl.IsDisposed) Then Return
-			// Try
-			// If (bAsync) Then
-			// Await ctlUIThreadControl.BeginInvoke(A)
-			// Return
-			// End If
-			// If (ctlUIThreadControl.InvokeRequired) Then
-			// Await Call ctlUIThreadControl.Invoke(A)
-			// Else
-			// Await A()
-			// End If
-			// Catch odex As ObjectDisposedException
-			// 
-			// End Try
-			// End Sub
+
 
 			#endregion
 
@@ -4223,40 +4366,54 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_AttachCloseFormWhenEsc(this Form f)
+			public static void eAttach_CloseOnEsc(this Form f)
 			{
 				f.KeyPreview = true;
 				f.KeyDown += (s, e) =>
 				{
 					Form f2 = (Form)s!;
-					//f.base.OnKeyDown(e);
 					if (e.KeyCode == Keys.Escape) f2.DialogResult = DialogResult.Cancel;
 				};
 			}
 
 
-			#region CloseFormWhenClick
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_CloseFormWhenClick(this Form F, System.Windows.Forms.ToolStripMenuItem MI)
-				=> MI.Click += (_, _) => F?.e_CloseSafe();
+			public static void eAttach_PositionAndStateSaver(this Form ctx, [CallerMemberName] string caller = "")
+				=> UI.FormPositionInfo.Attach(ctx, caller);
+
+
+
+			#region eAttach_CloseOnClick
+
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_CloseFormWhenClick(this Form F, Button Ctl)
-				=> Ctl.Click += (_, _) => F?.e_CloseSafe();
+			public static void eAttach_CloseOnClick(this Form ctx, System.Windows.Forms.ToolStripMenuItem MI)
+				=> MI.Click += (_, _) => ctx?.eCloseSafe();
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			private static void e_CloseSafe(this Form F) => F?.e_RunInUIThread(() => F?.Close());
+			public static void eAttach_CloseOnClick(this Form ctx, Button Ctl)
+				=> Ctl.Click += (_, _) => ctx?.eCloseSafe();
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private static void eCloseSafe(this Form f) => f?.eRunInUIThread(() => f?.Close());
+
+
 			#endregion
+
+
+
+
+
 
 
 			/// <summary>Executes after form shown on screen, with specifed delay.
 			/// Delay starts after 'Form.Shown' ebent</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_runOnFormClosed(this Form context, Action action, bool ignoreExceptions = false)
+			internal static void eAttach_RunOnClosed(this Form ctx, Action action, bool ignoreExceptions = false)
 			{
-				_ = context ?? throw new ArgumentNullException(nameof(context));
+				_ = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
-				context.FormClosed += (ctx, ea) =>
+				ctx.FormClosed += (ctx, ea) =>
 				{
 					try { action.Invoke(); }
 					catch
@@ -4265,106 +4422,45 @@ return cItems;
 			}
 
 
+
+
+
 			#region runDelayed 
 
 			internal const int DEFAULT_DELAY = 100;
-			internal const int DEFAULT_DELAY_AFTER_SHOWN = 500;
+			internal const int DEFAULT_FORM_SHOWN_DELAY = 500;
 
 
-			/// <summary>Executes after form shown on screen, with specifed delay.
-			/// Delay starts after 'Form.Shown' ebent</summary>
+
+
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_runDelayedOnFormShown(
-				this Form context,
-				Action action,
-				int delay = DEFAULT_DELAY_AFTER_SHOWN,
-				bool OnErrorShowMessage = true,
-				bool OnErrorCloseForm = true,
-				bool UseWaitCursor = true)
+			internal static System.Windows.Forms.Timer eRunDelayedTask(this Func<Task> delayedAction, int delay = DEFAULT_DELAY)
 			{
-				_ = context ?? throw new ArgumentNullException(nameof(context));
-				if (UseWaitCursor) context.UseWaitCursor = true;
+				delayedAction.ThrowIfNull();
 
-				// attaching to form.Shown event.
-				context.Shown += async (ctx, ea) =>
+				//Use 'System.Windows.Forms.Timer' that uses some thread with caller to raise events
+				System.Windows.Forms.Timer tmrDelay = new()
 				{
-					await System.Threading.Tasks.Task.Delay(delay);
-					context = (Form)ctx!;
-					try
-					{
-						try { action.Invoke(); }
-						finally { if (UseWaitCursor) context.UseWaitCursor = false; }
-					}
-					catch (Exception ex)
-					{
-						ex.e_LogError(OnErrorShowMessage);
-						if (OnErrorCloseForm) context.Close();
-					}
+					Interval = delay,
+					Enabled = false //do not start timer untill we finish it's setup
 				};
-			}
 
-
-			/// <summary>Executes after form shown on screen, with specifed delay.
-			/// Delay starts after 'Form.Shown' ebent</summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_runDelayedOnFormShown(
-				this Form context,
-				IEnumerable<Task> tasks,
-				bool startTasks,
-				int delay = DEFAULT_DELAY_AFTER_SHOWN,
-				bool OnErrorShowMessage = true,
-				bool OnErrorCloseForm = true,
-				bool UseWaitCursor = true)
-			{
-				_ = context ?? throw new ArgumentNullException(nameof(context));
-				if (UseWaitCursor) context.UseWaitCursor = true;
-
-				// Подключаем обработчик, к события показа формы на экране, Будет выполнено в потоке формы, по событию F.Shown
-				context.Shown += async (ctx, ea) =>
+				tmrDelay.Tick += async (s, e) =>
 				{
-					await System.Threading.Tasks.Task.Delay(delay);
-					context = (Form)ctx!;
+					System.Windows.Forms.Timer tmr = (System.Windows.Forms.Timer)s!;
+					//first stop and dispose our timer, to avoid double erunution
+					tmr.Stop();
 
-					// В потоке формы выполняем заданные действия
-					try
-					{
-						try
-						{
-							if (startTasks) foreach (var TSK in tasks) TSK.Start();
-							await Task.WhenAll(tasks);
-						}
-						finally { if (UseWaitCursor) context.UseWaitCursor = false; }
-					}
-					catch (Exception ex)
-					{
-						ex.e_LogError(OnErrorShowMessage);
-						if (OnErrorCloseForm) context.Close();
-					}
+					//Now start action incontrols UI thread
+					await delayedAction.Invoke();
+					tmr.Dispose();
 				};
+
+				tmrDelay.Start();//Start delay timer
+
+				//We need to avoid dispose timer after exit this proc
+				return tmrDelay;
 			}
-
-
-			/// <summary>Executes after form shown with specifed delay. Delay starts after 'Form.Shown'</summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_runDelayedOnFormShown(
-				this Form context,
-				Task task,
-				bool startTasks,
-				int delay = DEFAULT_DELAY_AFTER_SHOWN,
-				bool OnErrorShowMessage = true,
-				bool OnErrorCloseForm = true,
-				bool UseFormWaitCursor = true)
-					=> context.e_runDelayedOnFormShown(new[] { task }, startTasks, delay, OnErrorShowMessage, OnErrorCloseForm, UseFormWaitCursor);
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_runDelayed_SetFocus(this Form F, int delay = DEFAULT_DELAY_AFTER_SHOWN)
-				=> F?.e_runDelayedOnFormShown(delegate
-				{
-					F?.Focus();
-					F?.Activate();
-					F?.BringToFront();
-				}, delay);
 
 
 			/// <summary>
@@ -4372,64 +4468,166 @@ return cItems;
 			/// For example, if some data will be ready only after exiting the control event handler processing branch
 			/// </summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunDelayed(
-				this Control ctl,
-				Action delayedAction,
-				int DelayInterval = DEFAULT_DELAY)
+			internal static System.Windows.Forms.Timer eRunDelayed(this Action delayedAction, int delay = DEFAULT_DELAY)
 			{
-				ctl.ThrowIfNull();//ArgumentNullException.ThrowIfNull(ctl);
-				delayedAction.ThrowIfNull();//ArgumentNullException.ThrowIfNull(delayedAction);
-
-				//Use 'System.Windows.Forms.Timer' that uses some thread with caller to raise events
-				System.Windows.Forms.Timer tmrDelay = new()
-				{
-					Interval = DelayInterval,
-					Enabled = false //do not start timer untill we finish it's setup
-				};
-				tmrDelay.Tick += (s, e) =>
-				{
-					System.Windows.Forms.Timer tmr = (System.Windows.Forms.Timer)s!;
-					//first stop and dispose our timer, to avoid double e_runution
-					tmr.Stop();
-					//Now start action incontrols UI thread
-					ctl.Invoke(delayedAction);
-					tmr.Dispose();
-				};
-
-				//Start delay timer
-				tmrDelay.Start();
-			}
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_RunDelayedAsync(
-				this Control ctl,
-				Task delayedAction,
-				int DelayInterval = DEFAULT_DELAY)
-			{
-				ctl.ThrowIfNull();
 				delayedAction.ThrowIfNull();
 
 				//Use 'System.Windows.Forms.Timer' that uses some thread with caller to raise events
 				System.Windows.Forms.Timer tmrDelay = new()
 				{
-					Interval = DelayInterval,
+					Interval = delay,
 					Enabled = false //do not start timer untill we finish it's setup
 				};
-
-				tmrDelay.Tick += async (s, e) =>
+				tmrDelay.Tick += (_, _) =>
 				{
-					System.Windows.Forms.Timer tmr = (System.Windows.Forms.Timer)s!;
-					//first stop and dispose our timer, to avoid double e_runution
-					tmr.Stop();
+					//first stop and dispose our timer, to avoid double erunution
+					tmrDelay.Stop();
+					tmrDelay.Dispose();
 
-					//Now start action incontrols UI thread
-					await delayedAction;
-					tmr.Dispose();
+					//Now start action
+					delayedAction.Invoke();
 				};
 
-				tmrDelay.Start();//Start delay timer
+				//Start delay timer
+				tmrDelay.Start();
+
+				//We need to avoid dispose timer after exit this proc
+				return tmrDelay;
 			}
+
+
+
+
+			private static Lazy<Dictionary<System.Guid, System.Windows.Forms.Timer>> _timersStorage = new(() => []);
+			/// <summary>
+			/// Usually used when you need to do an action with a slight delay after exiting the current method. 
+			/// For example, if some data will be ready only after exiting the control event handler processing branch
+			/// </summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void eRunDelayedInUIThread(this Control ctx, Action delayedAction, int delay = DEFAULT_DELAY)
+			{
+				var id = System.Guid.NewGuid();
+				var tmr = eRunDelayed(() =>
+				{
+					lock (_timersStorage)
+					{
+						var dic = _timersStorage.Value;
+						if (dic.ContainsKey(id)) dic.Remove(id);
+					}
+					ctx!.Invoke(delayedAction);
+				}
+				, delay);
+
+				lock (_timersStorage)
+				{
+					_timersStorage.Value.Add(id, tmr);
+				}
+			}
+
+
+			/// <summary>Executes 'delayedAction' after form shown on screen, with specifed delay in UI Thread.
+			/// Delay starts after 'Form.Shown' event</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void eRunDelayed_OnShown(
+				this Form ctx,
+				Action delayedAction,
+				int delay = DEFAULT_FORM_SHOWN_DELAY,
+				bool useWaitCursor = true,
+				bool onErrorShowUI = true,
+				Action<Exception>? onError = null,
+				bool onErrorCloseForm = true
+				)
+			{
+				async Task t()
+				{
+					await Task.Delay(1);
+					delayedAction.Invoke();
+				}
+
+				ctx!.eRunDelayed_OnShown(t, delay, useWaitCursor, onErrorShowUI, onError, onErrorCloseForm);
+			}
+
+
+			/// <inheritdoc cref="eRunDelayed_OnShown" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void eRunDelayed_OnShown(
+				this Form ctx,
+				IEnumerable<Func<Task>> delayedTasks,
+				int delay = DEFAULT_FORM_SHOWN_DELAY,
+				bool useWaitCursor = true,
+				bool onErrorShowUI = true,
+				Action<Exception>? onError = null,
+				bool onErrorCloseForm = true)
+			{
+				async Task onShown()
+				{
+					await Task.Delay(delay);
+
+					if (useWaitCursor && !ctx.UseWaitCursor) ctx.UseWaitCursor = true;
+					try
+					{
+						foreach (var tsk in delayedTasks) await tsk.Invoke();
+					}
+					catch (OperationCanceledException) { }                 //catch (TaskCanceledException tcex) { }
+					catch (Exception ex)
+					{
+						ex.eLogError(onErrorShowUI);
+						onError?.Invoke(ex);
+						if (onErrorCloseForm) ctx.Close();
+					}
+					finally
+					{
+						if (useWaitCursor && ctx.UseWaitCursor) ctx.UseWaitCursor = false;
+					}
+
+				}
+				ctx!.Shown += async (_, _) => await onShown();
+			}
+
+
+			/// <inheritdoc cref="eRunDelayed_OnShown" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void eRunDelayed_OnShown(
+				this Form ctx,
+				Func<Task> delayedTask,
+				int delay = DEFAULT_FORM_SHOWN_DELAY,
+				bool useWaitCursor = true,
+				bool onErrorShowUI = true,
+				Action<Exception>? onError = null,
+				bool onErrorCloseForm = true)
+					=> ctx.eRunDelayed_OnShown([delayedTask], delay, useWaitCursor, onErrorShowUI, onError, onErrorCloseForm);
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void eRunDelayed_OnShown_SetFocus(this Form ctx, int delay = DEFAULT_FORM_SHOWN_DELAY)
+				=> ctx?.eRunDelayed_OnShown(delegate
+				{
+					ctx?.Focus();
+					ctx?.Activate();
+					ctx?.BringToFront();
+				}, delay);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -4438,105 +4636,105 @@ return cItems;
 
 
 			/*
-	public static async Task e_InvokeAsync(this Control ctl,
-	 Func<Task> invokeDelegate,
-	 TimeSpan timeOutSpan = default,
-	 CancellationToken cancellationToken = default,
-	 params object[] args)
-	{
-	 var tokenRegistration = default(CancellationTokenRegistration);
-	 RegisteredWaitHandle? registeredWaitHandle = null;
+			public static async Task eInvokeAsync(this Control ctl,
+			Func<Task> invokeDelegate,
+			TimeSpan timeOutSpan = default,
+			CancellationToken cancellationToken = default,
+			params object[] args)
+			{
+			var tokenRegistration = default(CancellationTokenRegistration);
+			RegisteredWaitHandle? registeredWaitHandle = null;
 
-	 try
-	 {
-		 TaskCompletionSource<bool> taskCompletionSource = new();
-		 IAsyncResult? asyncResult = ctl.BeginInvoke(invokeDelegate, args);
+			try
+			{
+			TaskCompletionSource<bool> taskCompletionSource = new();
+			IAsyncResult? asyncResult = ctl.BeginInvoke(invokeDelegate, args);
 
-		 registeredWaitHandle = ThreadPool.RegisterWaitForSingleObject(
+			registeredWaitHandle = ThreadPool.RegisterWaitForSingleObject(
 			 asyncResult.AsyncWaitHandle,
 			 new WaitOrTimerCallback(InvokeAsyncCallBack),
 			 taskCompletionSource,
 			 timeOutSpan.Milliseconds,
 			 true);
 
-		 tokenRegistration = cancellationToken.Register(
+			tokenRegistration = cancellationToken.Register(
 			 CancellationTokenRegistrationCallBack,
 			 taskCompletionSource);
 
-		 await taskCompletionSource.Task;
+			await taskCompletionSource.Task;
 
-		 object? returnObject = ctl.EndInvoke(asyncResult);
-		 return;
-	 }
-	 finally
-	 {
-		 registeredWaitHandle?.Unregister(null);
-		 tokenRegistration.Dispose();
-	 }
+			object? returnObject = ctl.EndInvoke(asyncResult);
+			return;
+			}
+			finally
+			{
+			registeredWaitHandle?.Unregister(null);
+			tokenRegistration.Dispose();
+			}
 
-	 static void CancellationTokenRegistrationCallBack(object? state)
-	 {
-		 if (state is TaskCompletionSource<bool> source)
+			static void CancellationTokenRegistrationCallBack(object? state)
+			{
+			if (state is TaskCompletionSource<bool> source)
 			 source.TrySetCanceled();
-	 }
+			}
 
-	 static void InvokeAsyncCallBack(object? state, bool timeOut)
-	 {
-		 if (state is TaskCompletionSource<bool> source)
+			static void InvokeAsyncCallBack(object? state, bool timeOut)
+			{
+			if (state is TaskCompletionSource<bool> source)
 			 source.TrySetResult(timeOut);
-	 }
-	}
+			}
+			}
 
-	public static async Task<T> e_InvokeAsync<T>(this Control ctl,
-	 Func<Task> invokeDelegate,
-	 TimeSpan timeOutSpan = default,
-	 CancellationToken cancellationToken = default,
-	 params object[] args)
-	{
-	 var tokenRegistration = default(CancellationTokenRegistration);
-	 RegisteredWaitHandle? registeredWaitHandle = null;
+			public static async Task<T> eInvokeAsync<T>(this Control ctl,
+			Func<Task> invokeDelegate,
+			TimeSpan timeOutSpan = default,
+			CancellationToken cancellationToken = default,
+			params object[] args)
+			{
+			var tokenRegistration = default(CancellationTokenRegistration);
+			RegisteredWaitHandle? registeredWaitHandle = null;
 
-	 try
-	 {
-		 TaskCompletionSource<bool> taskCompletionSource = new();
-		 IAsyncResult? asyncResult = ctl.BeginInvoke(invokeDelegate, args);
+			try
+			{
+			TaskCompletionSource<bool> taskCompletionSource = new();
+			IAsyncResult? asyncResult = ctl.BeginInvoke(invokeDelegate, args);
 
-		 registeredWaitHandle = ThreadPool.RegisterWaitForSingleObject(
+			registeredWaitHandle = ThreadPool.RegisterWaitForSingleObject(
 			 asyncResult.AsyncWaitHandle,
 			 new WaitOrTimerCallback(InvokeAsyncCallBack),
 			 taskCompletionSource,
 			 timeOutSpan.Milliseconds,
 			 true);
 
-		 tokenRegistration = cancellationToken.Register(
+			tokenRegistration = cancellationToken.Register(
 			 CancellationTokenRegistrationCallBack,
 			 taskCompletionSource);
 
-		 await taskCompletionSource.Task;
+			await taskCompletionSource.Task;
 
-		 object? returnObject = ctl.EndInvoke(asyncResult);
-		 return (T)returnObject;
-	 }
-	 finally
-	 {
-		 registeredWaitHandle?.Unregister(null);
-		 tokenRegistration.Dispose();
-	 }
+			object? returnObject = ctl.EndInvoke(asyncResult);
+			return (T)returnObject;
+			}
+			finally
+			{
+			registeredWaitHandle?.Unregister(null);
+			tokenRegistration.Dispose();
+			}
 
-	 static void CancellationTokenRegistrationCallBack(object? state)
-	 {
-		 if (state is TaskCompletionSource<bool> source)
+			static void CancellationTokenRegistrationCallBack(object? state)
+			{
+			if (state is TaskCompletionSource<bool> source)
 			 source.TrySetCanceled();
-	 }
+			}
 
-	 static void InvokeAsyncCallBack(object? state, bool timeOut)
-	 {
-		 if (state is TaskCompletionSource<bool> source)
+			static void InvokeAsyncCallBack(object? state, bool timeOut)
+			{
+			if (state is TaskCompletionSource<bool> source)
 			 source.TrySetResult(timeOut);
-	 }
-	}
+			}
+			}
 
-	   */
+			*/
 
 
 			#endregion
@@ -4550,7 +4748,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static bool e_tryOnWaitCursor(
+			public static bool etryOnWaitCursor(
 					this Form f,
 					Action a,
 					bool showErrorMessageBox = true,
@@ -4596,7 +4794,7 @@ return cItems;
 #if NETFRAMEWORK
 
 			[ MethodImpl(MethodImplOptions.AggressiveInlining)]
-			private static void e_SetIcon_Core<t>(this t Ctl, System.Drawing.Icon rIcon) where t : class
+			private static void eSetIcon_Core<t>(this t Ctl, System.Drawing.Icon rIcon) where t : class
 			{
 				switch (Ctl)
 				{
@@ -4641,11 +4839,11 @@ return cItems;
 			#endregion
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static bool e_ShowDialog_OK(this Form FormToShow, Form? ParentForm = null)
+			public static bool eShowDialog_OK(this Form FormToShow, Form? ParentForm = null)
 				=> ((null == ParentForm) ? FormToShow.ShowDialog() : FormToShow.ShowDialog(ParentForm)) == System.Windows.Forms.DialogResult.OK;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static bool e_ShowDialog_NotOK(this Form FormToShow, Form? ParentForm = null) => !FormToShow.e_ShowDialog_OK(ParentForm);
+			public static bool eShowDialog_NotOK(this Form FormToShow, Form? ParentForm = null) => !FormToShow.eShowDialog_OK(ParentForm);
 
 			#endregion
 
@@ -4655,9 +4853,9 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_IIF_EnableControl(this bool B, params Component[] cmpnents)
+			public static void eIIF_EnableControl(this bool B, params Component[] cmpnents)
 			{
-				cmpnents?.e_ForEach(cmpnent =>
+				cmpnents?.eForEach(cmpnent =>
 				{
 					var BB = B;
 					switch (cmpnent)
@@ -4671,9 +4869,9 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_IIF_SetVisible(this bool B, params Component[] cmpnents)
+			public static void eIIF_SetVisible(this bool B, params Component[] cmpnents)
 			{
-				cmpnents?.e_ForEach(cmpnent =>
+				cmpnents?.eForEach(cmpnent =>
 				{
 					var BB = B;
 					switch (cmpnent)
@@ -4692,7 +4890,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static HandleRef e_CreateHandleReff(this Control Ctl)
+			internal static HandleRef eCreateHandleReff(this Control Ctl)
 				=> new(
 					Ctl ?? throw new ArgumentNullException(nameof(Ctl)),
 					Ctl.Handle);
@@ -4713,110 +4911,14 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_SetStyleInternal(this Control ctl, ControlStyles st, bool bset)
+			public static void eSetStyleInternal(this Control ctl, ControlStyles st, bool bset)
 			{
 				_ = ctl ?? throw new ArgumentNullException(nameof(ctl));
 
 				MethodInfo objMethodInfo = typeof(Control).GetMethod("SetStyle", BindingFlags.NonPublic | BindingFlags.Instance)!;
-				object[] args = new object[] { st, bset };
+				object[] args = [st, bset];
 				objMethodInfo.Invoke(ctl, args);
 			}
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static StringAlignment e_GetAlignment(this ContentAlignment ca)
-				=> ca switch
-				{
-					var ca2
-					when ca2 == ContentAlignment.TopLeft || ca2 == ContentAlignment.MiddleLeft || ca2 == ContentAlignment.BottomLeft
-					=> StringAlignment.Near,
-
-					var ca2
-					when ca2 == ContentAlignment.TopCenter || ca2 == ContentAlignment.MiddleCenter || ca2 == ContentAlignment.BottomCenter
-					=> StringAlignment.Center,
-
-					var ca2
-					when ca2 == ContentAlignment.TopRight || ca2 == ContentAlignment.MiddleRight || ca2 == ContentAlignment.BottomRight
-						=> StringAlignment.Far,
-
-					_ => StringAlignment.Center,
-				};
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static StringAlignment e_GetLineAlignment(this ContentAlignment ca)
-				=> ca switch
-				{
-					var ca2
-					when ca2 == ContentAlignment.TopLeft || ca2 == ContentAlignment.TopCenter || ca2 == ContentAlignment.TopRight
-					=> StringAlignment.Near,
-
-					var ca2
-					when ca2 == ContentAlignment.MiddleLeft || ca2 == ContentAlignment.MiddleCenter || ca2 == ContentAlignment.MiddleRight
-					=> StringAlignment.Center,
-
-					var ca2
-					when ca2 == ContentAlignment.BottomLeft || ca2 == ContentAlignment.BottomCenter || ca2 == ContentAlignment.BottomRight
-						=> StringAlignment.Far,
-
-					_ => StringAlignment.Center,
-				};
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static TextFormatFlags e_ToTextFormatFlags(this ContentAlignment ca)
-			=> ca switch
-			{
-				ContentAlignment.TopLeft => TextFormatFlags.Left | TextFormatFlags.Top,
-				ContentAlignment.TopCenter => TextFormatFlags.HorizontalCenter | TextFormatFlags.Top,
-				ContentAlignment.TopRight => TextFormatFlags.Right | TextFormatFlags.Top,
-
-				ContentAlignment.MiddleLeft => TextFormatFlags.Left | TextFormatFlags.VerticalCenter,
-				ContentAlignment.MiddleCenter => TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter,
-				ContentAlignment.MiddleRight => TextFormatFlags.Right | TextFormatFlags.VerticalCenter,
-
-				ContentAlignment.BottomLeft => TextFormatFlags.Left | TextFormatFlags.Bottom,
-				ContentAlignment.BottomCenter => TextFormatFlags.HorizontalCenter | TextFormatFlags.Bottom,
-				ContentAlignment.BottomRight => TextFormatFlags.Right | TextFormatFlags.Bottom,
-				_ => TextFormatFlags.Default
-			};
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static StringFormat e_ToStringFormat(this ContentAlignment ca)
-			{
-				var sf = new StringFormat()
-				{
-					Alignment = ca.e_GetAlignment(),
-					LineAlignment = ca.e_GetLineAlignment()
-				};
-				return sf;
-			}
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_DrawTextEx(
-			this Graphics g,
-			string text,
-			Font font,
-			Color textcolor,
-			Rectangle rect,
-			ContentAlignment textAlign)
-			{
-				using Brush brText = new SolidBrush(textcolor);
-				g.e_DrawTextEx(text, font, brText, rect, textAlign);
-			}
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_DrawTextEx(
-				this Graphics g,
-				string text,
-				Font font,
-				Brush textbrush,
-				Rectangle rect,
-				ContentAlignment textAlign)
-			{
-				using var sf = textAlign.e_ToStringFormat();
-				g.DrawString(text, font, textbrush, rect, sf);
-			}
-
-
 
 
 
@@ -4830,19 +4932,16 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_SetVistaCueBanner(this TextBox ctl, string? BannerText = null)
+			public static void eSetVistaCueBanner(this TextBox ctl, string? BannerText = null)
 			{
 				_ = ctl ?? throw new ArgumentNullException(nameof(ctl));
 
-				ctl.e_RunWhenHandleReady(tb => WinAPI.Windows.SendMessage(
+				ctl.eRunWhenHandleReady(tb => WinAPI.windows.SendMessage(
 					tb.Handle,
-					(int)WinAPI.Windows.TextBoxMessages.EM_SETCUEBANNER,
+					(int)WinAPI.windows.TextBoxMessages.EM_SETCUEBANNER,
 					0,
 					BannerText));
 			}
-
-
-
 
 
 			#region AttachDelayedFilter
@@ -4861,7 +4960,7 @@ return cItems;
 			/// <param name="cueBanner">Vista cueabanner text</param>
 			/// <param name="changeBackColor">Sets the background color for textbox to Systemcolors.Info</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_AttachDelayedFilter(
+			public static void eAttachDelayedFilter(
 				this TextBox txt,
 				Action<string> onTextChanged,
 				int delay = DEFAULT_TEXT_EDIT_DELAY,
@@ -4871,7 +4970,7 @@ return cItems;
 				var TMR = new System.Windows.Forms.Timer() { Interval = delay };
 				txt.Tag = TMR; //Сохраняем ссылку на таймер хоть где-то, чтобы GC его не грохнул.
 
-				if (cueBanner != null) txt.e_SetVistaCueBanner(cueBanner);
+				if (cueBanner != null) txt.eSetVistaCueBanner(cueBanner);
 				if (changeBackColor) txt.BackColor = SystemColors.Info;
 
 				TMR.Tick += delegate
@@ -4891,25 +4990,27 @@ return cItems;
 
 			/// <inheritdoc cref="AttachDelayedFilter" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_AttachDelayedFilter(
+			public static void eAttachDelayedFilter(
 				this TextBox txt,
-				MethodInvoker onTextChanged,
+				System.Windows.Forms.MethodInvoker onTextChanged,
 				int delay = DEFAULT_TEXT_EDIT_DELAY,
 				string cueBanner = DEFAULT_FILTER_CUEBANNER,
 				bool changeBackColor = true)
-					=> txt.e_AttachDelayedFilter(
+					=> txt.eAttachDelayedFilter(
 						new Action<string>((_) => onTextChanged.Invoke()),
 						delay, cueBanner, changeBackColor);
 
 			/// <inheritdoc cref="AttachDelayedFilter" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_AttachDelayedFilter(
+			public static void eAttachDelayedFilter(
 				this ToolStripTextBox tstb,
 				Action<string> onTextChanged,
 				int delay = DEFAULT_TEXT_EDIT_DELAY,
 				string cueBanner = DEFAULT_FILTER_CUEBANNER,
 				bool changeBackColor = true)
-					=> tstb.TextBox.e_AttachDelayedFilter(onTextChanged, delay, cueBanner, changeBackColor);
+					=> tstb.TextBox.eAttachDelayedFilter(onTextChanged, delay, cueBanner, changeBackColor);
+
+
 
 
 
@@ -4918,7 +5019,7 @@ return cItems;
 			private const bool C_APPEND_NEW_LINE_DEFAULT = false;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_AppendTextWithActionOnSelection(this RichTextBox txt, string text, Action a, bool appendNewLine = C_APPEND_NEW_LINE_DEFAULT)
+			public static void eAppendTextWithActionOnSelection(this RichTextBox txt, string text, Action a, bool appendNewLine = C_APPEND_NEW_LINE_DEFAULT)
 			{
 				int selStart = txt.Text.Length;
 				txt.AppendText(text);
@@ -4931,7 +5032,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_AppendTextFormatted(
+			public static void eAppendTextFormatted(
 				this RichTextBox txt,
 				string text,
 				Color? clrFore = null,
@@ -4939,7 +5040,7 @@ return cItems;
 				Font? fnt = null,
 				bool appendNewLine = C_APPEND_NEW_LINE_DEFAULT)
 			{
-				txt.e_AppendTextWithActionOnSelection(text,
+				txt.eAppendTextWithActionOnSelection(text,
 					 delegate
 					 {
 						 if (clrFore != null) txt.SelectionColor = clrFore.Value;
@@ -4951,26 +5052,106 @@ return cItems;
 
 		}
 
+		[EditorBrowsable(EditorBrowsableState.Never)]
+		internal static class Extensions_Controls_LinkLabel
+		{
+			/*
+			private class LinkLaberLinkTarget
+			{
+				public string? LinkText;
+			}
+			 */
+
+
+			//<a href="mailto:mail@htmlacademy.ru">Напишите нам</a>
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void eClearAllLinks(this LinkLabel ll) => ll.LinkArea = new LinkArea(0, 0);
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void eSetTextNoLink(this LinkLabel ll, string text)
+			{
+				ll.Text = text;
+				ll.eClearAllLinks();
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void eAppendTextNoLink(this LinkLabel ll, string text)
+			{
+				ll.Text += text;
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void eAppendTextWithLinkSimple(this LinkLabel ll, string text, Action<LinkLabel.Link>? clickHandler = null, bool clearOldLinks = false)
+			{
+				string oldText = clearOldLinks
+					? string.Empty
+					: ll.Text;
+
+				int initLen = oldText.Length;
+				if (clearOldLinks) ll.eClearAllLinks();
+
+				//"Текущий MAC-адрес: ['{qr.MAC.eToStringHex()}']"
+
+				Regex rxSimpleLink = new(@"^(?<Prefix>.*)\[(?<LinkText>.*)\](?<Suffix>.*)", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.IgnorePatternWhitespace);
+
+				MatchCollection result = rxSimpleLink.Matches(text);
+				if (result.Count < 1) throw new ArgumentException($"Not found any Links in the string '{text}'", nameof(text));
+				if (result.Count > 1) throw new ArgumentException($"Found more than one Link in the string '{text}'", nameof(text));
+
+				Match m = result.Cast<Match>().First();
+				string prefix = m.Groups["Prefix"].Value;
+				string suffix = m.Groups["Suffix"].Value;
+				Group link = m.Groups["LinkText"];
+				string linkText = link.Value;
+
+				//string ss = text.Substring(link.Index, link.Length);
+
+				Guid linkID = Guid.NewGuid();
+				int startPos = prefix.Length;
+				int LinkLen = linkText.Length;
+				LinkLabel.Link lll = new(initLen + startPos, LinkLen, linkID);
+				text = $"{prefix}{linkText}{suffix}";
+
+				ll.Text = oldText + text;
+				ll.Links.Add(lll);
+
+				if (clickHandler == null) return;
+				ll.LinkClicked += (_, e) =>
+				{
+					LinkLabel.Link? lllClicked = e.Link;
+					if (lllClicked == null || lllClicked.LinkData is not Guid || !linkID.Equals((Guid)lllClicked.LinkData)) return;
+					//This is our Link Clicked!
+
+					clickHandler?.Invoke(lllClicked);
+				};
+
+			}
+
+		}
 
 		[EditorBrowsable(EditorBrowsableState.Never)]
 		internal static class Extensions_Controls_ComboBox
 		{
 
 
-			public static void e_DisabeAndShow(this ComboBox cbo, string bannerText)
+			public static void eDisabeAndShow(this ComboBox cbo, string bannerText)
 			{
 				cbo.Enabled = false;
 				cbo.Items.Clear();
 				cbo.Items.Add(bannerText);
 				cbo.SelectedIndex = 0;
 			}
-			public static void e_DisabeAndShow(this ComboBox cbo, Exception ex) => cbo.e_DisabeAndShow(ex.Message);
+			public static void eDisabeAndShow(this ComboBox cbo, Exception ex) => cbo.eDisabeAndShow(ex.Message);
 
 
 
 
 			#region FillCBO
-			public static void e_Fill(this ComboBox cbo, object[] data, bool enable, bool selectLast = true)
+			public static void eFillWithObjects(this ComboBox cbo, object[] data, bool enable, bool selectLast = true)
 			{
 				try
 				{
@@ -4993,10 +5174,10 @@ return cItems;
 			///<summary>Fills ComboBox with <see cref="ComboboxItemContainer"/> wrappers and returns selected index</summary>
 			///<remarks>Sample: cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING)</remarks>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ComboboxItemContainer<T>? e_Fill<T>(
+			public static ComboboxItemContainer<T>? eFill<T>(
 				this ComboBox cbo,
 				IEnumerable<ComboboxItemContainer<T>> items,
-				ComboboxItemContainer<T>? selectedItem = null,
+				ComboboxItemContainer<T>? selectedItem,
 				ComboBoxStyle style = ComboBoxStyle.DropDownList,
 				bool notSelectAnyItem = false)
 			{
@@ -5026,7 +5207,7 @@ return cItems;
 			///<summary>Fills ComboBox with <see cref="ComboboxItemContainer"/> wrappers and returns selected index</summary>
 			///<remarks>Sample: cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING)</remarks>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ComboboxItemContainer<T>? e_Fill<T>(
+			public static ComboboxItemContainer<T>? eFill<T>(
 				this ComboBox cbo,
 				IEnumerable<ComboboxItemContainer<T>> items,
 				T? selectedItem = default,
@@ -5049,7 +5230,7 @@ return cItems;
 
 					var containerToSelect = (selectedItem == null)
 						? items.FirstOrDefault()
-						: items.Where(i => i.Value.e_EqualsUniversal(selectedItem)).FirstOrDefault();
+						: items.FirstOrDefault(i => i.Value.eEqualsUniversal(selectedItem));
 
 					containerToSelect ??= items.FirstOrDefault();
 
@@ -5063,7 +5244,7 @@ return cItems;
 			///<summary>Fills ComboBox with <see cref="ComboboxItemContainer"/> wrappers and returns selected index</summary>
 			///<remarks>Sample: cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING)</remarks>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ComboboxItemContainer<T>? e_FillWithContainersOf<T>(
+			public static ComboboxItemContainer<T>? eFillWithContainersOf<T>(
 				this ComboBox cbo,
 				IEnumerable<T> items,
 				T? selectedItem = default,
@@ -5082,48 +5263,48 @@ return cItems;
 					})
 					.ToArray();
 
-				return cbo.e_Fill<T>(a, selectedItemContainer, style, notSelectAnyItem);
+				return cbo.eFill<T>(a, selectedItemContainer, style, notSelectAnyItem);
 			}
 
 
 			///<summary>Fills ComboBox with <see cref="EnumContainer"/> wrappers. ONLY FOR ENUM!</summary>
 			///<remarks>Sample: cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING.ByCaller)</remarks>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_FillWithContainersOfEnum<T>(this ComboBox cbo, T selectedItem) where T : Enum
-				=> cbo.e_Fill(selectedItem.e_GetAllValuesAsEnumContainers(), selectedItem);
+			public static void eFillWithContainersOfEnum<T>(this ComboBox cbo, T selectedItem) where T : Enum
+				=> cbo.eFill(selectedItem.eGetAllValuesAsEnumContainers(), selectedItem);
 
 			/*
 			///<summary>Fills ComboBox with <see cref="EnumContainer"/> wrappers. ONLY FOR ENUM!</summary>
 			///<remarks>Sample: cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING.ByCaller)</remarks>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_FillWithContainersOfEnum<T>(this ComboBox cbo, T selectedItem) where T : Enum
+			public static void eFillWithContainersOfEnum<T>(this ComboBox cbo, T selectedItem) where T : Enum
 			{
-				ComboboxItemEnumContainer<T>[] items = selectedItem.e_GetAllValuesAsEnumContainers();
+				ComboboxItemEnumContainer<T>[] items = selectedItem.eGetAllValuesAsEnumContainers();
 				//ComboboxItemEnumContainer<T> sel = items.Where(c => c.Value.Equals(selectedItem)).First();
-				cbo.e_Fill(items, selectedItem);
+				cbo.eFill(items, selectedItem);
 			}
 			 */
 
 
 
 			/*
-	//////<summary>Заполняет ComboBox лбъектами типа <see cref="My.UOM.EnumTools.EnumContainer"/>, и выбирает текущим элементом EnumItem</summary>
-	//////<remarks>Пример: Call Me.cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING.ByCaller)</remarks>
-	<DebuggerNonUserCode, DebuggerStepThrough>
-	<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
-	Friend Sub FillCBOWithEnumContainers(Of T)(CBO As ToolStripComboBox, ByVal EnumItem As T)
-	//Пример: Call Me.cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING.ByCaller)
+		//////<summary>Заполняет ComboBox лбъектами типа <see cref="My.UOM.EnumTools.EnumContainer"/>, и выбирает текущим элементом EnumItem</summary>
+		//////<remarks>Пример: Call Me.cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING.ByCaller)</remarks>
+		<DebuggerNonUserCode, DebuggerStepThrough>
+		<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
+		Friend Sub FillCBOWithEnumContainers(Of T)(CBO As ToolStripComboBox, ByVal EnumItem As T)
+		//Пример: Call Me.cboGroupFileLogRecordsBy.FillCBOWithEnumContainers(FILE_LOG_RECORDS_GROUPING.ByCaller)
 
-	Call CBO.ComboBox.FillCBOWithEnumContainers(EnumItem)
-	End Sub
+		Call CBO.ComboBox.FillCBOWithEnumContainers(EnumItem)
+		End Sub
 
-	<DebuggerNonUserCode, DebuggerStepThrough>
-	<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
-	Friend Function SelectItemWithEnumContainers(Of T)(CBO As ComboBox, EnumItem As T) As Integer
-	var I = CBO.ExtEnum_IndexOfEnumContainerForItem(Of T)(EnumItem)
-	if(I >= 0) { CBO.SelectedIndex = I
-	return I
-	End Function
+		<DebuggerNonUserCode, DebuggerStepThrough>
+		<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
+		Friend Function SelectItemWithEnumContainers(Of T)(CBO As ComboBox, EnumItem As T) As Integer
+		var I = CBO.ExtEnum_IndexOfEnumContainerForItem(Of T)(EnumItem)
+		if(I >= 0) { CBO.SelectedIndex = I
+		return I
+		End Function
 
 
 			*/
@@ -5134,13 +5315,12 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ComboboxItemContainer<T>? e_SelectContainerOf<T>(this ComboBox cbo, T? itemToSelect, bool selectFirstItemIfNull = true)
+			public static ComboboxItemContainer<T>? eSelectContainerOf<T>(this ComboBox cbo, T? itemToSelect, bool selectFirstItemIfNull = true)
 			{
 				if (cbo.Items.Count < 1) return null;
 				var containerToSelect = cbo
-					.e_ItemsAs_ObjectContainerOf<T>()
-					.Where(c => c.Value.e_EqualsUniversal<T>(itemToSelect))
-					.FirstOrDefault();
+					.eItemsAs_ObjectContainerOf<T>()
+					.FirstOrDefault(c => c.Value.eEqualsUniversal<T>(itemToSelect));
 
 				if (containerToSelect != null)
 				{
@@ -5159,11 +5339,11 @@ return cItems;
 			#region Get Items From CBO
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ComboboxItemContainer<T>[] e_ItemsAs_ObjectContainerOf<T>(this ComboBox cbo)
+			public static ComboboxItemContainer<T>[] eItemsAs_ObjectContainerOf<T>(this ComboBox cbo)
 				=> cbo.Items.Cast<ComboboxItemContainer<T>>().ToArray();
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ComboboxItemContainer<T>? e_SelectedItemAs_ObjectContainerOf<T>(this ComboBox cbo)
+			public static ComboboxItemContainer<T>? eSelectedItemAs_ObjectContainerOf<T>(this ComboBox cbo)
 			{
 				object? obj = cbo.SelectedItem;
 				return (obj == null)
@@ -5172,89 +5352,89 @@ return cItems;
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T? e_SelectedItemAs_ObjectContainerValue<T>(this ComboBox cbo)
+			public static T? eSelectedItemAs_ObjectContainerValue<T>(this ComboBox cbo)
 			{
-				ComboboxItemContainer<T>? ec = cbo.e_SelectedItemAs_ObjectContainerOf<T>();
+				ComboboxItemContainer<T>? ec = cbo.eSelectedItemAs_ObjectContainerOf<T>();
 				return (ec == null)
 					? default
 					: ec.Value;
 			}
 
 			/*
-	<DebuggerNonUserCode, DebuggerStepThrough>
-	<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
-	Friend Function ExtEnum_SelectedItemAsEnumContainerValue(Of T)(ByVal CBO As ComboBox) As T
-	var objSel = CBO.ExtEnum_SelectedItemAsEnumcontainer(Of T)()
-	var V = objSel.Value
-	return V
-	End Function
+		<DebuggerNonUserCode, DebuggerStepThrough>
+		<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
+		Friend Function ExtEnum_SelectedItemAsEnumContainerValue(Of T)(ByVal CBO As ComboBox) As T
+		var objSel = CBO.ExtEnum_SelectedItemAsEnumcontainer(Of T)()
+		var V = objSel.Value
+		return V
+		End Function
 
-	<DebuggerNonUserCode, DebuggerStepThrough>
-	<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
-	Friend Function ExtEnum_SelectedItemAsEnumContainerValue(Of T)(CBO As ToolStripComboBox) As T
-	return CBO.ComboBox.ExtEnum_SelectedItemAsEnumContainerValue(Of T)
-	End Function
-
-
+		<DebuggerNonUserCode, DebuggerStepThrough>
+		<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
+		Friend Function ExtEnum_SelectedItemAsEnumContainerValue(Of T)(CBO As ToolStripComboBox) As T
+		return CBO.ComboBox.ExtEnum_SelectedItemAsEnumContainerValue(Of T)
+		End Function
 
 
 
 
 
-	//# Region "CBO EnumContainer Helpers"
 
 
-	<DebuggerNonUserCode, DebuggerStepThrough>
-	<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
-	Friend Function ExtEnum_ItemsAsEnumContainers(Of T)(CBO As ComboBox) As List(Of My.UOM.EnumTools.EnumContainer(Of T))
-	var aWrappers = (From O As Object In CBO.Items
-	Let OO = DirectCast(O, My.UOM.EnumTools.EnumContainer(Of T))
-	Select OO).ToArray
+		//# Region "CBO EnumContainer Helpers"
 
-	return aWrappers.ToList
-	End Function
 
-	<DebuggerNonUserCode, DebuggerStepThrough>
-	<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
-	Friend Function ExtEnum_IndexOfEnumContainerForItem(Of T)(CBO As ComboBox, EnumItem As T) As Integer
-	var aContainers = CBO.ExtEnum_ItemsAsEnumContainers(Of T)()
-	For N = 1 To aContainers.Count
-	var iFound = (N - 1)
-	if (aContainers(iFound).Value.Equals(EnumItem))
+		<DebuggerNonUserCode, DebuggerStepThrough>
+		<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
+		Friend Function ExtEnum_ItemsAsEnumContainers(Of T)(CBO As ComboBox) As List(Of My.UOM.EnumTools.EnumContainer(Of T))
+		var aWrappers = (From O As Object In CBO.Items
+		Let OO = DirectCast(O, My.UOM.EnumTools.EnumContainer(Of T))
+		Select OO).ToArray
+
+		return aWrappers.ToList
+		End Function
+
+		<DebuggerNonUserCode, DebuggerStepThrough>
+		<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
+		Friend Function ExtEnum_IndexOfEnumContainerForItem(Of T)(CBO As ComboBox, EnumItem As T) As Integer
+		var aContainers = CBO.ExtEnum_ItemsAsEnumContainers(Of T)()
+		For N = 1 To aContainers.Count
+		var iFound = (N - 1)
+		if (aContainers(iFound).Value.Equals(EnumItem))
 		{
 			return iFound
-	}
+		}
 		Next
-	return -1
-	End Function
+		return -1
+		End Function
 
-	<DebuggerNonUserCode, DebuggerStepThrough>
-	<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
-	Friend Function ExtEnum_GetEnumContainerForItem(Of T)(CBO As ComboBox, Item As T) As My.UOM.EnumTools.EnumContainer(Of T)
-	var aWrappers = CBO.ExtEnum_ItemsAsEnumContainers(Of T)()
-	var aFound = (From O In aWrappers Where(O.Value.Equals(Item)))
+		<DebuggerNonUserCode, DebuggerStepThrough>
+		<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
+		Friend Function ExtEnum_GetEnumContainerForItem(Of T)(CBO As ComboBox, Item As T) As My.UOM.EnumTools.EnumContainer(Of T)
+		var aWrappers = CBO.ExtEnum_ItemsAsEnumContainers(Of T)()
+		var aFound = (From O In aWrappers Where(O.Value.Equals(Item)))
 
-	if(Not aFound.Any) { return Nothing
-	var F = aFound.First
-	return F
-	End Function
-
-
-	//# Region "EnumContainer"
+		if(Not aFound.Any) { return Nothing
+		var F = aFound.First
+		return F
+		End Function
 
 
-	<DebuggerNonUserCode, DebuggerStepThrough>
-	<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
-	Friend Function ExtEnum_ItemAsEnumcontainer(Of T)(ByVal CBO As ComboBox, ItemIndex As Integer) As My.UOM.EnumTools.EnumContainer(Of T)
-	var Obj = CBO.Items(ItemIndex)
-	var EC As My.UOM.EnumTools.EnumContainer(Of T) = DirectCast(Obj, My.UOM.EnumTools.EnumContainer(Of T))
-	return EC
-	End Function
+		//# Region "EnumContainer"
+
+
+		<DebuggerNonUserCode, DebuggerStepThrough>
+		<MethodImpl(MethodImplOptions.AggressiveInlining), System.Runtime.CompilerServices.Extension()>
+		Friend Function ExtEnum_ItemAsEnumcontainer(Of T)(ByVal CBO As ComboBox, ItemIndex As Integer) As My.UOM.EnumTools.EnumContainer(Of T)
+		var Obj = CBO.Items(ItemIndex)
+		var EC As My.UOM.EnumTools.EnumContainer(Of T) = DirectCast(Obj, My.UOM.EnumTools.EnumContainer(Of T))
+		return EC
+		End Function
 
 
 
 
-	//# End Region
+		//# End Region
 
 
 
@@ -5273,7 +5453,7 @@ return cItems;
 
 			///<summary>MT Safe!!!</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_runOnLockedUpdateMTSafe(this ListBox? lst, Action a)
+			public static void erunOnLockedUpdateMTSafe(this ListBox? lst, Action a)
 			{
 				Action a2 = delegate
 				{
@@ -5283,20 +5463,44 @@ return cItems;
 				};
 
 				if (lst != null && lst.InvokeRequired)
-					lst.e_RunInUIThread(a2);
+					lst.eRunInUIThread(a2);
 				else
 					a2.Invoke();
 			}
 
 			/// <summary>/Limit count of lines to value</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_LimitRowsCountTo(this ListBox lst, int maxRows)
+			public static void eLimitRowsCountTo(this ListBox lst, int maxRows)
 			{
-				lst.e_runOnLockedUpdateMTSafe(delegate
+				lst.erunOnLockedUpdateMTSafe(delegate
 				{
 					while (lst.Items.Count >= maxRows) lst.Items.RemoveAt(0);
 				});
 			}
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static int eLastItemIndex(this ListBox lst) => lst.Items.Count - 1;
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static Object eLastItem(this ListBox lst) => lst.Items[lst.eLastItemIndex()];
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static Object? eSelectLastRow(this ListBox lst)
+			{
+				if (lst.Items.Count < 1) return null;
+				lst.SelectedIndex = (lst.eLastItemIndex());
+				return lst.SelectedItem;
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void eSetLastItem(this ListBox lst, object newValue)
+				=> lst.Items[lst.eLastItemIndex()] = newValue;
+
 		}
 
 
@@ -5305,9 +5509,12 @@ return cItems;
 		{
 
 
-
+			/// <summary>
+			/// if (Items.Count > 0) used AutoResizeColumns(ColumnHeaderAutoResizeStyle.ColumnContent)
+			/// else used AutoResizeColumns(ColumnHeaderAutoResizeStyle.HeaderSize)
+			/// </summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_AutoSizeColumns(this ListView? lvw)
+			public static void eAutoSizeColumnsAuto(this ListView? lvw)
 			{
 				if (lvw == null || lvw.IsDisposed) return;
 
@@ -5319,9 +5526,47 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ClearItemsAndGroups(this ListView? lvw, bool autoSizeColumns = true, bool clearGroups = true, bool clearColumns = false)
+			internal static IEnumerable<ListViewGroup> eAddGroups(this ListView? lvw, params ListViewGroup[] gg)
 			{
-				lvw?.e_runOnLockedUpdate(delegate
+				lvw?.Groups.AddRange(gg);
+				return gg;
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static IEnumerable<ListViewGroup> eAddGroups(this ListView? lvw, IEnumerable<ListViewGroup> gg)
+			{
+				ListViewGroup[] groups = [.. gg];
+				return lvw.eAddGroups(groups);
+			}
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static IEnumerable<ListViewItem> eAddItems(this ListView? lvw, params ListViewItem[] ll)
+			{
+				lvw?.erunOnLockedUpdate(() => lvw?.Items.AddRange(ll));
+				return ll;
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static IEnumerable<ListViewItem> eAddItems(this ListView? lvw, IEnumerable<ListViewItem> ll, bool autoSizeColumns = false)
+			{
+				ListViewItem[] groups = [.. ll];
+				lvw?.erunOnLockedUpdate(delegate
+				{
+					lvw?.Items.AddRange(groups);
+				}, true);
+
+				return ll;
+			}
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void eClearItemsAndGroups(this ListView? lvw, bool autoSizeColumns = true, bool clearGroups = true, bool clearColumns = false)
+			{
+				lvw?.erunOnLockedUpdate(delegate
 				{
 					lvw?.Items.Clear();
 					if (clearGroups) lvw?.Groups.Clear();
@@ -5331,19 +5576,19 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_ClearItems(this ListView lvw, bool autoSizeColumns = false)
-				=> lvw.e_ClearItemsAndGroups(autoSizeColumns, false);
+			public static void eClearItems(this ListView lvw, bool autoSizeColumns = false)
+				=> lvw.eClearItemsAndGroups(autoSizeColumns, false);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_AddFakeSubitems(this ListViewItem li, int ListViewColumnsCount, string fakeText = "")
+			public static void eAddFakeSubitems(this ListViewItem li, int ListViewColumnsCount, string fakeText = "")
 			{
 				if (li != null) for (int i = 0; i < ListViewColumnsCount; i++) li.SubItems.Add(fakeText);
 			}
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_AddFakeSubitems(
+			public static void eAddFakeSubitems(
 				this ListViewItem? li,
 				ListView? lvw = null,
 				string fakeText = "")
@@ -5352,22 +5597,22 @@ return cItems;
 
 				lvw ??= li.ListView;
 				lvw.ThrowIfNull();//ArgumentNullException.ThrowIfNull(lvw);
-				li?.e_AddFakeSubitems(lvw.Columns.Count, fakeText);
+				li?.eAddFakeSubitems(lvw!.Columns.Count, fakeText);
 			}
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_UpdateTexts(
+			public static void eUpdateTexts(
 				 this ListViewItem? li,
 				 int startIndex,
 				 params string?[] aSubItemsText)
 			{
 				if (li == null || !aSubItemsText.Any()) return;
 
-				li.ListView.e_runOnLockedUpdate(() =>
+				li.ListView.erunOnLockedUpdate(() =>
 				{
 					int i = 0;
-					aSubItemsText.e_ForEach(text =>
+					aSubItemsText.eForEach(text =>
 					{
 						if (null != text) li.SubItems[(startIndex + i)].Text = text;
 						i++;
@@ -5377,27 +5622,27 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_UpdateTexts(this ListViewItem? li, params string[] aSubItemsText)
-				=> e_UpdateTexts(li, 0, aSubItemsText);
+			public static void eUpdateTexts(this ListViewItem? li, params string[] aSubItemsText)
+				=> eUpdateTexts(li, 0, aSubItemsText);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ListViewGroup> e_GroupsAsIEnumerable(this ListView lvw)
+			public static IEnumerable<ListViewGroup> eGroupsAsIEnumerable(this ListView lvw)
 				=> lvw.Groups.Cast<ListViewGroup>();
 
 
 #if NETCOREAPP3_0_OR_GREATER
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static (ListViewGroup Group, bool Created) e_GroupsCreateGroupByKey(
+			public static (ListViewGroup Group, bool Created) eGroupsCreateGroupByKey(
 				this ListView lvw,
 				string key,
 				string? header = null,
-				ListViewGroupCollapsedState newGroupState = ListViewGroupCollapsedState.Collapsed,
-				Action<ListViewGroup>? onNewGroup = null
+				Action<ListViewGroup>? onNewGroup = null,
+				ListViewGroupCollapsedState newGroupState = ListViewGroupCollapsedState.Collapsed
 				)
 			{
-				ListViewGroup? grp = lvw.e_GroupsAsIEnumerable()?.Where(g => (g.Name == key)).FirstOrDefault();
+				ListViewGroup? grp = lvw.eGroupsAsIEnumerable()?.FirstOrDefault(g => (g.Name == key));
 				bool exist = (grp != null);
 				if (!exist)
 				{
@@ -5410,32 +5655,28 @@ return cItems;
 			}
 #else
 			// Defined in ListViewEx extensions...
-#endif
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static (ListViewGroup Group, bool Created) e_GroupsCreateGroupByKey(
+			public static (ListViewGroup Group, bool Created) eGroupsCreateGroupByKey(
 				this ListView lvw,
 				string key,
 				string? header = null,
 				Action<ListViewGroup>? onNewGroup = null
 			)
 			{
-				ListViewGroup? foundGroup = lvw!.e_GroupsAsIEnumerable()
-					.Where(g => (g.Name == key))
-					.FirstOrDefault();
-
+				ListViewGroup? foundGroup = lvw!.eGroupsAsIEnumerable().FirstOrDefault(g => (g.Name == key));
 				if (foundGroup != null) return (foundGroup, false);
-
 
 				ListViewGroup grp = new(key, header ?? key);
 				lvw.Groups.Add(grp);
 				onNewGroup?.Invoke(grp);
 				return (grp, true);
 			}
+#endif
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static (ListViewGroup Group, bool Created) e_GroupsCreateGroupByKey(
+			public static (ListViewGroup Group, bool Created) eGroupsCreateGroupByKey(
 				Dictionary<string, ListViewGroup> dicGroups,
 				string key,
 				string? header = null,
@@ -5457,26 +5698,26 @@ return cItems;
 
 
 
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	internal static void e_SetAllGroupsTitlesBy_TagAndCount(this ListView lvw)
-	{
-	var GNP = ListViewGroup grp =>
-	{
-	var sTitle = G.Tag.ToString;
-	return sTitle;
-	};
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		internal static void eSetAllGroupsTitlesBy_TagAndCount(this ListView lvw)
+		{
+		var GNP = ListViewGroup grp =>
+		{
+		var sTitle = G.Tag.ToString;
+		return sTitle;
+		};
 
-	lvw.e_SetAllGroupsTitlesBy_Count(GNP);
-	}
+		lvw.eSetAllGroupsTitlesBy_Count(GNP);
+		}
 
-	*/
+		*/
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_SetGroupsTitlesFast(
+			public static void eSetGroupsTitlesFast(
 				this ListView? lvw,
 				Func<ListViewGroup, string>? getGroupHeader = null)
-					=> lvw?.e_GroupsAsIEnumerable().e_ForEach(g =>
+					=> lvw?.eGroupsAsIEnumerable().eForEach(g =>
 				{
 					string sTitle = g.Name ?? "";
 					if (getGroupHeader != null)
@@ -5494,16 +5735,16 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_SetAllGroupsState(
+			public static void eSetAllGroupsState(
 				this ListView? lvw,
 				ListViewGroupCollapsedState state = ListViewGroupCollapsedState.Collapsed)
-					=> lvw?.e_GroupsAsIEnumerable().e_ForEach(g => g.CollapsedState = state);
+					=> lvw?.eGroupsAsIEnumerable().eForEach(g => g.CollapsedState = state);
 
 #endif
 
 			///<summary>MT Safe!!!</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_runOnLockedUpdate(
+			public static void erunOnLockedUpdate(
 				this ListView? lvw,
 				Action a,
 				bool autoSizeColumns = false,
@@ -5517,21 +5758,83 @@ return cItems;
 					try { a!.Invoke(); }
 					finally
 					{
-						if (autoSizeColumns) lvw?.e_AutoSizeColumns();
-						if (fastUpdateGroupHeaders) lvw?.e_SetGroupsTitlesFast();
+						if (autoSizeColumns) lvw?.eAutoSizeColumnsAuto();
+						if (fastUpdateGroupHeaders) lvw?.eSetGroupsTitlesFast();
 						lvw?.EndUpdate();
 					}
 				};
 
 				if (lvw != null && lvw.InvokeRequired)
-					lvw.e_RunInUIThread(a2);
+					lvw.eRunInUIThread(a2);
 				else
 					a2.Invoke();
 			}
 
+			///<summary>MT Safe!!!</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static async Task erunOnLockedUpdateAsync(
+				this ListView? lvw,
+				Func<Task> a,
+				bool autoSizeColumns = false,
+				bool fastUpdateGroupHeaders = false)
+			{
+				_ = a ?? throw new ArgumentNullException(nameof(a));
+
+				async Task SafeUpdateCore()
+				{
+					lvw?.BeginUpdate();
+					try
+					{
+						await a!.Invoke();
+					}
+					finally
+					{
+						if (autoSizeColumns) lvw?.eAutoSizeColumnsAuto();
+						if (fastUpdateGroupHeaders) lvw?.eSetGroupsTitlesFast();
+						lvw?.EndUpdate();
+					}
+				}
+
+				if (lvw != null && lvw.InvokeRequired)
+				{
+					await lvw.eRunInUIThreadAsync(SafeUpdateCore)!;
+				}
+				else
+				{
+					await SafeUpdateCore();
+				}
+			}
+
+
+			///<summary>MT Safe!!!</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static T? erunOnLockedUpdate<T>(
+				this ListView? lvw,
+				Func<T> a,
+				bool autoSizeColumns = false,
+				bool fastUpdateGroupHeaders = false)
+			{
+				_ = a ?? throw new ArgumentNullException(nameof(a));
+
+				T? SafeUpdateCore()
+				{
+					lvw?.BeginUpdate();
+					try { return a!.Invoke(); }
+					finally
+					{
+						if (autoSizeColumns) lvw?.eAutoSizeColumnsAuto();
+						if (fastUpdateGroupHeaders) lvw?.eSetGroupsTitlesFast();
+						lvw?.EndUpdate();
+					}
+				}
+
+				if (lvw != null && lvw.InvokeRequired) return lvw.eRunInUIThread(SafeUpdateCore);
+				return SafeUpdateCore();
+			}
+
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static async Task<T?> e_runOnLockedUpdateAsync<T>(
+			public static async Task<T?> erunOnLockedUpdateAsync<T>(
 				this ListView lvw,
 				Func<Task<T?>> tsk,
 				bool autoSizeColumns = false,
@@ -5549,8 +5852,8 @@ return cItems;
 				}
 				finally
 				{
-					if (autoSizeColumns) lvw?.e_AutoSizeColumns();
-					if (fastUpdateGroupHeaders) lvw?.e_SetGroupsTitlesFast();
+					if (autoSizeColumns) lvw?.eAutoSizeColumnsAuto();
+					if (fastUpdateGroupHeaders) lvw?.eSetGroupsTitlesFast();
 					lvw?.EndUpdate();
 				}
 			}
@@ -5558,7 +5861,7 @@ return cItems;
 			/*
 
 			[ MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static async Task<T?> e_runOnLockedUpdateAsync<T>(
+			public static async Task<T?> erunOnLockedUpdateAsync<T>(
 				this ListView lvw,
 				Task<T?> tsk,
 				bool autoSizeColumns = false,
@@ -5576,8 +5879,8 @@ return cItems;
 				}
 				finally
 				{
-					if (autoSizeColumns) lvw?.e_AutoSizeColumns();
-					if (fastUpdateGroupHeaders) lvw?.e_SetGroupsTitlesFast();
+					if (autoSizeColumns) lvw?.eAutoSizeColumns();
+					if (fastUpdateGroupHeaders) lvw?.eSetGroupsTitlesFast();
 					lvw?.EndUpdate();
 				}
 			}
@@ -5587,9 +5890,9 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_SelectFirstItem(this ListView lvw)
+			public static void eSelectFirstItem(this ListView lvw)
 			{
-				var first = lvw.e_ItemsAsIEnumerable().FirstOrDefault();
+				var first = lvw.eItemsAsIEnumerable().FirstOrDefault();
 				if (first == default) return;
 
 				first.Selected = true;
@@ -5598,11 +5901,11 @@ return cItems;
 			}
 
 
-			public static void e_AddSubitems(this ListViewItem? li, params string[] subitems)
-				=> subitems?.e_ForEach(s => li?.SubItems.Add(s));
+			public static void eAddSubitems(this ListViewItem? li, params string[] subitems)
+				=> subitems?.eForEach(s => li?.SubItems.Add(s));
 
 
-			public static async void e_FlashAsync(this ListViewItem? li, int flashCount = 10)
+			public static async void eFlashAsync(this ListViewItem? li, int flashCount = 10)
 			{
 				if (li == null) return;
 
@@ -5621,32 +5924,32 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_ItemsRemoveRange(
+			public static void eItemsRemoveRange(
 				this ListView? lvw,
 				IEnumerable<ListViewItem> ItemsToRemove,
 				bool aAutoSizeColumnsAtFinish = false)
-				=> lvw?.e_runOnLockedUpdate(() => lvw?.Items.e_ItemsRemoveRange(ItemsToRemove), aAutoSizeColumnsAtFinish);
+				=> lvw?.erunOnLockedUpdate(() => lvw?.Items.eItemsRemoveRange(ItemsToRemove), aAutoSizeColumnsAtFinish);
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_ItemsRemoveRange(
+			public static void eItemsRemoveRange(
 				this ListView.ListViewItemCollection liC,
 				IEnumerable<ListViewItem> ItemsToRemove)
-					=> ItemsToRemove.e_ForEach(li => liC.Remove(li));
+					=> ItemsToRemove.eForEach(li => liC.Remove(li));
 
 
 			#region ItemsAsIEnumerable
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ListViewItem> e_ItemsAsIEnumerable(this ListView lvw) => lvw.Items.Cast<ListViewItem>();
+			public static IEnumerable<ListViewItem> eItemsAsIEnumerable(this ListView lvw) => lvw.Items.Cast<ListViewItem>();
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ListViewItem> e_ItemsAsIEnumerable(this ListViewGroup G) => G.Items.Cast<ListViewItem>();
+			public static IEnumerable<ListViewItem> eItemsAsIEnumerable(this ListViewGroup G) => G.Items.Cast<ListViewItem>();
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ListViewItem> e_SelectedItemsAsIEnumerable(this ListView lvw) => lvw.SelectedItems.Cast<ListViewItem>();
+			public static IEnumerable<ListViewItem> eSelectedItemsAsIEnumerable(this ListView lvw) => lvw.SelectedItems.Cast<ListViewItem>();
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ListViewItem> e_CheckedItemsAsIEnumerable(this ListView lvw) => lvw.CheckedItems.Cast<ListViewItem>();
+			public static IEnumerable<ListViewItem> eCheckedItemsAsIEnumerable(this ListView lvw) => lvw.CheckedItems.Cast<ListViewItem>();
 
 			#endregion
 
@@ -5655,25 +5958,25 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T? e_TagAs<T>(this ListViewGroup lvg) => (T?)lvg.Tag;
+			public static T? eTagAs<T>(this ListViewGroup lvg) => (T?)lvg.Tag;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T? e_TagAs<T>(this ListViewItem li) => (T?)li.Tag;
+			public static T? eTagAs<T>(this ListViewItem li) => (T?)li.Tag;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T? e_TagAs<T>(this TreeNode nd) => (T?)nd.Tag;
+			public static T? eTagAs<T>(this TreeNode nd) => (T?)nd.Tag;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T? e_TagAs<T>(this Control ctl) => (T?)ctl.Tag;
+			public static T? eTagAs<T>(this Control ctl) => (T?)ctl.Tag;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static int e_ItemsCount_Selected(this ListView lvw) => lvw.SelectedItems.Count;
+			public static int eItemsCount_Selected(this ListView lvw) => lvw.SelectedItems.Count;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static int e_ItemsCount_Checked(this ListView lvw) => lvw.CheckedItems.Count;
+			public static int eItemsCount_Checked(this ListView lvw) => lvw.CheckedItems.Count;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static int e_ItemsCount(this ListView lvw) => lvw.Items.Count;
+			public static int eItemsCount(this ListView lvw) => lvw.Items.Count;
 
 
 			#region ItemsAndTags2
@@ -5684,37 +5987,37 @@ return cItems;
 
 				public ListViewItemAndTag(ListViewItem li) : base() { Item = li; }
 
-				public T? Tag => Item.e_TagAs<T>();
+				public T? Tag => Item.eTagAs<T>();
 			}
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<T?> e_Tags<T>(this IEnumerable<ListViewItemAndTag<T>> A)
+			public static IEnumerable<T?> eTags<T>(this IEnumerable<ListViewItemAndTag<T>> A)
 				=> A.Select(li => li.Tag);
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ListViewItem> e_Items<T>(this IEnumerable<ListViewItemAndTag<T>> A)
+			public static IEnumerable<ListViewItem> eItems<T>(this IEnumerable<ListViewItemAndTag<T>> A)
 				=> A.Select(li => li.Item);
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ListViewItemAndTag<T>> e_ItemsAndTags<T>(this IEnumerable<ListViewItem> A)
+			public static IEnumerable<ListViewItemAndTag<T>> eItemsAndTags<T>(this IEnumerable<ListViewItem> A)
 				=> A.Select(li => new ListViewItemAndTag<T>(li));
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ListViewItemAndTag<T>> e_ItemsAndTags<T>(this ListViewGroup G)
-				=> e_ItemsAndTags<T>(G.e_ItemsAsIEnumerable());
+			public static IEnumerable<ListViewItemAndTag<T>> eItemsAndTags<T>(this ListViewGroup G)
+				=> eItemsAndTags<T>(G.eItemsAsIEnumerable());
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ListViewItemAndTag<T>> e_ItemsAndTags<T>(this ListView lvw)
-				=> e_ItemsAndTags<T>(lvw.e_ItemsAsIEnumerable());
+			public static IEnumerable<ListViewItemAndTag<T>> eItemsAndTags<T>(this ListView lvw)
+				=> eItemsAndTags<T>(lvw.eItemsAsIEnumerable());
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ListViewItemAndTag<T>> e_SelectedItemsAndTags<T>(this ListView lvw)
-				=> e_ItemsAndTags<T>(lvw.e_SelectedItemsAsIEnumerable());
+			public static IEnumerable<ListViewItemAndTag<T>> eSelectedItemsAndTags<T>(this ListView lvw)
+				=> eItemsAndTags<T>(lvw.eSelectedItemsAsIEnumerable());
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ListViewItemAndTag<T>> e_CheckedItemsAndTags<T>(this ListView lvw)
-				=> e_ItemsAndTags<T>(lvw.e_CheckedItemsAsIEnumerable());
+			public static IEnumerable<ListViewItemAndTag<T>> eCheckedItemsAndTags<T>(this ListView lvw)
+				=> eItemsAndTags<T>(lvw.eCheckedItemsAsIEnumerable());
 
 
 			#endregion
@@ -5724,39 +6027,66 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<T> e_ItemsAs<T>(this ListViewGroup lvg) where T : ListViewItem => lvg.Items.Cast<T>();
+			public static IEnumerable<T> eItemsAs<T>(this ListViewGroup lvg) where T : ListViewItem => lvg.Items.Cast<T>();
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<T> e_ItemsAs<T>(this ListView lvw) where T : ListViewItem => lvw.Items.Cast<T>();
+			public static IEnumerable<T> eItemsAs<T>(this ListView lvw) where T : ListViewItem => lvw.Items.Cast<T>();
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<T> e_SelectedItemsAs<T>(this ListView lvw) where T : ListViewItem => lvw.SelectedItems.Cast<T>();
+			public static IEnumerable<T> eSelectedItemsAs<T>(this ListView lvw) where T : ListViewItem => lvw.SelectedItems.Cast<T>();
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<T> e_CheckedItemsAs<T>(this ListView lvw) where T : ListViewItem => lvw.CheckedItems.Cast<T>();
+			public static IEnumerable<T> eSelectedItems<T>(this IEnumerable<T> rows) where T : ListViewItem => rows.Where(li => li.Selected);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static IEnumerable<T> eSelectedItemsAs<T>(this ListView.ListViewItemCollection rows) where T : ListViewItem => rows.Cast<T>().eSelectedItems();
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static IEnumerable<ListViewItem> eSelectedItems(this ListViewGroup g) => g.Items.eSelectedItemsAs<ListViewItem>();
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static IEnumerable<T> eSelectedItemsAs<T>(this ListViewGroup g) where T : ListViewItem => g.Items.eSelectedItemsAs<T>();
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static IEnumerable<T> eCheckedItemsAs<T>(this ListView lvw) where T : ListViewItem => lvw.CheckedItems.Cast<T>();
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static IEnumerable<T> eCheckedItems<T>(this IEnumerable<T> rows) where T : ListViewItem => rows.Where(li => li.Checked);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static IEnumerable<T> eCheckedItemsAs<T>(this ListView.ListViewItemCollection rows) where T : ListViewItem => rows.Cast<T>().eCheckedItems();
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static IEnumerable<ListViewItem> eCheckedItems(this ListViewGroup g) => g.Items.eCheckedItemsAs<ListViewItem>();
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static IEnumerable<T> eCheckedItemsAs<T>(this ListViewGroup g) where T : ListViewItem => g.Items.eCheckedItemsAs<T>();
 
 			#endregion
 
 			#endregion
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<ColumnHeader> e_ColumnsAsIEnumerable(this ListView lvw) => lvw.Columns.Cast<ColumnHeader>();
+			public static IEnumerable<ColumnHeader> eColumnsAsIEnumerable(this ListView lvw) => lvw.Columns.Cast<ColumnHeader>();
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ListViewGroup? e_GroupsGetByKey(this ListView lvw, string? key)
-				=> lvw.e_GroupsAsIEnumerable().Where(grp => (grp.Name ?? "") == (key ?? "")).FirstOrDefault();
+			public static ListViewGroup? eGroupsGetByKey(this ListView lvw, string? key)
+				=> lvw.eGroupsAsIEnumerable().FirstOrDefault(grp => (grp.Name ?? "") == (key ?? ""));
 
 
 			/// <summary>Предыдущий элемент (Index меньше на 1)</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ListViewItem? e_Previous(this ListViewItem li)
-				=> (li.Index <= 0) ? null : li.ListView.Items[li.Index - 1];
+			public static ListViewItem? ePrevious(this ListViewItem li)
+				=> (li.Index <= 0)
+				? null
+				: li.ListView!.Items[li.Index - 1];
 
 			/// <summary>Предыдущий элемент в той же группе (Index меньше на 1)</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ListViewItem? e_PreviousInGroup(this ListViewItem li)
+			public static ListViewItem? ePreviousInGroup(this ListViewItem li)
 			{
-				var liPrev = li.e_Previous();
+				var liPrev = li.ePrevious();
 				if (liPrev != null && object.ReferenceEquals(liPrev.Group, li.Group)) return liPrev;
 				return null;
 			}
@@ -5764,15 +6094,17 @@ return cItems;
 
 			/// <summary>Next элемент (Index +1)</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ListViewItem? e_Next(this ListViewItem li)
-				=> (li.Index >= (li.ListView.Items.Count - 1)) ? null : li.ListView.Items[li.Index + 1];
+			public static ListViewItem? eNext(this ListViewItem li)
+				=> (li.Index >= (li.ListView!.Items.Count - 1))
+					? null
+					: li.ListView.Items[li.Index + 1];
 
 
 			/// <summary>Next элемент в той же группе (Index +1)</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static ListViewItem? e_NextInGroup(this ListViewItem li)
+			public static ListViewItem? eNextInGroup(this ListViewItem li)
 			{
-				var liNext = li.e_Next();
+				var liNext = li.eNext();
 				if (liNext != null && object.ReferenceEquals(liNext.Group, li.Group)) return liNext;
 				return null;
 			}
@@ -5781,7 +6113,7 @@ return cItems;
 
 			/// <summary>Counts distance from cursor to the nearest item in the list.</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static (ListViewItem? Item, Size? VectorToItemCenter, Double? Distance) e_GetNearestItem(this ListView lvw, Point pt)
+			public static (ListViewItem? Item, Size? VectorToItemCenter, Double? Distance) eGetNearestItem(this ListView lvw, Point pt)
 			{
 				if (lvw.Items.Count < 1) return (null, null, null);
 
@@ -5790,10 +6122,10 @@ return cItems;
 							.Select(item =>
 							{
 								Rectangle rcItem = item.GetBounds(ItemBoundsPortion.Entire);
-								var ptItemCenter = rcItem.e_GetCenter().e_RoundToInt();
+								var ptItemCenter = rcItem.eGetCenter().eRoundToInt();
 
-								var szDistace = pt.e_GetVectorTo(ptItemCenter);
-								var hyp = szDistace.e_GetHypotenuse();
+								var szDistace = pt.eGetVectorTo(ptItemCenter);
+								var hyp = szDistace.eGetHypotenuse();
 								var hypA = Math.Abs(hyp);
 								return (Item: item, VectorToItemCenter: szDistace, Distace: hyp, DistaceAbs: hypA, Center: ptItemCenter);
 							})
@@ -5806,14 +6138,14 @@ return cItems;
 
 			/// <summary>Counts distance from cursor to the nearest item in the list.</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_Activate(this ListViewItem li, bool deactivateOther = true)
+			public static void eActivate(this ListViewItem li, bool deactivateOther = true)
 			{
 				ListView? lvw = li.ListView as ListView;
 
-				lvw?.e_runOnLockedUpdate(delegate
+				lvw?.erunOnLockedUpdate(delegate
 				{
 					if (deactivateOther)
-						lvw?.e_ItemsAsIEnumerable().ToList().ForEach(li => li.Selected = false);
+						lvw?.eItemsAsIEnumerable().ToList().ForEach(li => li.Selected = false);
 
 					li.Selected = true;
 					li.Focused = true;
@@ -5822,6 +6154,20 @@ return cItems;
 			}
 		}
 
+		[EditorBrowsable(EditorBrowsableState.Never)]
+		internal static partial class Extensions_Controls_ImageList
+		{
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void SetKeyNames(this ImageList iml, int startIndex, params string[] keys)
+			{
+				for (int i = 0; i < keys.Length; i++)
+				{
+					iml.Images.SetKeyName(startIndex + i, keys[i]);
+				}
+			}
+
+		}
 
 		[EditorBrowsable(EditorBrowsableState.Never)]
 		internal static partial class Extensions_Controls_ProgressBar
@@ -5834,14 +6180,14 @@ return cItems;
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_SetState(this ProgressBar pb, PBM_STATES state)
+			internal static void eSetState(this ProgressBar pb, PBM_STATES state)
 			{
 				const int PBM_SETSTATE = 0x400 + 16;
-				_ = uom.WinAPI.Windows.SendMessage(pb.Handle, PBM_SETSTATE, (int)state, 0);
+				_ = uom.WinAPI.windows.SendMessage(pb.Handle, PBM_SETSTATE, (int)state, 0);
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_SetValues(
+			internal static void eSetValues(
 				this ProgressBar pb,
 				int iMin = 0,
 				int iMax = 100,
@@ -5873,7 +6219,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_InitDefault(this SaveFileDialog sfd, string defaultExt, string filter)
+			public static void eInitDefault(this SaveFileDialog sfd, string defaultExt, string filter)
 			{
 				sfd.ShowHelp = false;
 				sfd.AddExtension = true;
@@ -5889,7 +6235,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void e_InitDefault(this OpenFileDialog ofd, string defaultExt, string filter, bool Multiselect = false)
+			public static void eInitDefault(this OpenFileDialog ofd, string defaultExt, string filter, bool Multiselect = false)
 			{
 				ofd.ShowHelp = false;
 				ofd.ShowReadOnly = false;
@@ -5905,12 +6251,12 @@ return cItems;
 				ofd.Multiselect = Multiselect;
 
 				ofd.Filter = filter;
-				if (defaultExt.e_IsNOTNullOrWhiteSpace()) ofd.DefaultExt = defaultExt;
+				if (defaultExt.eIsNotNullOrWhiteSpace()) ofd.DefaultExt = defaultExt;
 			}
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string[] e_OpenLoadFilesDialog(
+			public static string[] eOpenLoadFilesDialog(
 				this Form owner,
 				string defaultExt = "",
 				string filter = C_DEFAULT_XML_EXPORT_FILTER,
@@ -5919,12 +6265,12 @@ return cItems;
 				string initialDirectory = "")
 			{
 				using OpenFileDialog ofd = new();
-				ofd.e_InitDefault(defaultExt, filter, multiselect);
+				ofd.eInitDefault(defaultExt, filter, multiselect);
 
 				ofd.Filter = filter;
 
-				if (initialFile.e_IsNOTNullOrWhiteSpace()) ofd.FileName = initialFile;
-				if (initialDirectory.e_IsNOTNullOrWhiteSpace()) ofd.InitialDirectory = initialDirectory;
+				if (initialFile.eIsNotNullOrWhiteSpace()) ofd.FileName = initialFile;
+				if (initialDirectory.eIsNotNullOrWhiteSpace()) ofd.InitialDirectory = initialDirectory;
 
 				return (ofd.ShowDialog(owner) != DialogResult.OK)
 					? Array.Empty<string>()
@@ -5933,13 +6279,13 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_OpenLoadFileDialog(
+			public static string eOpenLoadFileDialog(
 				this Form owner,
 				string defaultExt = "",
 				string filter = C_DEFAULT_XML_EXPORT_FILTER,
 				string initialFile = "",
 				string initialDirectory = "")
-				=> e_OpenLoadFilesDialog(owner,
+				=> eOpenLoadFilesDialog(owner,
 					defaultExt,
 					filter,
 					false,
@@ -5949,13 +6295,13 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_OpenLoadFileDialog(
+			public static string eOpenLoadFileDialog(
 				this Form owner,
 				string defaultExt = "",
 				string filter = C_DEFAULT_XML_EXPORT_FILTER,
 				string initialFile = "",
 				Environment.SpecialFolder initialDirectory = Environment.SpecialFolder.DesktopDirectory)
-				=> e_OpenLoadFileDialog(owner,
+				=> eOpenLoadFileDialog(owner,
 					defaultExt,
 					filter,
 					initialFile,
@@ -5975,7 +6321,7 @@ return cItems;
 
 					<DebuggerNonUserCode, DebuggerStepThrough>
 					<MethodImpl(MethodImplOptions.AggressiveInlining), Extension()>
-					Public Function e_OpenSaveFileDialog(ParentForm As Form,
+					Public Function eOpenSaveFileDialog(ParentForm As Form,
 															  Optional sDefaultFileName As String = vbNullString,
 															  Optional sDefaultExt As String = C_DEFAULT_XML_EXT,
 															  Optional sFilter As String = C_DEFAULT_XML_EXPORT_FILTER,
@@ -5983,9 +6329,9 @@ return cItems;
 															  Optional neInitialDirectory As Nullable(Of Environment.SpecialFolder) = Environment.SpecialFolder.DesktopDirectory) As String
 						Using SFD As New SaveFileDialog
 							With SFD
-								If (sDefaultFileName.e_IsNullOrWhiteSpace) Then
+								If (sDefaultFileName.eIsNullOrWhiteSpace) Then
 									sDefaultFileName = Now.ToFileName
-									If (sAutoFileNameSuffix.e_IsNOTNullOrWhiteSpace) Then sDefaultFileName = sAutoFileNameSuffix & " " & sDefaultFileName
+									If (sAutoFileNameSuffix.eIsNotNullOrWhiteSpace) Then sDefaultFileName = sAutoFileNameSuffix & " " & sDefaultFileName
 								End If
 								.FileName = sDefaultFileName
 
@@ -6043,7 +6389,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static ToolStripMenuItem? e_SearchMenuItemTree(this IEnumerable<ToolStripItem> emi, Func<ToolStripMenuItem, bool> predicate)
+			internal static ToolStripMenuItem? eSearchMenuItemTree(this IEnumerable<ToolStripItem> emi, Func<ToolStripMenuItem, bool> predicate)
 			{
 				foreach (ToolStripItem tsi in emi)
 				{
@@ -6056,7 +6402,7 @@ return cItems;
 								IEnumerable<ToolStripItem> childItems = mi.DropDownItems.Cast<ToolStripItem>();
 								if (childItems.Any())
 								{
-									ToolStripMenuItem? miChild = e_SearchMenuItemTree(childItems, predicate);
+									ToolStripMenuItem? miChild = eSearchMenuItemTree(childItems, predicate);
 									if (miChild != null) return miChild;
 								}
 								break;
@@ -6071,19 +6417,19 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static ToolStripMenuItem? e_SearchMenuItemTree(this ToolStripMenuItem mi, Func<ToolStripMenuItem, bool> predicate)
-				=> mi.DropDownItems.Cast<ToolStripItem>().e_SearchMenuItemTree(predicate);
+			internal static ToolStripMenuItem? eSearchMenuItemTree(this ToolStripMenuItem mi, Func<ToolStripMenuItem, bool> predicate)
+				=> mi.DropDownItems.Cast<ToolStripItem>().eSearchMenuItemTree(predicate);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static ToolStripMenuItem? e_SearchMenuItemTree(this ContextMenuStrip cm, Func<ToolStripMenuItem, bool> predicate)
-				=> cm.Items.Cast<ToolStripItem>().e_SearchMenuItemTree(predicate);
+			internal static ToolStripMenuItem? eSearchMenuItemTree(this ContextMenuStrip cm, Func<ToolStripMenuItem, bool> predicate)
+				=> cm.Items.Cast<ToolStripItem>().eSearchMenuItemTree(predicate);
 
 
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_Remove(this ToolStripMenuItem mi)
+			internal static void eRemove(this ToolStripMenuItem mi)
 			{
 				ToolStripItem? o = mi.OwnerItem;
 				if (o == null) return;
@@ -6108,27 +6454,12 @@ return cItems;
 		internal static class Extensions_IO_Win
 		{
 
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static FileInfo e_GetFileIn_AppDir(this string FileName)
-				=> new(Path.Combine(System.Windows.Forms.Application.StartupPath, FileName));
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_GetFileIn_AppData_Local(this string FileName)
-				=> Path.Combine(AppInfo.UserAppDataPath_Local().FullName, FileName);
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_GetFileIn_AppData_Roaming(this string FileName)
-				=> Path.Combine(AppInfo.UserAppDataPath_Roaming().FullName, FileName);
-
-
 
 
 
 			[Obsolete("Устаревший класс! использовать надо многопоточный поисковик многоплатформенный", true)]
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static FileInfo[] e_SearchFile(
+			internal static FileInfo[] eSearchFile(
 				this DirectoryInfo Dir,
 				string SearchPattern,
 				bool OnlyForFirstFile = true,
@@ -6146,7 +6477,7 @@ return cItems;
 							if (OnlyForFirstFile)
 							{
 								leFound.Add(aFoundFiles.First());
-								return leFound.ToArray();
+								return [.. leFound];
 							}
 
 							leFound.AddRange(aFoundFiles);
@@ -6162,7 +6493,7 @@ return cItems;
 				try
 				{
 					var aSubDirs = Dir.GetDirectories();
-					var aFoundFiles = aSubDirs.e_SearchFile(SearchPattern, OnlyForFirstFile, SkipNTFSJunctions, ErrorHandler);
+					var aFoundFiles = aSubDirs.eSearchFile(SearchPattern, OnlyForFirstFile, SkipNTFSJunctions, ErrorHandler);
 					if (aFoundFiles.Any())
 					{
 						lock (leFound)
@@ -6183,87 +6514,19 @@ return cItems;
 				return leFound.ToArray();
 			}
 
-#if NETFRAMEWORK
-			[ MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string? e_ExtractAssociatedIcon(
-				this FileInfo App,
-				ImageList IML,
-				bool TryLoadFileAsImage = false) => App!.FullName!.e_ExtractAssociatedIcon(IML, TryLoadFileAsImage);
 
-
-			[ MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string? e_ExtractAssociatedIcon(this string sPath, ImageList IML, bool TryLoadFileAsImage = false)
-			{
-				lock (IML)
-				{
-					sPath = sPath.ToLower();
-					if (IML.Images.ContainsKey(sPath)) return sPath; // Для этого файла уже была извлечена иконка - используем её
-
-					// Иконка ещё не извлекалась - Пытаемся извлечь её 
-					if (TryLoadFileAsImage)
-					{
-						try
-						{
-							var BM = new Bitmap(sPath);
-							// Image loaeded OK! Creating Icon
-							var rFileIcon = BM.e_CreateIcon(IML.ImageSize);
-							if (rFileIcon != null)
-							{
-								var FileIcon_16 = new Icon(rFileIcon, IML.ImageSize);
-								IML.Images.Add(sPath, FileIcon_16);
-								return sPath;
-							}
-						}
-						catch
-						{
-						}
-						// Failed to load file as image!
-					}
-
-					// Use System Default Icon Extractor
-					try
-					{
-						System.Drawing.Icon rFileIcon = System.Drawing.Icon.ExtractAssociatedIcon(sPath)!;
-						System.Drawing.Icon FileIcon_16 = new Icon(rFileIcon, IML.ImageSize);
-						IML.Images.Add(sPath, FileIcon_16);
-						return sPath;
-					}
-					catch
-					{
-					}
-
-					return null;
-				}
-			}
-
-
-
-#endif
-
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void eOpenExplorer(this FileSystemInfo FI, uom.AppTools.WindowsExplorerPathModes PathMode = uom.AppTools.C_DEFAULT_EXPLORER_MODE)
+				=> FI.FullName.eOpenExplorer(PathMode);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.Icon? e_ExtractAssociatedIcon(this string sFile)
-				=> System.Drawing.Icon.ExtractAssociatedIcon(sFile);
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.Icon? e_ExtractAssociatedIcon(this FileSystemInfo FI)
-				=> FI.FullName.e_ExtractAssociatedIcon();
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_OpenExplorer(this FileSystemInfo FI, uom.AppTools.WindowsExplorerPathModes PathMode = uom.AppTools.C_DEFAULT_EXPLORER_MODE)
-				=> FI.FullName.e_OpenExplorer(PathMode);
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_OpenExplorer(this string sPath, uom.AppTools.WindowsExplorerPathModes PathMode = uom.AppTools.C_DEFAULT_EXPLORER_MODE)
+			internal static void eOpenExplorer(this string sPath, uom.AppTools.WindowsExplorerPathModes PathMode = uom.AppTools.C_DEFAULT_EXPLORER_MODE)
 				=> uom.AppTools.StartWinSysTool_Explorer(sPath, PathMode);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_OpenURLInBrowser(this string uri)
+			internal static void eOpenURLInBrowser(this string uri)
 			{
 				ProcessStartInfo psi = new()
 				{
@@ -6276,7 +6539,7 @@ return cItems;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static (string? Description, FileVersionInfo? Version)
-				e_GetFileTitle(
+				eGetFileTitle(
 				this FileInfo fi,
 				string? DefaultTitle = null)
 			{
@@ -6291,41 +6554,41 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static DirectoryInfo e_ToDirectoryInfoOrDefaultDir(this string dir, Environment.SpecialFolder defaultDir = Environment.SpecialFolder.DesktopDirectory)
+			internal static DirectoryInfo eToDirectoryInfoOrDefaultDir(this string dir, Environment.SpecialFolder defaultDir = Environment.SpecialFolder.DesktopDirectory)
 			{
-				if (dir.e_IsNullOrWhiteSpace() || !Directory.Exists(dir)) dir = Environment.GetFolderPath(defaultDir);
+				if (dir.eIsNullOrWhiteSpace() || !Directory.Exists(dir)) dir = Environment.GetFolderPath(defaultDir);
 				return new(dir.Trim());
 			}
 
 
 			/// <summary>Determines whether a path to a file system object such as a file or folder is valid</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_Shell_IsExist(this string sPath) => uom.WinAPI.Shell.PathFileExists(sPath);
+			internal static bool eShell_IsExist(this string sPath) => uom.WinAPI.shell.PathFileExists(sPath);
 
 
 			/// <summary>Use UOM.Win32.Shell.PathIsDirectory</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_Shell_IsDirectoryWin32(this string sPath) => uom.WinAPI.Shell.PathIsDirectory(sPath);
+			internal static bool eShell_IsDirectoryWin32(this string sPath) => uom.WinAPI.shell.PathIsDirectory(sPath);
 
 
 			/// <summary>Использует Shell API PathRelativePathTo</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static FileAttributes e_ToNETFileAttributes(this WinAPI.IO.EFileAttributes WinFileAttrs) => (FileAttributes)(int)WinFileAttrs;
+			internal static FileAttributes eToNETFileAttributes(this WinAPI.io.EFileAttributes WinFileAttrs) => (FileAttributes)(int)WinFileAttrs;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_Shell_IsNetworkPath(this FileSystemInfo Path) => uom.WinAPI.Shell.PathIsNetworkPath(Path.FullName);
+			internal static bool eShell_IsNetworkPath(this FileSystemInfo Path) => uom.WinAPI.shell.PathIsNetworkPath(Path.FullName);
 
 
 			/// <summary>Использует Shell API PathRelativePathTo</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_Shell_GetRelativeTo(this FileSystemInfo PathFrom, FileSystemInfo PathTo)
-				=> uom.WinAPI.Shell.GetRelativePathTo(PathFrom.FullName, PathFrom.Attributes, PathTo.FullName, PathTo.Attributes);
+			internal static string eShell_GetRelativeTo(this FileSystemInfo PathFrom, FileSystemInfo PathTo)
+				=> uom.WinAPI.shell.GetRelativePathTo(PathFrom.FullName, PathFrom.Attributes, PathTo.FullName, PathTo.Attributes);
 
 
 			[Obsolete("Use new multithread scanner", true)]
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static FileInfo[] e_SearchFile(
+			internal static FileInfo[] eSearchFile(
 				this DirectoryInfo[] aDirs,
 				string SearchPattern,
 				bool OnlyForFirstFile = true,
@@ -6338,13 +6601,13 @@ return cItems;
 				//var leFound = new List<FileInfo>();
 				//foreach (var rDir in aDirs)
 				//{
-				//    if (SkipNTFSJunctions && rDir.FullName.e_IsNTFS_SymLink_Win32())
+				//    if (SkipNTFSJunctions && rDir.FullName.eIsNTFS_SymLink_Win32())
 				//    {
 				//        // Skip
 				//    }
 				//    else
 				//    {
-				//        var aFoundFiles = rDir.e_SearchFile(SearchPattern, OnlyForFirstFile, SkipNTFSJunctions, ErrorHandler);
+				//        var aFoundFiles = rDir.eSearchFile(SearchPattern, OnlyForFirstFile, SkipNTFSJunctions, ErrorHandler);
 				//        if (aFoundFiles.Any())
 				//        {
 				//            lock (leFound)
@@ -6367,14 +6630,14 @@ return cItems;
 
 			/// <summary>WinAPI FILE_ATTRIBUTE_REPARSE_POINT</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_IsNTFS_SymLink_WinAPI(this string sPath)
-				=> WinAPI.IO.GetFileAttributes(sPath).HasFlag(WinAPI.IO.EFileAttributes.FILE_ATTRIBUTE_REPARSE_POINT);
+			internal static bool eIsNTFS_SymLink_WinAPI(this string sPath)
+				=> WinAPI.io.GetFileAttributes(sPath).HasFlag(WinAPI.io.EFileAttributes.FILE_ATTRIBUTE_REPARSE_POINT);
 
 
 			/// <summary>Получаем из реестра описание типа файла по расширению</summary>
 			/// <param name="FileExt">Расширение файла, например '.exe'</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_GetFileTypeDescription(this string FileExt)
+			internal static string eGetFileTypeDescription(this string FileExt)
 			{
 
 				throw new NotImplementedException();
@@ -6382,7 +6645,7 @@ return cItems;
 
 				//    const string CS_FRIENDLY_TYPE_NAME = "FriendlyTypeName";
 				//    string sResult = null;
-				//    bool bEmptyExt = FileExt.e_IsNullOrWhiteSpace();
+				//    bool bEmptyExt = FileExt.eIsNullOrWhiteSpace();
 
 				//    if (!bEmptyExt)
 				//    {
@@ -6395,7 +6658,7 @@ return cItems;
 				//                if (keyFileExt != null)
 				//                {
 				//                    string sTypeKeyName = constants.ToString(keyFileExt.GetValue(null, null));
-				//                    if (sTypeKeyName.e_IsNOTNullOrWhiteSpace())
+				//                    if (sTypeKeyName.eIsNotNullOrWhiteSpace())
 				//                    {
 				//                        using (var keyFileType = keyRoot.OpenSubKey(sTypeKeyName, false))
 				//                        {
@@ -6409,7 +6672,7 @@ return cItems;
 				//                                if (bHasFriendlyTypeName)
 				//                                {
 				//                                    string sFriendlyTypeName = constants.ToString(keyFileType.GetValue(CS_FRIENDLY_TYPE_NAME, null));
-				//                                    if (sFriendlyTypeName.e_IsNOTNullOrWhiteSpace())
+				//                                    if (sFriendlyTypeName.eIsNotNullOrWhiteSpace())
 				//                                    {
 				//                                        if (UOM.Win32.Resources.mResourcesAPI.HasResourceStringPrefix(sFriendlyTypeName))
 				//                                            sFriendlyTypeName = UOM.Win32.Resources.mResourcesAPI.ExtractResourceString(sFriendlyTypeName);
@@ -6417,9 +6680,9 @@ return cItems;
 				//                                    }
 				//                                }
 
-				//                                if (sTypeDescription.e_IsNullOrWhiteSpace())
+				//                                if (sTypeDescription.eIsNullOrWhiteSpace())
 				//                                    sTypeDescription = constants.ToString(keyFileType.GetValue(null, null));
-				//                                if (sTypeDescription.e_IsNOTNullOrWhiteSpace())
+				//                                if (sTypeDescription.eIsNotNullOrWhiteSpace())
 				//                                    sResult = sTypeDescription;
 				//                            }
 				//                        }
@@ -6442,7 +6705,7 @@ return cItems;
 			/// Convert local file path to full remote path: 'C:\Windows\explorer.exe' => '\\x.x.x.x\c$\Windows\explorer.exe'
 			/// If 'local' path is like \\x.x.x.x\apps\var\any.exe, the path does not changes
 			/// </summary>
-			public static FileInfo e_RemoteHostLocalPathToNetworkPath(this string localPath, string remoteHost)
+			public static FileInfo eRemoteHostLocalPathToNetworkPath(this string localPath, string remoteHost)
 			{
 				try
 				{
@@ -6453,7 +6716,7 @@ return cItems;
 
 					char cDisk = root.First();
 					string dirPath = fiApp.Directory!.FullName.Substring(3);       //'Windows'
-					dirPath = remoteHost.e_CreateWinSharePrefix() + @$"{cDisk}$\{dirPath}"; //'c$\Windows'
+					dirPath = remoteHost.eCreateWinSharePrefix() + @$"{cDisk}$\{dirPath}"; //'c$\Windows'
 					string fullRemoteFilePath = Path.Combine(dirPath, fiApp.Name);          //'c$\Windows\explorer.exe'
 					return new(fullRemoteFilePath);
 				}
@@ -6469,9 +6732,9 @@ return cItems;
 			/// If remote path is like \\x.x.x.x\apps\var\any.exe, the path does not changes!
 			/// If remote path host name or IP does not equal to 'remoteHost' arg, the path does not changes!
 			/// </summary>
-			public static FileInfo e_NetworkPathToRemoteHostLocalPath(this string remotePath, string remoteHost)
+			public static FileInfo eNetworkPathToRemoteHostLocalPath(this string remotePath, string remoteHost)
 			{
-				string netPrefix = remoteHost.e_CreateWinSharePrefix(); //'\\x.x.x.x/'
+				string netPrefix = remoteHost.eCreateWinSharePrefix(); //'\\x.x.x.x/'
 				if (!remotePath.ToLower().StartsWith(netPrefix.ToLower())) return new FileInfo(remotePath);// another remote host. do not modify path '\\y.y.y.y\aaaa\bbbb....'
 
 				//Path starts with '\\host\', sample: '\\x.x.x.x\c$\Windows\System32\Defrag.exe'
@@ -6504,7 +6767,7 @@ return cItems;
 			/// <summary>Method to retrieve all directories, recursively, within a store.</summary>
 			/// <param name="pattern"></param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static List<String> e_GetAllDirectories(this IsolatedStorageFile storeFile, string pattern = @"*", bool recursive = false)
+			internal static List<String> eGetAllDirectories(this IsolatedStorageFile storeFile, string pattern = @"*", bool recursive = false)
 			{
 				// Get the root of the search string.
 				string root = Path.GetDirectoryName(pattern) ?? "";
@@ -6520,7 +6783,7 @@ return cItems;
 					for (int i = 0, max = directoryList.Count; i < max; i++)
 					{
 						string directory = directoryList[i] + @"/";
-						List<String> more = storeFile.e_GetAllDirectories(root + directory + @"*");
+						List<String> more = storeFile.eGetAllDirectories(root + directory + @"*");
 
 						// For each subdirectory found, add in the base path.
 						for (int j = 0; j < more.Count; j++)
@@ -6540,7 +6803,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static List<String> e_GetAllFiles(this IsolatedStorageFile storeFile, string pattern = @"*", bool recursive = false)
+			internal static List<String> eGetAllFiles(this IsolatedStorageFile storeFile, string pattern = @"*", bool recursive = false)
 			{
 				// Get the root and file portions of the search string.
 				string fileString = Path.GetFileName(pattern);
@@ -6550,7 +6813,7 @@ return cItems;
 				{
 					// Loop through the subdirectories, collect matches,
 					// and make separators consistent.
-					foreach (string directory in storeFile.e_GetAllDirectories(@"*"))
+					foreach (string directory in storeFile.eGetAllDirectories(@"*"))
 					{
 						foreach (string file in storeFile.GetFileNames(directory + @"/" + fileString))
 						{
@@ -6567,49 +6830,113 @@ return cItems;
 
 
 		[EditorBrowsable(EditorBrowsableState.Never)]
+		internal static class Extensions_Network_Win
+		{
+
+
+			#region eSendARP
+
+			[DllImport(uom.WinAPI.core.WINDLL_iphlpapi, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			private static extern int SendARP(uint DestIP, uint SrcIP, IntPtr pMacAddr, ref int PhyAddrLen);
+
+			[DebuggerHidden, DebuggerNonUserCode]
+			/// <summary>Запрашивает в ARP таблице MAC адрес удалённого хоста</summary>
+			public static PhysicalAddress eSendARP(this IPAddress ip, IPAddress? sendViaInterface = null)
+			{
+				if (ip.Equals(IPAddress.None) || ip.Equals(IPAddress.Broadcast) || ip.Equals(IPAddress.Loopback))
+					throw new ArgumentNullException(nameof(ip));
+
+				sendViaInterface ??= IPAddress.Any;
+
+				int macLen = 6;
+				var hMACBuffer = Marshal.AllocHGlobal(macLen);
+				try
+				{
+					// retrieve the remote MAC address
+					int iResult = SendARP(ip.eToUInt32(), sendViaInterface!.eToUInt32(), hMACBuffer, ref macLen);
+					if (iResult != 0) throw new Win32Exception(iResult);
+					byte[] abMAC = new byte[macLen];
+					Marshal.Copy(hMACBuffer, abMAC, 0, macLen);
+					return new PhysicalAddress(abMAC);
+				}
+				finally { Marshal.FreeHGlobal(hMACBuffer); }
+			}
+
+
+			// Пытаемся определить NetBIOS имя хоста
+			public async static Task<(string? HostName, PhysicalAddress? MAC)> eQueryAsync(this IPAddress IP, CancellationTokenSource? cancel)
+			{
+				var tskResolveDNSNAme = Extensions_DebugAndErrors.etryCatchStartAsync(() => Dns.GetHostEntry(IP), cancel: cancel, errorUI: false);
+				var tskSendARP = Extensions_DebugAndErrors.etryCatchStartAsync(() => IP.eSendARP(), cancel: cancel, errorUI: false);
+				try
+				{
+					if (cancel != null)
+					{
+#if NET
+						await Task.WhenAll(tskResolveDNSNAme, tskSendARP).WaitAsync(cancel.Token);
+#else
+						await Task.WhenAll(tskResolveDNSNAme, tskSendARP).eWaitAsync(cancel);
+#endif
+
+						if (cancel.IsCancellationRequested) return (null, null);
+					}
+					else
+						await Task.WhenAll(tskResolveDNSNAme, tskSendARP);
+				}
+				catch (TaskCanceledException) { return (null, null); }
+				return (tskResolveDNSNAme.Result.Result?.HostName, tskSendARP.Result.Result);
+			}
+
+			#endregion
+
+
+
+		}
+
+		[EditorBrowsable(EditorBrowsableState.Never)]
 		internal static class Extensions_Errors_Win
 		{
 
 			#region ThrowLastWin32Exception
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ThrowLastWin32Exception(this string? DescriptionOfErrorAction)
-				=> WinAPI.Errors.ThrowLastWin23Error(DescriptionOfErrorAction);
+			internal static void eThrowLastWin32Exception(this string? DescriptionOfErrorAction)
+				=> WinAPI.errors.ThrowLastWin23Error(DescriptionOfErrorAction);
 
 			/// <summary>Вызывает ошибку, только если условие истинно</summary>
 			/// <param name="b">Если условие верно - вызывается ошибка</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ThrowLastWin32Exception_Assert(this bool b, string? DescriptionOfErrorAction = null)
+			internal static void eThrowLastWin32Exception_Assert(this bool b, string? DescriptionOfErrorAction = null)
 			{
-				if (b) e_ThrowLastWin32Exception(DescriptionOfErrorAction);
+				if (b) eThrowLastWin32Exception(DescriptionOfErrorAction);
 			}
 
 			/// <summary>Вызывает ошибку если условие НЕВЕРНО!</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ThrowLastWin32Exception_AssertFalse(this bool b, string? DescriptionOfErrorAction = null)
+			internal static void eThrowLastWin32Exception_AssertFalse(this bool b, [CallerArgumentExpression(nameof(b))] string? failedAction = null)
 			{
-				if (!b) e_ThrowLastWin32Exception(DescriptionOfErrorAction);
+				if (!b) eThrowLastWin32Exception(failedAction);
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ThrowLastWin32Exception_AssertFalse(this bool b, WinAPI.Errors.Win32Errors DoNotThrowErrorCode)
+			internal static void eThrowLastWin32Exception_AssertFalse(this bool b, WinAPI.errors.Win32Errors DoNotThrowErrorCode)
 			{
-				if (!b) DoNotThrowErrorCode.e_ThrowLastWin32Exception_IfNot();
+				if (!b) DoNotThrowErrorCode.eThrowLastWin32Exception_IfNot();
 			}
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ThrowLastWin32Exception_IfNot(this WinAPI.Errors.Win32Errors DoNotThrowErrorCode)
-				=> new Win32Exception().e_ThrowIfNot(DoNotThrowErrorCode);
+			internal static void eThrowLastWin32Exception_IfNot(this WinAPI.errors.Win32Errors DoNotThrowErrorCode)
+				=> new Win32Exception().eThrowIfNot(DoNotThrowErrorCode);
 
 
 			/// <summary>Вызывает ошибку если указатель пуст</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ThrowLastWin32Exception_Assert_NUL(
+			internal static void eThrowLastWin32Exception_Assert_NUL(
 				this IntPtr H,
 				string? DescriptionOfErrorAction = null)
 			{
-				if (H.e_IsNotValid()) e_ThrowLastWin32Exception(DescriptionOfErrorAction);
+				if (H.eIsNotValid()) eThrowLastWin32Exception(DescriptionOfErrorAction);
 			}
 
 
@@ -6617,7 +6944,7 @@ return cItems;
 
 			#region Win32Exception Throw
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_Throw(this Win32Exception WEX)
+			internal static void eThrow(this Win32Exception WEX)
 			{
 				throw WEX;
 			}
@@ -6625,35 +6952,35 @@ return cItems;
 			/// <summary>Вызывает ошибку, если win32ErrorCode не равно 0 (ERROR_SUCCESS)</summary>
 			/// <param name="win32ErrorCode">Проверяемый код ошибки</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ThrowIfError(this int win32ErrorCode)
+			internal static void eThrowIfError(this int win32ErrorCode)
 			{
-				var eResult = win32ErrorCode.e_ToWin32Error();
-				if (eResult != WinAPI.Errors.Win32Errors.ERROR_SUCCESS) eResult.e_ToWin32Exception().e_Throw();
+				var eResult = win32ErrorCode.eToWin32Error();
+				if (eResult != WinAPI.errors.Win32Errors.ERROR_SUCCESS) eResult.eToWin32Exception().eThrow();
 			}
 
 			/// <summary>Вызывает ошибку, если win32ErrorCode не равно 0 (ERROR_SUCCESS)</summary>
 			/// <param name="win32ErrorCode">Проверяемый код ошибки</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ThrowIfError(this WinAPI.Errors.Win32Errors eResult)
+			internal static void eThrowIfError(this WinAPI.errors.Win32Errors eResult)
 			{
-				if (eResult != WinAPI.Errors.Win32Errors.ERROR_SUCCESS) eResult.e_ToWin32Exception().e_Throw();
+				if (eResult != WinAPI.errors.Win32Errors.ERROR_SUCCESS) eResult.eToWin32Exception().eThrow();
 			}
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ThrowIf(this Win32Exception WEX, WinAPI.Errors.Win32Errors ThrowErrorCode)
+			internal static void eThrowIf(this Win32Exception WEX, WinAPI.errors.Win32Errors ThrowErrorCode)
 			{
-				if (WEX.e_ToWin32Error() == ThrowErrorCode) throw WEX;
+				if (WEX.eToWin32Error() == ThrowErrorCode) throw WEX;
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ThrowIfNot(this Win32Exception WEX, WinAPI.Errors.Win32Errors DoNotThrowErrorCode)
+			internal static void eThrowIfNot(this Win32Exception WEX, WinAPI.errors.Win32Errors DoNotThrowErrorCode)
 			{
-				if (WEX.e_ToWin32Error() != DoNotThrowErrorCode) throw WEX;
+				if (WEX.eToWin32Error() != DoNotThrowErrorCode) throw WEX;
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_ThrowIfNot(this WinAPI.Errors.Win32Errors EX, WinAPI.Errors.Win32Errors DoNotThrowErrorCode)
+			internal static void eThrowIfNot(this WinAPI.errors.Win32Errors EX, WinAPI.errors.Win32Errors DoNotThrowErrorCode)
 			{
 				if (EX == DoNotThrowErrorCode) return;
 				throw new Win32Exception((int)EX);
@@ -6663,170 +6990,181 @@ return cItems;
 
 			#endregion
 
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static WinAPI.Errors.Win32Errors e_ToWin32Error(this WinAPI.MTSync.WaitResults WR)
-				=> (WinAPI.Errors.Win32Errors)WR;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static WinAPI.Errors.Win32Errors e_ToWin32Error(this int iError)
-				=> (WinAPI.Errors.Win32Errors)iError;
+			internal static string eToLocalizedMessage(this WinAPI.errors.Win32Errors err)
+				=> WinAPI.errors.GetErrorMessage(err);
+
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static WinAPI.Errors.Win32Errors e_ToWin32Error(this Win32Exception WEX)
-				=> (WinAPI.Errors.Win32Errors)WEX.NativeErrorCode;
+			internal static WinAPI.errors.Win32Errors eToWin32Error(this WinAPI.sync.WaitResults WR)
+				=> (WinAPI.errors.Win32Errors)WR;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Win32Exception e_ToWin32Exception(this WinAPI.Errors.Win32Errors eError)
+			internal static WinAPI.errors.Win32Errors eToWin32Error(this int iError)
+				=> (WinAPI.errors.Win32Errors)iError;
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static WinAPI.errors.Win32Errors eToWin32Error(this Win32Exception WEX)
+				=> (WinAPI.errors.Win32Errors)WEX.NativeErrorCode;
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Win32Exception eToWin32Exception(this WinAPI.errors.Win32Errors eError)
 				=> new((int)eError);
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Win32Exception e_ToWin32Exception(this int iError)
+			internal static Win32Exception eToWin32Exception(this int iError)
 				=> new(iError);
 
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static uom.WinAPI.Errors.HResult e_ToHResult(this IntPtr i)
-				=> (uom.WinAPI.Errors.HResult)((UInt64)i.ToInt64());
+			internal static uom.WinAPI.errors.HResult eToHResult(this IntPtr i)
+				=> (uom.WinAPI.errors.HResult)((UInt64)i.ToInt64());
 
 
 			#region FIX ERROR Engine
 
-			#region e_LogError_FullErrorDump / e_LogError_DumpExceptionTree
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			private static string e_LogError_DumpExceptionTree(this Exception rEx)
-			{
-				var sbExceptionTree = new StringBuilder();
-				using (var TW = new StringWriter(sbExceptionTree))
-				{
-					rEx.DumpExceptionTree(TW);
-				}
 
+
+
+
+			#region eLogError_FullErrorDump / eLogError_DumpExceptionTree
+
+
+
+
+			// ''<summary>Фиксация ошибки в журнале и в DEBUG MODE вывод сообщения</summary>
+			//[MethodImpl(MethodImplOptions.AggressiveInlining)]			internal static string eDumpTree(this Exception ex, [CallerMemberName] string caller = "")				=> ex.eDumpExceptionTree(caller) + CS_CONSOLE_SEPARATOR;
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string eFullDump(this Exception? ex,
+				[CallerMemberName] string callerName = "",
+				[CallerFilePath] string callerFile = "",
+				[CallerLineNumber] int callerLine = 0)
+			{
+				if (ex == null) return string.Empty;
+
+				StringBuilder sbExceptionTree = new();
+				using StringWriter sw = new(sbExceptionTree);
+
+				sw.WriteLine($"{ex.GetType()}: '{ex.Message}'");
+				sw.WriteLine($"Caller: '{callerName}', File: '{callerFile}', Line: {callerLine}");
+				sw.WriteLine($"StackTrace:\n{ex.StackTrace}");
+
+				if (ex.InnerException != null)
+				{
+					sw.WriteLine($"Exception Stack Tree:");
+					while (ex.InnerException != null)
+					{
+						ex = ex.InnerException;
+						sw.WriteLine($"{ex.GetType()}\n{ex.Message}");
+					}
+				}
 				return sbExceptionTree.ToString();
 			}
 
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			private static void DumpExceptionTree(this Exception rEx, StringWriter TW)
-			{
-				TW.WriteLine(rEx.GetType().ToString());
-				TW.WriteLine(rEx.Message);
-				TW.WriteLine(constants.vbTab + "StackTrace:");
-				TW.WriteLine(rEx.StackTrace);
-				while (rEx.InnerException != null)
-				{
-					rEx = rEx.InnerException;
-					TW.WriteLine();
-					TW.WriteLine("    ^^^^^^^ InnerException Exception: ^^^^^^^^^");
-					rEx.DumpExceptionTree(TW);
-				}
-			}
-
-			// ''<summary>Фиксация ошибки в журнале и в DEBUG MODE вывод сообщения</summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_LogError_FullErrorDump(this Exception EX)
-			{
-				string sMessageText = EX.e_LogError_DumpExceptionTree();
-				sMessageText += constants.CS_CONSOLE_SEPARATOR;
-				return sMessageText;
-			}
 
 			#endregion
 
 
-			internal const string C_FAILED_TO_RUN_RUS = "Не удалось выполнить запрашиваемое действие!";
-			internal const string C_FAILED_TO_RUN_ENG = "Failed to execute!";
-			internal const string C_FAILED_TO_RUN = C_FAILED_TO_RUN_ENG;
-
 			/*	   */
-			/// <summary>Вызывает Callback внутри Try/Catch и при ошибке автоматом вызывает ex.e_LogError(ShowModalMessageBox)</summary>
+			/// <summary>Вызывает Callback внутри Try/Catch и при ошибке автоматом вызывает ex.eLogError(ShowModalMessageBox)</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_runTryCatch(this Action a,
-						bool onErrorShowModalMessageBox = true,
-						string errorMessageBoxTitle = C_FAILED_TO_RUN,
+			internal static void erunTryCatch(this Action a,
+						bool errorUI = true,
+						string uiTitle = C_FAILED_TO_RUN,
 						MessageBoxIcon icon = MessageBoxIcon.Error,
 						MessageBoxButtons btn = MessageBoxButtons.OK,
-						bool supressAnyModalPopEvenInDEBUG = false)
+						bool debugErrorUI = false)
 			{
 				try { a.Invoke(); }
-				catch (Exception ex) { ex.e_LogError(onErrorShowModalMessageBox, errorMessageBoxTitle, icon, btn, supressAnyModalPopEvenInDEBUG); }
+				catch (Exception ex) { ex.eLogError(errorUI, uiTitle, icon, btn, debugErrorUI); }
 			}
 
 
-			/// <summary>Вызывает Callback внутри Try/Catch и при ошибке автоматом вызывает ex.e_LogError(ShowModalMessageBox)</summary>
+			/// <summary>Вызывает Callback внутри Try/Catch и при ошибке автоматом вызывает ex.eLogError(ShowModalMessageBox)</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_runTryCatch(this MethodInvoker a,
-						bool onErrorShowModalMessageBox = true,
-						string errorMessageBoxTitle = C_FAILED_TO_RUN,
+			internal static void erunTryCatch(this System.Windows.Forms.MethodInvoker a,
+						bool errorUI = true,
+						string uiTitle = C_FAILED_TO_RUN,
 						MessageBoxIcon icon = MessageBoxIcon.Error,
 						MessageBoxButtons btn = MessageBoxButtons.OK,
-						bool supressAnyModalPopEvenInDEBUG = false)
+						bool debugErrorUI = false)
 			{
 				try { a.Invoke(); }
-				catch (Exception ex) { ex.e_LogError(onErrorShowModalMessageBox, errorMessageBoxTitle, icon, btn, supressAnyModalPopEvenInDEBUG); }
+				catch (Exception ex) { ex.eLogError(errorUI, uiTitle, icon, btn, debugErrorUI); }
 			}
 
 
 
 			/// <summary>Фиксация ошибки в журнале, в DEBUG, вывод сообщения</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_LogError(this Exception EX,
-				bool ShowModalMessageBox,
-				string ModalMessageBoxTitle = C_FAILED_TO_RUN,
+			internal static void eLogError(this Exception ex,
+				bool errorUI,
+				string uiTitle = C_FAILED_TO_RUN,
 				MessageBoxIcon icon = MessageBoxIcon.Error,
 				MessageBoxButtons btn = MessageBoxButtons.OK,
-				bool SupressAnyModalPopEvenInDEBUG = false)
+				bool debugErrorUI = false,
+				[CallerMemberName] string callerName = "", [CallerFilePath] string callerFile = "", [CallerLineNumber] int callerLine = 0
+				)
 			{
 				try
 				{
-					string sMessage = EX.Message;
-					string sFullExceptionInfo = EX.e_LogError_FullErrorDump();
-					WinAPI.Errors.NTLogWrite(sFullExceptionInfo, EventLogEntryType.Error);
+					string errorDump = ex.eFullDump(callerName, callerFile, callerLine);
 
+					UInt16 eventID = 1001;
+					try
+					{
+						if (ex is Win32Exception wex) eventID = (UInt16)wex.ErrorCode.eCheckRange(UInt16.MinValue, UInt16.MaxValue);
+					}
+					catch { }
+
+					WinAPI.errors.ErrorLogWrite(errorDump, eventID: eventID);
+					string msg = ex.Message;
 #if DEBUG
-					//Показываем в DEBUG окне IDE
-					constants.CS_CONSOLE_SEPARATOR.DEBUG_SHOW_LINE();
-					sFullExceptionInfo.DEBUG_SHOW_LINE();
-					constants.CS_CONSOLE_SEPARATOR.DEBUG_SHOW_LINE();
+					$"{CS_CONSOLE_SEPARATOR}\n{errorDump}\n{CS_CONSOLE_SEPARATOR}".eDebugWriteLine();
 
 					//Показываем расширенные данные в DEBUG режиме
-					sMessage += constants.vbCrLf + constants.CS_CONSOLE_SEPARATOR + constants.vbCrLf + "UOM DEBUG-MODE DETAILED ERROR INFO: " + constants.vbCrLf + sFullExceptionInfo;
+					msg += $"\n{CS_CONSOLE_SEPARATOR}\nUOM DEBUG-MODE DETAILED ERROR INFO:\n{errorDump}";
 #endif
 
-					if (ShowModalMessageBox) // Надо показать на экране модальное Сообщение об ошибке
-						MessageBox.Show(sMessage, ModalMessageBoxTitle, btn, icon);
+					if (errorUI) // Надо показать на экране модальное Сообщение об ошибке
+					{
+						MessageBox.Show(msg, uiTitle, btn, icon);
+					}
 					else
 					{
 #if DEBUG
-						if (!SupressAnyModalPopEvenInDEBUG)
-							MessageBox.Show(sMessage, ModalMessageBoxTitle, btn, icon); //В DEBUG режиме показываем модальное окно с ошибкой, если прямо не запрещено!
+						if (debugErrorUI)
+						{
+							//В DEBUG режиме показываем модальное окно с ошибкой, если прямо не запрещено!
+							MessageBox.Show(msg, uiTitle, btn, icon);
+						}
 #endif
 					}
 				}
 				catch (Exception ex2)
-				{ if (ShowModalMessageBox) MessageBox.Show(ex2.Message, "Error when journaling previous error!", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+				{
+					if (errorUI) MessageBox.Show(ex2.Message, "Error when journaling previous error!", MessageBoxButtons.OK, MessageBoxIcon.Error);
+				}
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_LogError_CONSOLE(this Exception EX, bool ShowFullErrorInfo = false)
+			internal static void eLogError_CONSOLE(this Exception ex,
+				bool fullDump = false,
+				[CallerMemberName] string callerName = "",
+				[CallerFilePath] string callerFile = "",
+				[CallerLineNumber] int callerLine = 0)
 			{
-				const string C_CONSOLE_ERROR_HEADER = "*** ERROR:" + constants.vbCrLf;
-				string sErrorMsg = C_CONSOLE_ERROR_HEADER + EX.Message;
+				const string C_CONSOLE_ERROR_HEADER = "*** ERROR:\n";
+				string msg = C_CONSOLE_ERROR_HEADER + ex.Message;
 
-				/* TODO ERROR: Skipped IfDirectiveTrivia
-	#if DEBUG
-				*//* TODO ERROR: Skipped DisabledTextTrivia
-						ShowFullErrorInfo = True
-				*//* TODO ERROR: Skipped EndIfDirectiveTrivia
-	#endif
-				*/
-				if (ShowFullErrorInfo)
+				if (fullDump)
 				{
-					sErrorMsg = C_CONSOLE_ERROR_HEADER + EX.e_LogError_FullErrorDump();
+					msg = C_CONSOLE_ERROR_HEADER + ex.eFullDump(callerName, callerFile, callerLine);
 				}
-
-				Console.WriteLine(constants.CS_CONSOLE_SEPARATOR);
-				Console.WriteLine(sErrorMsg);
-				Console.WriteLine(constants.CS_CONSOLE_SEPARATOR);
+				Console.WriteLine($"{CS_CONSOLE_SEPARATOR}/n{msg}/n{CS_CONSOLE_SEPARATOR}");
 			}
 
 
@@ -6903,7 +7241,7 @@ return cItems;
 					StartWatchTimer();
 				}
 
-				private void UpdateFormTitle() => _frmError!.Text = "Ошибки: {0}".e_Format((object)_iTotalErrorsCount);
+				private void UpdateFormTitle() => _frmError!.Text = "Ошибки: {0}".eFormat((object)_iTotalErrorsCount);
 
 				//private FormClosingEventHandler _OnErrorFormClosing2233 = new(OnErrorFormClosing);
 
@@ -6958,7 +7296,7 @@ return cItems;
 
 					try
 					{
-						if (null != _frmError && !_frmError.Handle.e_IsValid()) return; // Негде показать. Таймер перезапускать не обязательно.
+						if (null != _frmError && !_frmError.Handle.eIsValid()) return; // Негде показать. Таймер перезапускать не обязательно.
 					}
 					catch { }
 
@@ -6989,7 +7327,7 @@ return cItems;
 								 try
 								 {
 #if DEBUG
-									 var sMSG = EX.e_LogError_FullErrorDump() + constants.vbCrLf;
+									 var sMSG = EX.eLogError_FullErrorDump() + constants.vbCrLf;
 #else
 									 var sMSG = EX.Message + constants.vbCrLf;
 #endif
@@ -7000,8 +7338,8 @@ return cItems;
 							 return sbAllErrors.ToString();
 						 });
 
-						string? sAllErrors = await PrepareAllErrorsInfoCallBack.e_RunAsync();
-						if (sAllErrors.e_IsNullOrWhiteSpace()) return;
+						string? sAllErrors = await PrepareAllErrorsInfoCallBack.eRunAsync();
+						if (sAllErrors.eIsNullOrWhiteSpace()) return;
 
 						// Показываем все ошибки, полученные из очереди.
 						_iTotalErrorsCount += iErrorsFound;
@@ -7044,7 +7382,7 @@ return cItems;
 				/// <summary>Выполняется в чужом потоке, помещает ошибку в очередь на показ</summary>
 				public void AddErrorToQueue(Exception EX)
 				{
-					try { EX.e_LogError(false, SupressAnyModalPopEvenInDEBUG: true); }// Пишем ошибку в журнал
+					try { EX.eLogError(false, SupressAnyModalPopEvenInDEBUG: true); }// Пишем ошибку в журнал
 					catch { }
 					lock (_qErrorsToShow) _qErrorsToShow.Enqueue(EX);
 				}
@@ -7054,7 +7392,7 @@ return cItems;
 
 				// Public Sub ShowError(EX As Exception)
 				// Try
-				// Call EX.e_LogError(False,,, True) 'Пишем ошибку в журнал
+				// Call EX.eLogError(False,,, True) 'Пишем ошибку в журнал
 
 				// If (_frmError Is Nothing) OrElse (Not _frmError.Handle.IsValid) Then Return 'Негде показать
 				// Catch : End Try
@@ -7081,7 +7419,7 @@ return cItems;
 
 				// Dim sMSG = EX.Message & vbCrLf
 				// #if DEBUG
-				// sMSG = EX.e_LogError_FullErrorDump & vbCrLf
+				// sMSG = EX.eLogError_FullErrorDump & vbCrLf
 				// #endif
 				// Call _ctlTextBox.AppendText(sMSG)
 
@@ -7116,9 +7454,9 @@ return cItems;
 
 			// Call FA.ShowError(EX)
 			// End Sub
-			// <DebuggerNonUserCode, DebuggerStepThrough>  Friend Sub e_LogError_NONMODAL(ByVal EX As System.Exception, frmErrorWindowParent As Form)
+			// <DebuggerNonUserCode, DebuggerStepThrough>  Friend Sub eLogError_NONMODAL(ByVal EX As System.Exception, frmErrorWindowParent As Form)
 			// Try
-			// Call frmErrorWindowParent.e_RunInUIThread(Sub() ShowError_CORE(EX, frmErrorWindowParent))
+			// Call frmErrorWindowParent.eRunInUIThread(Sub() ShowError_CORE(EX, frmErrorWindowParent))
 
 			// Catch ex2 As Exception
 			// Неудалось показать ошибку в окне!
@@ -7128,7 +7466,7 @@ return cItems;
 
 			/// <summary>Выполняется в вызывающем потоке</summary>
 			[ MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_LogError_NONMODAL(this Exception EX, Form frmErrorWindowParent)
+			internal static void eLogError_NONMODAL(this Exception EX, Form frmErrorWindowParent)
 			{
 				try
 				{
@@ -7150,7 +7488,7 @@ return cItems;
 							};
 
 							// Временно переходим в поток этой формы
-							frmErrorWindowParent.e_RunInUIThread(() => CreateNewAttachment(frmErrorWindowParent));
+							frmErrorWindowParent.eRunInUIThread(() => CreateNewAttachment(frmErrorWindowParent));
 						}
 						else
 						{
@@ -7174,13 +7512,13 @@ return cItems;
 		{
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_CloseWin32Handle(this IntPtr H) => !H.e_IsValid() || WinAPI.core.CloseHandle(H);
+			internal static bool eCloseWin32Handle(this IntPtr H) => !H.eIsValid() || WinAPI.core.CloseHandle(H);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Microsoft.Win32.SafeHandles.SafeFileHandle e_ToSafeFileHandle(this IntPtr hFile, bool ownsHandle = true, bool CheckNullHandleAndThrowCreateFileError = true)
+			internal static Microsoft.Win32.SafeHandles.SafeFileHandle eToSafeFileHandle(this IntPtr hFile, bool ownsHandle = true, bool CheckNullHandleAndThrowCreateFileError = true)
 			{
-				if (CheckNullHandleAndThrowCreateFileError && !hFile.e_IsValid()) "CreateFile".e_ThrowLastWin32Exception();
+				if (CheckNullHandleAndThrowCreateFileError && !hFile.eIsValid()) "CreateFile".eThrowLastWin32Exception();
 				return new SafeFileHandle(hFile, ownsHandle);
 			}
 
@@ -7207,7 +7545,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static HandleRef e_CreateHandleReff(this Control Ctl)
+			internal static HandleRef eCreateHandleReff(this Control Ctl)
 				=> new(
 					Ctl ?? throw new ArgumentNullException(nameof(Ctl)),
 					Ctl.Handle);
@@ -7216,26 +7554,26 @@ return cItems;
 			/// <summary>Reads the string from the memory block.</summary>
 			/// <param name="iLenght">The length of the string to read, in characters.</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string? e_PtrToString(
+			public static string? ePtrToString(
 				this IntPtr Ptr,
 				int iLenght = -1,
-				uom.constants.E_STRING_TYPES stringType = uom.constants.E_STRING_TYPES.Uni)
+				uom.constants.CHAR_MODE stringType = uom.constants.CHAR_MODE.Uni)
 			{
-				if (iLenght == 0 || !Ptr.e_IsValid()) return null;
+				if (iLenght == 0 || !Ptr.eIsValid()) return null;
 
 				string? S = (iLenght < 0)
 					? stringType switch
 					{
-						uom.constants.E_STRING_TYPES.Auto => Marshal.PtrToStringAuto(Ptr),
-						uom.constants.E_STRING_TYPES.Uni => Marshal.PtrToStringUni(Ptr),
-						uom.constants.E_STRING_TYPES.Ansi => Marshal.PtrToStringAnsi(Ptr),
+						uom.constants.CHAR_MODE.Auto => Marshal.PtrToStringAuto(Ptr),
+						uom.constants.CHAR_MODE.Uni => Marshal.PtrToStringUni(Ptr),
+						uom.constants.CHAR_MODE.Ansi => Marshal.PtrToStringAnsi(Ptr),
 						_ => throw new ArgumentOutOfRangeException(stringType.ToString())
 					}
 					: stringType switch
 					{
-						uom.constants.E_STRING_TYPES.Auto => Marshal.PtrToStringAuto(Ptr, iLenght),
-						uom.constants.E_STRING_TYPES.Uni => Marshal.PtrToStringUni(Ptr, iLenght),
-						uom.constants.E_STRING_TYPES.Ansi => Marshal.PtrToStringAnsi(Ptr, iLenght),
+						uom.constants.CHAR_MODE.Auto => Marshal.PtrToStringAuto(Ptr, iLenght),
+						uom.constants.CHAR_MODE.Uni => Marshal.PtrToStringUni(Ptr, iLenght),
+						uom.constants.CHAR_MODE.Ansi => Marshal.PtrToStringAnsi(Ptr, iLenght),
 						_ => throw new ArgumentOutOfRangeException(stringType.ToString())
 					};
 				return S;
@@ -7283,7 +7621,7 @@ return cItems;
 		internal static class Extensions_COM
 		{
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T? e_CreateCOMInstance<T>(this string ProgID) => (T?)Activator.CreateInstance(Type.GetTypeFromProgID(ProgID)!);
+			internal static T? eCreateCOMInstance<T>(this string ProgID) => (T?)Activator.CreateInstance(Type.GetTypeFromProgID(ProgID)!);
 
 
 		}
@@ -7297,18 +7635,18 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static uom.WinAPI.Memory.WinApiMemory e_StructureToMemoryBlock<T>(this T rStructure) where T : struct
+			internal static uom.WinAPI.memory.WinApiMemory eStructureToMemoryBlock<T>(this T rStructure) where T : struct
 			{
 				int iStructSize = Marshal.SizeOf(rStructure);
-				var rMem = new uom.WinAPI.Memory.WinApiMemory(iStructSize);
-				rStructure.e_StructureToPtr(rMem.DangerousGetHandle()); // Записываем в буфер всю структуру
+				var rMem = new uom.WinAPI.memory.WinApiMemory(iStructSize);
+				rStructure.eStructureToPtr(rMem.DangerousGetHandle()); // Записываем в буфер всю структуру
 				return rMem;
 			}
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static byte[] e_StructureToBytes<T>(this T rStructure) where T : struct
-			{ using var rMem = rStructure.e_StructureToMemoryBlock(); return rMem.ToBytes(); }
+			internal static byte[] eStructureToBytes<T>(this T rStructure) where T : struct
+			{ using var rMem = rStructure.eStructureToMemoryBlock(); return rMem.ToBytes(); }
 
 
 
@@ -7316,7 +7654,7 @@ return cItems;
 			/// <param name="abData">Исходный массив</param>
 			/// <param name="iCount">Количество структур для чтения</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T[] e_ToStructuresSequentially<T>(this byte[] abData, int iCount, int iOffset = 0) where T : struct
+			internal static T[] eToStructuresSequentially<T>(this byte[] abData, int iCount, int iOffset = 0) where T : struct
 			{
 				// Размер одного элемента структуры
 				int iSize1 = Marshal.SizeOf(typeof(T));
@@ -7328,7 +7666,7 @@ return cItems;
 				var lFound = new List<T>();
 				for (int I = 1, loopTo = iCount; I <= loopTo; I++)
 				{
-					var rStruct = abData.e_ToStructure<T>(iOffset);
+					var rStruct = abData.eToStructure<T>(iOffset);
 					iOffset += iSize1;
 					lFound.Add(rStruct);
 				}
@@ -7342,7 +7680,7 @@ return cItems;
 			/// <param name="iOffset">Смещение в массиве, с которого начинаем читать</param>
 			/// <returns></returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T e_ToStructure<T>(this byte[] abData, int iOffset = 0) where T : struct
+			internal static T eToStructure<T>(this byte[] abData, int iOffset = 0) where T : struct
 			{
 				int iStructLen = Marshal.SizeOf(typeof(T));
 				byte[] abArrayToCast;// = Array.Empty<byte>();
@@ -7361,57 +7699,22 @@ return cItems;
 					abArrayToCast = abTmpBuffer;
 				}
 
-				using var LMB = new uom.WinAPI.Memory.WinApiMemory(abArrayToCast);
-				return LMB.DangerousGetHandle().e_ToStructure<T>();
+				using var LMB = new uom.WinAPI.memory.WinApiMemory(abArrayToCast);
+				return LMB.DangerousGetHandle().eToStructure<T>();
 			}
 
 		}
 
 
+
+
+
+
 		/// <summary>Сериализация, клонирование</summary>
 		[EditorBrowsable(EditorBrowsableState.Never)]
-		internal static partial class Extensions_Serialize_Clone
+		internal static partial class Extensions_Serialize_Clone_Win
 		{
 
-			#region Serialize
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_WriteCSV<T>(this TextWriter TW, string[] aColumnHeadersArray, IEnumerable<T> aRows, Func<T, string[]> cbGetRowValuesArray, string C_CSV_SEPARATOR = ";", bool MakeSafeChars = false)
-			{
-
-				//</summary> C_CSV_SEPARATOR = ";"
-				int iColumnCount = aColumnHeadersArray.Count();
-
-				static string cbPrepareValue(string sSourceValue)
-				{
-					sSourceValue = sSourceValue.e_CheckNullOrWhiteSpace();
-					sSourceValue = sSourceValue.Replace("\"", "\"\"").Replace(",", @"\,").Replace(";", @"\;").Replace(Environment.NewLine, @"\" + Environment.NewLine).Replace(@"\", @"\\");
-					return sSourceValue;
-				};
-
-				if (MakeSafeChars) aColumnHeadersArray = (from sColumnValue in aColumnHeadersArray
-														  let S = cbPrepareValue(sColumnValue)
-														  select S).ToArray();
-
-				var sHeaderLine = aColumnHeadersArray.e_Join(C_CSV_SEPARATOR);
-				TW.WriteLine(sHeaderLine);
-				foreach (var CP in aRows)
-				{
-					var aValuesArray = cbGetRowValuesArray(CP);
-					if (aValuesArray.Count() != iColumnCount)
-						throw new Exception("Current Row aValuesArray.Count <> aColumnHeadersArray.Count!");
-
-					if (MakeSafeChars)
-					{
-						aValuesArray = aValuesArray
-							.Select(columnValue => cbPrepareValue(columnValue))
-							.ToArray();
-					}
-
-					string sLine = aValuesArray.e_Join(C_CSV_SEPARATOR)!;
-					TW.WriteLine(sLine);
-				}
-			}
 
 
 
@@ -7419,32 +7722,32 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_SerializeBinary(this object SerializableObject, string FileName)
+			internal static void eSerializeBinary(this object SerializableObject, string FileName)
 			{
-				using FileStream SM = FileName.e_ToFileInfo()!.OpenWrite();
-				SerializableObject.e_SerializeBinary(SM);
+				using FileStream SM = FileName.eToFileInfo()!.OpenWrite();
+				SerializableObject.eSerializeBinary(SM);
 				SM.Flush();
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_SerializeBinary(this object SerializableObject, Stream SM)
+			internal static void eSerializeBinary(this object SerializableObject, Stream SM)
 			{
-				byte[] abData = SerializableObject.e_SerializeBinary();
+				byte[] abData = SerializableObject.eSerializeBinary();
 				SM.Write(abData, 0, abData.Length);
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static byte[] e_SerializeBinary(this object SerializableObject)
+			internal static byte[] eSerializeBinary(this object SerializableObject)
 			{
 				using MemoryStream ms = new();
 #pragma warning disable SYSLIB0011 // Type or member is obsolete
 				(new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter()).Serialize(ms, SerializableObject);
 #pragma warning restore SYSLIB0011 // Type or member is obsolete
-				return ms.e_ReadAllBytes();
+				return ms.eReadAllBytes();
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T? e_DeSerializeBinary<T>(this Stream SM, T? DefaultValue = default, bool ThrowExceptionOnError = false)
+			internal static T? eDeSerializeBinary<T>(this Stream SM, T? defaultValue = default, bool ThrowExceptionOnError = false)
 			{
 				try
 				{
@@ -7455,292 +7758,34 @@ return cItems;
 				catch
 				{
 					if (ThrowExceptionOnError) throw;
-					return DefaultValue;
-				}
-			}
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T? e_DeSerializeBinary<T>(this byte[] SerializedData, T? DefaultValue = default, bool ThrowExceptionOnError = false)
-			{
-				using MemoryStream ms = new(SerializedData);
-				return ms.e_DeSerializeBinary(DefaultValue, ThrowExceptionOnError);
-			}
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T? e_DeSerializeBinary<T>(this FileInfo File, T? DefaultValue = default, bool ThrowExceptionOnError = false)
-			{
-				using FileStream fs = File.OpenRead();
-				return fs.e_DeSerializeBinary(DefaultValue, ThrowExceptionOnError);
-			}
-
-			#endregion
-
-
-			#region XML Serialization
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_SerializeXML(this object SerializableObject, string FileName)
-				=> SerializableObject.e_SerializeXML(FileName, Encoding.Unicode);
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_SerializeXML(this object SerializableObject, string file, Encoding? enc = null)
-				=> SerializableObject.e_SerializeXML(file.e_ToFileInfo()!, enc ??= Encoding.Unicode);
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_SerializeXML(this object SerializableObject, FileInfo f, Encoding? enc = null)
-			{
-				using FileStream fs = f.Create();
-				SerializableObject.e_SerializeXML(fs, enc ??= Encoding.Unicode);
-			}
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_SerializeXML(this object SerializableObject, Stream s, Encoding? enc = null)
-			{
-				using StreamWriter sw = new(s, enc ??= Encoding.Unicode);
-				System.Xml.Serialization.XmlSerializer XS = new(SerializableObject.GetType());
-				XS.Serialize(sw, SerializableObject);
-				sw.Flush();
-			}
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_SerializeAsXML(this object SerializableObject)
-			{
-				StringBuilder sb = new();
-				using (StringWriter sw = new(sb))
-				{
-					System.Xml.Serialization.XmlSerializer xs = new(SerializableObject.GetType());
-					xs.Serialize(sw, SerializableObject);
-				}
-				return sb.ToString();
-			}
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static byte[] e_SerializeAsXML(this System.Data.DataSet dts)
-			{
-				using MemoryStream ms = new();
-				dts.WriteXml(ms, System.Data.XmlWriteMode.IgnoreSchema);
-				return ms.e_ReadAllBytes();
-			}
-
-
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static object? e_DeSerializeXMLAsObject(
-				this string xmlString,
-				Type deserializeTo,
-				Object? defaultValue = null,
-				bool throwOnError = false)
-			{
-				try
-				{
-					if (string.IsNullOrWhiteSpace(xmlString)) return defaultValue;
-					using StringReader sr = new(xmlString);
-					using System.Xml.XmlTextReader xtr = new(sr);
-					System.Xml.Serialization.XmlSerializer xs = new(deserializeTo);
-					var O = xs.Deserialize(xtr);
-					return O;
-				}
-				catch
-				{
-					if (throwOnError) throw;
 					return defaultValue;
 				}
 			}
 
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static object? e_DeSerializeXMLAsObject(
-				this FileInfo xmlFile,
-				Type deserializeTo,
-				Object? defaultValue = null,
-				bool throwOnError = false)
-			{
-				return xmlFile?
-					.e_ReadAsText(System.Text.Encoding.Unicode)?
-					.e_DeSerializeXMLAsObject(deserializeTo, defaultValue, throwOnError);
-			}
-
-
-
-
-
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T? e_DeSerializeXML<T>(this string xmlString, T? DefaultValue = default, bool ThrowExceptionOnError = false)
+			internal static T? eDeSerializeBinary<T>(this byte[] SerializedData, T? defaultValue = default, bool ThrowExceptionOnError = false)
 			{
-				try
-				{
-					if (string.IsNullOrWhiteSpace(xmlString)) return DefaultValue;
-					using StringReader sr = new(xmlString);
-					using System.Xml.XmlTextReader xtr = new(sr);
-					System.Xml.Serialization.XmlSerializer xs = new(typeof(T));
-					var O = xs.Deserialize(xtr);
-					return (T?)O;
-				}
-				catch
-				{
-					if (ThrowExceptionOnError) throw;
-					return DefaultValue;
-				}
+				using MemoryStream ms = new(SerializedData);
+				return ms.eDeSerializeBinary(defaultValue, ThrowExceptionOnError);
 			}
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T? e_DeSerializeXML<T>(
-				this Stream SerializedStream,
-				T? DefaultValue = default,
-				bool ThrowExceptionOnError = false)
+			internal static T? eDeSerializeBinary<T>(this FileInfo File, T? defaultValue = default, bool ThrowExceptionOnError = false)
 			{
-				try
-				{
-					System.Xml.Serialization.XmlSerializer xs = new(typeof(T));
-					return (T?)xs.Deserialize(SerializedStream);
-				}
-				catch
-				{
-					if (ThrowExceptionOnError) throw;
-					return DefaultValue;
-				}
+				using FileStream fs = File.OpenRead();
+				return fs.eDeSerializeBinary(defaultValue, ThrowExceptionOnError);
 			}
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T? e_DeSerializeXMLFile<T>(
-				this string sFile,
-				T? DefaultValue = default,
-				bool ThrowExceptionOnError = false)
-			{
-				try
-				{
-					return sFile.e_ToFileInfo()!.e_DeSerializeXML<T>(DefaultValue, ThrowExceptionOnError);
-				}
-				catch
-				{
-					if (ThrowExceptionOnError) throw;
-					return DefaultValue;
-				}
-			}
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T? e_DeSerializeXML<T>(
-				this FileInfo File,
-				T? DefaultValue = default,
-				bool ThrowExceptionOnError = false)
-			{
-				try
-				{
-					using FileStream fs = File.OpenRead();
-					return fs.e_DeSerializeXML<T>(ThrowExceptionOnError: ThrowExceptionOnError);
-				}
-				catch
-				{
-					if (ThrowExceptionOnError) throw;
-					return DefaultValue;
-				}
-			}
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T[] e_DeSerializeXMLArrays<T>(this FileInfo[] fiFiles, bool ThrowExceptionOnError = false)
-			{
-				if (!fiFiles.Any()) return Array.Empty<T>();
-				var lTotalDeserializedObjects = new List<T>();
-				foreach (var fiFileToDeserialize in fiFiles)
-				{
-					var ArrayOfDeserializedObjects = fiFileToDeserialize.e_DeSerializeXML<T[]>(ThrowExceptionOnError: ThrowExceptionOnError);
-					if (ArrayOfDeserializedObjects != null && ArrayOfDeserializedObjects.Any())
-					{
-						lTotalDeserializedObjects.AddRange(ArrayOfDeserializedObjects);
-					}
-				}
-
-				var aTotalRulesToImport = lTotalDeserializedObjects.ToArray();
-				return aTotalRulesToImport;
-			}
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static List<T> e_DeSerializeXMLLists<T>(this FileInfo[] fiFiles, bool ThrowExceptionOnError = false)
-			{
-				var lTotalDeserializedObjects = new List<T>();
-				if (!fiFiles.Any()) return lTotalDeserializedObjects;
-				foreach (var fiFileToDeserialize in fiFiles)
-				{
-					var ListOfDeserializedObjects = fiFileToDeserialize.e_DeSerializeXML<List<T>>(ThrowExceptionOnError: ThrowExceptionOnError);
-					if (ListOfDeserializedObjects != null && ListOfDeserializedObjects.Any())
-					{
-						lTotalDeserializedObjects.AddRange(ListOfDeserializedObjects);
-					}
-				}
-				return lTotalDeserializedObjects;
-			}
-
 
 			#endregion
 
 
 
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_SerializeXMLSettings(this object SerializableObject, string ParamName)
-			{
-				throw new NotImplementedException();
-
-				//string sXML = SerializableObject.e_SerializeXML();
-				//UOM.Settings.mAppSettings.SaveSetting(ParamName, sXML, ThrowExceptionIfError: true);
-			}
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T e_DeSerializeXMLSettings<T>(this string ParamName, T DefaultValue)
-			{
-				throw new NotImplementedException();
-
-				//string sXML = UOM.Settings.mAppSettings.GetSetting_String(ParamName, null, ThrowExceptionIfError: false).Value;
-				//if (sXML.e_IsNOTNullOrWhiteSpace())
-				//{
-				//    var Obj = sXML.e_DeSerializeXML(DefaultValue);
-				//    return Obj;
-				//}
-				//else
-				//{
-				//    return DefaultValue;
-				//}
-			}
-
-
-
-			#endregion
-
-			/// <summary>Клонирует объект черех XML сериализацию в памяти</summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T? e_CloneViaXMLSerialization<T>(this T O)
-			{
-				_ = O ?? throw new ArgumentNullException(nameof(O));
-				using MemoryStream ms = new();
-				O.e_SerializeXML(ms);
-				ms.Seek(0L, SeekOrigin.Begin);
-				return ms.e_DeSerializeXML<T>(ThrowExceptionOnError: true);
-			}
-
 
 			/// <summary>Клонирует объект системным методом CLONE, возвращая объект такого-же типа, что и исходный</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static T e_CloneAsSomeType<T>(this T rSourceObject) where T : ICloneable
-				=> (T)rSourceObject.Clone();
-
-
-			/// <summary>Клонирует объект системным методом CLONE, возвращая объект такого-же типа, что и исходный</summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static Icon e_CloneViaGDICopyIcon(this Icon rSource)
+			public static Icon eCloneViaGDICopyIcon(this Icon rSource)
 			{
 				throw new NotImplementedException();
 
@@ -7760,7 +7805,7 @@ return cItems;
 
 			/// <summary>Клонирует Image через GDI+.DrawImage</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static Bitmap e_CloneViaDrawImage(this System.Drawing.Image imgSrc)
+			public static Bitmap eCloneViaDrawImage(this System.Drawing.Image imgSrc)
 			{
 				Bitmap bmNew = new(imgSrc.Width, imgSrc.Height);
 				using Graphics g = Graphics.FromImage(bmNew);
@@ -7771,7 +7816,7 @@ return cItems;
 
 			/// <summary>Клонирует объект системным методом CLONE, возвращая объект такого-же типа, что и исходный</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static Icon e_CloneViaMemStream(this Icon rSource)
+			public static Icon eCloneViaMemStream(this Icon rSource)
 			{
 				using MemoryStream ms = new();
 				rSource.Save(ms);
@@ -7782,13 +7827,16 @@ return cItems;
 
 			/// <summary>Клонирует объект системным методом CLONE, возвращая объект такого-же типа, что и исходный</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static Bitmap e_CloneViaMemStream(this Bitmap rSource)
+			public static Bitmap eCloneViaMemStream(this Bitmap rSource)
 			{
 				using MemoryStream ms = new();
 				rSource.Save(ms, System.Drawing.Imaging.ImageFormat.MemoryBmp);
 				ms.Seek(0L, SeekOrigin.Begin);
 				return new Bitmap(ms);
 			}
+
+
+
 		}
 
 
@@ -7798,11 +7846,11 @@ return cItems;
 
 			/// <summary>User name without domain</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_GetShortName(this WindowsIdentity U) => U.User?.LookupAccount().User!;
+			internal static string eGetShortName(this WindowsIdentity U) => U.User?.LookupAccount().User!;
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_GetPrivilegeDescriptionValue(this WinAPI.Security.PRIVELEGE_NAMES P)
-				=> P.e_GetDescriptionValue()!;
+			internal static string eGetPrivilegeDescriptionValue(this WinAPI.security.PRIVELEGE_NAMES P)
+				=> P.eGetDescriptionValue()!;
 
 
 #pragma warning disable SYSLIB0003 // Type or member is obsolete
@@ -7813,19 +7861,19 @@ return cItems;
 #pragma warning restore SYSLIB0003 // Type or member is obsolete
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SecurityIdentifier e_ToSID(this string SIDString) => new(SIDString);
+			internal static SecurityIdentifier eToSID(this string SIDString) => new(SIDString);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SecurityIdentifier e_ToSID(this NTAccount AC) => (SecurityIdentifier)AC.Translate(typeof(SecurityIdentifier));
+			internal static SecurityIdentifier eToSID(this NTAccount AC) => (SecurityIdentifier)AC.Translate(typeof(SecurityIdentifier));
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SecurityIdentifier e_ToSID(this IdentityReference IR) => (SecurityIdentifier)IR.Translate(typeof(SecurityIdentifier));
+			internal static SecurityIdentifier eToSID(this IdentityReference IR) => (SecurityIdentifier)IR.Translate(typeof(SecurityIdentifier));
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static NTAccount e_ToNTAccount(this IdentityReference IR) => (NTAccount)IR.Translate(typeof(NTAccount));
+			internal static NTAccount eToNTAccount(this IdentityReference IR) => (NTAccount)IR.Translate(typeof(NTAccount));
 
 
 
@@ -7833,7 +7881,7 @@ return cItems;
 			/// For accounts local To another machine Or In a non-domain setup you would need To PInvoke the Function LookupAccountSid specifying the specific machine name On which the look up needs To be performed.
 			/// </summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static NTAccount e_ToNTAccount(this SecurityIdentifier SID) => (NTAccount)SID.Translate(typeof(NTAccount));
+			internal static NTAccount eToNTAccount(this SecurityIdentifier SID) => (NTAccount)SID.Translate(typeof(NTAccount));
 
 
 			internal enum SID_NAME_USE : int
@@ -7878,22 +7926,22 @@ return cItems;
 				int iDomainLength = 0;
 				var bResult = LookupAccountSid(systemName, abSID, null, ref iUserNameLength, null, ref iDomainLength, ref eUse);
 				if (!bResult)
-					WinAPI.Errors.ThrowLastWin23ErrorAssert(WinAPI.Errors.Win32Errors.ERROR_INSUFFICIENT_BUFFER);
+					WinAPI.errors.ThrowLastWin23ErrorAssert(WinAPI.errors.Win32Errors.ERROR_INSUFFICIENT_BUFFER);
 
 				// Allocate space
 				StringBuilder cbUser = new(iUserNameLength + 1);  // Need space for terminating chr(0)?
 				StringBuilder cbDomain = new(iDomainLength + 1);
-				LookupAccountSid(systemName, abSID, cbUser, ref iUserNameLength, cbDomain, ref iDomainLength, ref eUse).e_ThrowLastWin32Exception_AssertFalse("LookupAccountSid");
+				LookupAccountSid(systemName, abSID, cbUser, ref iUserNameLength, cbDomain, ref iDomainLength, ref eUse).eThrowLastWin32Exception_AssertFalse("LookupAccountSid");
 				var nta = new NTAccount(cbUser.ToString(), cbDomain.ToString());
 				return (cbUser.ToString(), cbDomain.ToString(), nta);
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SecurityIdentifier e_UserNameToSID(this string UserName)
+			internal static SecurityIdentifier eUserNameToSID(this string UserName)
 			{
 				// The easy way, with .NET 2.0 and up, is this:
 				var rNTAcc = new NTAccount(UserName);
-				return rNTAcc.e_ToSID();
+				return rNTAcc.eToSID();
 
 
 				// The hard way, which works when that won't, and works on .NET 1.1 also:
@@ -7950,8 +7998,8 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_AdjustProcessPrivilegeAndCloseToken(this WinAPI.Security.PRIVELEGE_NAMES p)
-				=> uom.WinAPI.Security.AdjustProcessPrivilegeAndCloseToken(p);
+			internal static void eAdjustProcessPrivilegeAndCloseToken(this WinAPI.security.PRIVELEGE_NAMES p)
+				=> uom.WinAPI.security.AdjustProcessPrivilegeAndCloseToken(p);
 
 		}
 
@@ -7967,29 +8015,29 @@ return cItems;
 
 			/// <summary>используется Shell API StrFormatByteSize64</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_FormatByteSize_Win32(this UInt64 FileLenght)
+			internal static string eFormatByteSize_Win32(this UInt64 FileLenght)
 			{
 				StringBuilder SB = new(120);
-				var ptrResult = uom.WinAPI.Shell.StrFormatByteSize64(FileLenght, SB, (uint)SB.Capacity);
-				if (!ptrResult.e_IsValid()) WinAPI.Errors.ThrowLastWin23Error("StrFormatByteSize64");
+				var ptrResult = uom.WinAPI.shell.StrFormatByteSize64(FileLenght, SB, (uint)SB.Capacity);
+				if (!ptrResult.eIsValid()) WinAPI.errors.ThrowLastWin23Error("StrFormatByteSize64");
 				return SB.ToString();
 			}
 
-			/// <inheritdoc cref="e_FormatByteSize_Win32" />
+			/// <inheritdoc cref="eFormatByteSize_Win32" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_FormatByteSize_Win32(this Int64 FileLenght) => ((UInt64)FileLenght).e_FormatByteSize_Win32();
+			public static string eFormatByteSize_Win32(this Int64 FileLenght) => ((UInt64)FileLenght).eFormatByteSize_Win32();
 
-			/// <inheritdoc cref="e_FormatByteSize_Win32" />
+			/// <inheritdoc cref="eFormatByteSize_Win32" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_FormatByteSize_Win32(this Int32 iFileLenght) => ((UInt64)iFileLenght).e_FormatByteSize_Win32();
+			public static string eFormatByteSize_Win32(this Int32 iFileLenght) => ((UInt64)iFileLenght).eFormatByteSize_Win32();
 
-			/// <inheritdoc cref="e_FormatByteSize_Win32" />
+			/// <inheritdoc cref="eFormatByteSize_Win32" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_FormatByteSize_Win32(this UInt32 iFileLenght) => ((UInt64)iFileLenght).e_FormatByteSize_Win32();
+			public static string eFormatByteSize_Win32(this UInt32 iFileLenght) => ((UInt64)iFileLenght).eFormatByteSize_Win32();
 
-			/// <inheritdoc cref="e_FormatByteSize_Win32" />
+			/// <inheritdoc cref="eFormatByteSize_Win32" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_FormatByteSize_Win32(this FileInfo FI) => FI.Length.e_FormatByteSize_Win32();
+			public static string eFormatByteSize_Win32(this FileInfo FI) => FI.Length.eFormatByteSize_Win32();
 
 
 
@@ -7997,35 +8045,35 @@ return cItems;
 			/// <summary>используется Shell API StrFormatByteSizeEx 
 			/// to be running on at least Vista SP1 or Server 2008</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_FormatByteSize_Win32Ex(this UInt64 FileLenght, WinAPI.Shell.SFBS_FLAGS flags = WinAPI.Shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
+			internal static string eFormatByteSize_Win32Ex(this UInt64 FileLenght, WinAPI.shell.SFBS_FLAGS flags = WinAPI.shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
 			{
 				StringBuilder SB = new(120);
-				var ptrResult = uom.WinAPI.Shell.StrFormatByteSizeEx(FileLenght, flags, SB, (uint)SB.Capacity);
-				//if (!ptrResult.e_IsValid()) WinAPI.Errors.ThrowLastWin23Error($"StrFormatByteSizeEx ({FileLenght})");
+				var ptrResult = uom.WinAPI.shell.StrFormatByteSizeEx(FileLenght, flags, SB, (uint)SB.Capacity);
+				//if (!ptrResult.eIsValid()) WinAPI.errors.ThrowLastWin23Error($"StrFormatByteSizeEx ({FileLenght})");
 				string s = SB.ToString();
-				if (s.e_IsNullOrWhiteSpace()) WinAPI.Errors.ThrowLastWin23Error($"StrFormatByteSizeEx ({FileLenght})");
+				if (s.eIsNullOrWhiteSpace()) WinAPI.errors.ThrowLastWin23Error($"StrFormatByteSizeEx ({FileLenght})");
 				return s;
 			}
 
-			/// <inheritdoc cref="e_FormatByteSize_Win32Ex" />
+			/// <inheritdoc cref="eFormatByteSize_Win32Ex" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_FormatByteSize_Win32Ex(this Int64 FileLenght, WinAPI.Shell.SFBS_FLAGS flags = WinAPI.Shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
-				=> ((UInt64)FileLenght).e_FormatByteSize_Win32Ex(flags);
+			public static string eFormatByteSize_Win32Ex(this Int64 FileLenght, WinAPI.shell.SFBS_FLAGS flags = WinAPI.shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
+				=> ((UInt64)FileLenght).eFormatByteSize_Win32Ex(flags);
 
-			/// <inheritdoc cref="e_FormatByteSize_Win32Ex" />
+			/// <inheritdoc cref="eFormatByteSize_Win32Ex" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_FormatByteSize_Win32Ex(this Int32 iFileLenght, WinAPI.Shell.SFBS_FLAGS flags = WinAPI.Shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
-				=> ((UInt64)iFileLenght).e_FormatByteSize_Win32Ex(flags);
+			public static string eFormatByteSize_Win32Ex(this Int32 iFileLenght, WinAPI.shell.SFBS_FLAGS flags = WinAPI.shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
+				=> ((UInt64)iFileLenght).eFormatByteSize_Win32Ex(flags);
 
-			/// <inheritdoc cref="e_FormatByteSize_Win32Ex" />
+			/// <inheritdoc cref="eFormatByteSize_Win32Ex" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_FormatByteSize_Win32Ex(this UInt32 iFileLenght, WinAPI.Shell.SFBS_FLAGS flags = WinAPI.Shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
-				=> ((UInt64)iFileLenght).e_FormatByteSize_Win32Ex(flags);
+			public static string eFormatByteSize_Win32Ex(this UInt32 iFileLenght, WinAPI.shell.SFBS_FLAGS flags = WinAPI.shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
+				=> ((UInt64)iFileLenght).eFormatByteSize_Win32Ex(flags);
 
-			/// <inheritdoc cref="e_FormatByteSize_Win32Ex" />
+			/// <inheritdoc cref="eFormatByteSize_Win32Ex" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_FormatByteSize_Win32Ex(this FileInfo FI, WinAPI.Shell.SFBS_FLAGS flags = WinAPI.Shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
-				=> FI.Length.e_FormatByteSize_Win32Ex(flags);
+			public static string eFormatByteSize_Win32Ex(this FileInfo FI, WinAPI.shell.SFBS_FLAGS flags = WinAPI.shell.SFBS_FLAGS.SFBS_FLAGS_TRUNCATE_UNDISPLAYED_DECIMAL_DIGITS)
+				=> FI.Length.eFormatByteSize_Win32Ex(flags);
 
 
 
@@ -8037,26 +8085,27 @@ return cItems;
 
 			/// <summary>Использует Shell API StrFromTimeInterval</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_ToShellTimeString(this int iMilliseconds, int Digits = 3) => uom.WinAPI.Shell.StrFromTimeInterval(iMilliseconds, Digits);
+			public static string eToShellTimeString(this uint milliseconds, int Digits = 3)
+				=> uom.WinAPI.shell.StrFromTimeInterval(milliseconds, Digits);
 
 
 			/// <summary>Использует Shell API StrFromTimeInterval</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string e_ToShellTimeString(this TimeSpan TS, int Digits = 3)
+			public static string eToShellTimeString(this TimeSpan TS, int Digits = 3)
 			{
-				int iMilliseconds = (int)Math.Round(TS.TotalSeconds * 1000d);
-				return iMilliseconds.e_ToShellTimeString(Digits);
+				uint ms = (uint)Math.Round(TS.TotalSeconds * 1000d);
+				return ms.eToShellTimeString(Digits);
 			}
 
 
 			///// <summary>Использует Shell API StrFromTimeInterval</summary>
 			//[Obsolete("TickTimer64 is obsolete! use System.Diagnostics.Stopwatch !")]
 			//[ MethodImpl(MethodImplOptions.AggressiveInlining)]
-			//public static string e_ToShellTimeString(this UOM.TickTimer64 TT, int Digits = 3)
+			//public static string eToShellTimeString(this UOM.TickTimer64 TT, int Digits = 3)
 			//{
 			//    long lMS = TT.MeasuredMilliseconts;
 			//    int iMilliseconds = (int)lMS;
-			//    return uom.WinAPI.Shell.StrFromTimeInterval(iMilliseconds, Digits);
+			//    return uom.WinAPI.shell.StrFromTimeInterval(iMilliseconds, Digits);
 			//}
 			#endregion
 
@@ -8069,31 +8118,30 @@ return cItems;
 		{
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static WinAPI.Windows.WindowMessages e_ToWindowMessages(this int windowMwssageCode)
-				=> (WinAPI.Windows.WindowMessages)windowMwssageCode;
+			internal static WinAPI.windows.WindowMessages eToWindowMessages(this int windowMwssageCode)
+				=> (WinAPI.windows.WindowMessages)windowMwssageCode;
 
 		}
 
 
-		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-		internal static partial class Extensions_WinAPI_GDI
+		internal static class Extensions_Drawing
 		{
 
-			public static WinAPI.GDI.DC GetDC(this IWin32Window wnd) => new(wnd.Handle);
 
 			/// <summary>Расчёт точки вывода текста относительно заданной точки</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static (PointF TextPos, SizeF MeasuredTextSize) e_MeasureStringLocation(
+			internal static (PointF TextPos, SizeF MeasuredTextSize) eMeasureStringLocation(
 				this Graphics g,
 				string Text,
 				Font Font,
 				PointF TargetPoint,
-				System.Drawing.ContentAlignment LabelAlignment)
+				System.Drawing.ContentAlignment alignment)
 			{
 				SizeF retMeasuredTextSize = g.MeasureString(Text, Font);
 				var szfMeasuredTextSize2 = new SizeF(retMeasuredTextSize.Width / 2, retMeasuredTextSize.Height / 2);
 				var rcLabel = default(PointF);
-				switch (LabelAlignment)
+
+				switch (alignment)
 				{
 					case System.Drawing.ContentAlignment.MiddleLeft: // Слева посередине
 						rcLabel = new PointF(TargetPoint.X - retMeasuredTextSize.Width, TargetPoint.Y - szfMeasuredTextSize2.Height); break;
@@ -8108,34 +8156,34 @@ return cItems;
 						rcLabel = new PointF(TargetPoint.X - szfMeasuredTextSize2.Width, TargetPoint.Y - szfMeasuredTextSize2.Height); break;
 
 					default:
-						Debug.Fail("This LabelAlignment not supported"); break;// Throw New NotSupportedException("This LabelAlignment not supported")
+						throw new ArgumentOutOfRangeException(nameof(alignment));
 				}
 				return (rcLabel, retMeasuredTextSize);
 			}
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Icon e_Create_For(this Icon rIcon, System.Drawing.Size TargetSize) => new(rIcon, TargetSize);
+			internal static Icon eCreate_For(this Icon rIcon, System.Drawing.Size TargetSize) => new(rIcon, TargetSize);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Icon e_Create_For(this Icon rIcon, int iTargetSize) => rIcon.e_Create_For(new System.Drawing.Size(iTargetSize, iTargetSize));
+			internal static Icon eCreate_For(this Icon rIcon, int iTargetSize) => rIcon.eCreate_For(new System.Drawing.Size(iTargetSize, iTargetSize));
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Icon e_Create_Small(this Icon rIcon) => rIcon.e_Create_For(System.Windows.Forms.SystemInformation.SmallIconSize);
+			internal static Icon eCreate_Small(this Icon rIcon) => rIcon.eCreate_For(System.Windows.Forms.SystemInformation.SmallIconSize);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Icon e_Create_Large(this Icon rIcon) => rIcon.e_Create_For(System.Windows.Forms.SystemInformation.IconSize);
+			internal static Icon eCreate_Large(this Icon rIcon) => rIcon.eCreate_For(System.Windows.Forms.SystemInformation.IconSize);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_DrawRectangle(this Graphics g, Pen P, RectangleF RCF) => g.DrawRectangle(P, RCF.Left, RCF.Top, RCF.Width, RCF.Height);
+			internal static void eDrawRectangle(this Graphics g, Pen P, RectangleF RCF) => g.DrawRectangle(P, RCF.Left, RCF.Top, RCF.Width, RCF.Height);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_DrawRoundedRectangle(
+			internal static void eDrawRoundedRectangle(
 				this Graphics g,
 				Rectangle rc,
 				int radius,
@@ -8159,7 +8207,7 @@ return cItems;
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_DrawRoundedRectangle(
+			internal static void eDrawRoundedRectangle(
 				this Graphics g,
 				RectangleF rc,
 				float radius,
@@ -8183,15 +8231,14 @@ return cItems;
 			}
 
 
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static int e_ToWin32GDIColor(this Color NetColor) => ColorTranslator.ToWin32(NetColor);
+
 
 
 			#region System.Drawing.ContentAlignment->System.Drawing.StringFormat, System.Windows.Forms.HorizontalAlignment->System.Drawing.StringAlignment
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.StringFormat e_ToDrawingStringFormat(
+			internal static System.Drawing.StringFormat eToDrawingStringFormat(
 				this System.Drawing.ContentAlignment CA,
 				StringFormatFlags FormatFlags = 0)
 			{
@@ -8274,7 +8321,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.StringFormat e_ToDrawingStringFormat(
+			internal static System.Drawing.StringFormat eToDrawingStringFormat(
 				this HorizontalAlignment A,
 				StringAlignment LineAlignment = StringAlignment.Center,
 				StringFormatFlags FormatFlags = 0)
@@ -8293,7 +8340,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Windows.Forms.TextFormatFlags e_ToTextFormatFlags(this System.Drawing.StringFormat SF)
+			internal static System.Windows.Forms.TextFormatFlags eToTextFormatFlags(this System.Drawing.StringFormat SF)
 			{
 				TextFormatFlags FF = 0;
 				switch (SF.Alignment)
@@ -8313,7 +8360,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.StringAlignment e_ToDrawingStringAlignment(this System.Windows.Forms.HorizontalAlignment Align)
+			internal static System.Drawing.StringAlignment eToDrawingStringAlignment(this System.Windows.Forms.HorizontalAlignment Align)
 				=> Align switch
 				{
 					HorizontalAlignment.Center => StringAlignment.Center,
@@ -8326,7 +8373,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_DrawShadow(this GraphicsPath gp, int intensity, int radius, Bitmap dest)
+			internal static void eDrawShadow(this GraphicsPath gp, int intensity, int radius, Bitmap dest)
 			{
 				using Graphics g = Graphics.FromImage(dest);
 				g.Clear(Color.Transparent);
@@ -8347,9 +8394,9 @@ return cItems;
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void e_DrawPathShadow(this Graphics g, GraphicsPath gp, int radius, int intensity = 100)
+			internal static void eDrawPathShadow(this Graphics g, GraphicsPath gp, int radius, int intensity = 100)
 			{
-				intensity = intensity.e_CheckRange(1, 100);
+				intensity = intensity.eCheckRange(1, 100);
 				double alpha = 0;
 				double astep = 0;
 				double astepstep = (double)intensity / radius / (radius / 2D);
@@ -8367,26 +8414,14 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_GetExtensionForRawFormat(this Bitmap IMG)
-				=> IMG.RawFormat.e_GetExtension();
-
-
-			public enum Direction { Up, Down, Right, Left }
-			public enum Orientation { North, South, East, West }
-			public static Orientation ToOrientation(Direction direction) => direction switch
-			{
-				Direction.Up => Orientation.North,
-				Direction.Right => Orientation.East,
-				Direction.Down => Orientation.South,
-				Direction.Left => Orientation.West,
-				_ => throw new ArgumentOutOfRangeException(nameof(direction), $"Not expected direction value: {direction}"),
-			};
+			internal static string eGetExtensionForRawFormat(this Bitmap IMG)
+				=> IMG.RawFormat.eGetExtension();
 
 
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string e_GetExtension(this System.Drawing.Imaging.ImageFormat fmt)
+			internal static string eGetExtension(this System.Drawing.Imaging.ImageFormat fmt)
 			{
 				string sExt;
 				if (fmt.Equals(System.Drawing.Imaging.ImageFormat.Jpeg)) sExt = "jpg";
@@ -8403,29 +8438,120 @@ return cItems;
 				return "." + sExt.ToLower();
 			}
 
+
+
+
+
+
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Icon e_CreateIcon(this Image IMG, System.Drawing.Size IconSize)
+			internal static Icon eCreateIcon(this Image IMG, System.Drawing.Size IconSize)
 			{
 				var bmSmall = (Bitmap)IMG.GetThumbnailImage(IconSize.Width, IconSize.Height, default, default);
 				return Icon.FromHandle(bmSmall.GetHicon());
 			}
 
 
-			/// <summary>Создаёт прозрачный холст с заданными размерами, и рисует заданное изображение.
-			/// Уменьшает большие картинки
-			/// </summary>
+
+
+
+
+
+#if NETFRAMEWORK
+			[ MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string? eExtractAssociatedIcon(
+				this FileInfo App,
+				ImageList IML,
+				bool TryLoadFileAsImage = false) => App!.FullName!.eExtractAssociatedIcon(IML, TryLoadFileAsImage);
+
+
+			[ MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string? eExtractAssociatedIcon(this string sPath, ImageList IML, bool TryLoadFileAsImage = false)
+			{
+				lock (IML)
+				{
+					sPath = sPath.ToLower();
+					if (IML.Images.ContainsKey(sPath)) return sPath; // Для этого файла уже была извлечена иконка - используем её
+
+					// Иконка ещё не извлекалась - Пытаемся извлечь её 
+					if (TryLoadFileAsImage)
+					{
+						try
+						{
+							var BM = new Bitmap(sPath);
+							// Image loaeded OK! Creating Icon
+							var rFileIcon = BM.eCreateIcon(IML.ImageSize);
+							if (rFileIcon != null)
+							{
+								var FileIcon_16 = new Icon(rFileIcon, IML.ImageSize);
+								IML.Images.Add(sPath, FileIcon_16);
+								return sPath;
+							}
+						}
+						catch
+						{
+						}
+						// Failed to load file as image!
+					}
+
+					// Use System Default Icon Extractor
+					try
+					{
+						System.Drawing.Icon rFileIcon = System.Drawing.Icon.ExtractAssociatedIcon(sPath)!;
+						System.Drawing.Icon FileIcon_16 = new Icon(rFileIcon, IML.ImageSize);
+						IML.Images.Add(sPath, FileIcon_16);
+						return sPath;
+					}
+					catch
+					{
+					}
+
+					return null;
+				}
+			}
+
+
+
+#endif
+
+
+
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Bitmap e_GetThumbnailBitmap(this System.Drawing.Icon rIcon, Size szCanvas)
-				=> rIcon.ToBitmap().e_GetThumbnailBitmap(szCanvas, System.Windows.Forms.SystemInformation.IconSize, true);
+			internal static System.Drawing.Icon? eExtractAssociatedIcon(this string file)
+				=> System.Drawing.Icon.ExtractAssociatedIcon(file);
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static System.Drawing.Icon? eExtractAssociatedIcon(this FileSystemInfo FI)
+				=> FI.FullName.eExtractAssociatedIcon();
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 			/// <summary>Создаёт прозрачный холст с заданными размерами, и рисует заданное изображение.
 			/// Уменьшает большие картинки
 			/// </summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Bitmap e_GetThumbnailBitmap(this Icon rIcon, ImageList rImageList)
+			internal static Bitmap eGetThumbnailBitmap(this System.Drawing.Icon rIcon, System.Drawing.Size szCanvas)
+				=> rIcon.ToBitmap().eGetThumbnailBitmap(szCanvas, System.Windows.Forms.SystemInformation.IconSize, true);
+
+			/// <summary>Создаёт прозрачный холст с заданными размерами, и рисует заданное изображение.
+			/// Уменьшает большие картинки
+			/// </summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Bitmap eGetThumbnailBitmap(this Icon rIcon, ImageList rImageList)
 			{
 				if (null == rImageList) throw new ArgumentNullException(nameof(rImageList));
-				return rIcon.e_GetThumbnailBitmap(rImageList.ImageSize);
+				return rIcon.eGetThumbnailBitmap(rImageList.ImageSize);
 			}
 
 
@@ -8434,8 +8560,8 @@ return cItems;
 			/// <param name="CanvasSize">Выходной размер получаемого изображения</param>
 			/// <param name="DrawImageSize">Размер рисуемого изображения на холсте. Если не указан, автоматически маленькие как есть, а большие уменьшались</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Bitmap e_GetThumbnailBitmap(this Icon rIcon, Size CanvasSize, Size? DrawImageSize = default, bool UpScaleSmallImgaes = false)
-				=> e_GetThumbnailBitmap_CORE(rIcon.Size,
+			internal static Bitmap eGetThumbnailBitmap(this Icon rIcon, System.Drawing.Size CanvasSize, System.Drawing.Size? DrawImageSize = default, bool UpScaleSmallImgaes = false)
+				=> eGetThumbnailBitmap_CORE(rIcon.Size,
 					(G, RC) => G.DrawIcon(rIcon, RC),
 					CanvasSize, DrawImageSize, UpScaleSmallImgaes);
 
@@ -8443,8 +8569,8 @@ return cItems;
 			/// <param name="CanvasSize">Выходной размер получаемого изображения</param>
 			/// <param name="DrawImageSize">Размер рисуемого изображения на холсте. Если не указан, автоматически маленькие как есть, а большие уменьшались</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Bitmap e_GetThumbnailBitmap(this Image rBitmap, Size CanvasSize, Size? DrawImageSize = default, bool UpScaleSmallImgaes = false)
-				=> e_GetThumbnailBitmap_CORE(rBitmap.Size,
+			internal static Bitmap eGetThumbnailBitmap(this Image rBitmap, System.Drawing.Size CanvasSize, System.Drawing.Size? DrawImageSize = default, bool UpScaleSmallImgaes = false)
+				=> eGetThumbnailBitmap_CORE(rBitmap.Size,
 					(G, RC) => G.DrawImage(rBitmap, RC),
 					CanvasSize, DrawImageSize, UpScaleSmallImgaes);
 
@@ -8452,39 +8578,39 @@ return cItems;
 			/// Уменьшает большие картинки</summary>
 			/// <param name="CanvasSize">Размер холста</param>
 			/// <param name="DrawImageSize">Размер рисуемого изображения на холсте. Если не указан, автоматически маленькие как есть, а большие уменьшались</param>
-			private static Bitmap e_GetThumbnailBitmap_CORE(
-				Size ImageSize,
-				Action<Graphics, Rectangle> DrawImageProc,
-				Size CanvasSize,
-				Size? DrawImageSize = null,
+			private static Bitmap eGetThumbnailBitmap_CORE(
+				System.Drawing.Size ImageSize,
+				Action<Graphics, System.Drawing.Rectangle> DrawImageProc,
+				System.Drawing.Size CanvasSize,
+				System.Drawing.Size? DrawImageSize = null,
 				bool UpScaleSmallImgaes = false)
 			{
-				var szfCanvas = CanvasSize.e_ToSizeF();
-				Bitmap bmCanvas = new Bitmap(CanvasSize.Width, CanvasSize.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+				var szfCanvas = CanvasSize.eToSizeF();
+				Bitmap bmCanvas = new(CanvasSize.Width, CanvasSize.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
 				using Graphics g = Graphics.FromImage(bmCanvas);
 				g.PageUnit = GraphicsUnit.Pixel;
 				g.Clear(Color.Transparent);
 				// Call G.DrawRectangle(Pens.Blue, rcFileBitmap)
 
-				var szfDraw = (DrawImageSize ?? ImageSize).e_ToSizeF();
+				var szfDraw = (DrawImageSize ?? ImageSize).eToSizeF();
 				if (szfDraw.Width > szfCanvas.Width || szfDraw.Height > szfCanvas.Height)
 				{
 					// Выводимое изображение превышает размеры холста, надо вписать
-					szfDraw = szfDraw.e_ВписатьВ(szfCanvas).TargetSize;
+					szfDraw = szfDraw.eВписатьВ(szfCanvas).TargetSize;
 				}
 				else if (UpScaleSmallImgaes)
 				{
 					// Мелкое изображание надо увеличить ?
-					var szfUpscaleTo = (DrawImageSize ?? CanvasSize).e_ToSizeF();
+					var szfUpscaleTo = (DrawImageSize ?? CanvasSize).eToSizeF();
 					if (ImageSize.Width < szfUpscaleTo.Width && ImageSize.Height > szfUpscaleTo.Height)
 					{
 						// Мелкое изображание надо увеличить!
-						szfDraw = szfDraw.e_ВписатьВ(szfUpscaleTo).TargetSize;
+						szfDraw = szfDraw.eВписатьВ(szfUpscaleTo).TargetSize;
 					}
 				}
 
-				var ptfCenter = szfCanvas.e_ToRectangleF().e_GetCenter();
-				var rcDraw = szfDraw.e_ToRectangleF().e_CenterTo(ptfCenter).e_ToRectangle();
+				var ptfCenter = szfCanvas.eToRectangleF().eGetCenter();
+				var rcDraw = szfDraw.eToRectangleF().eCenterTo(ptfCenter).eToRectangle();
 				DrawImageProc.Invoke(g, rcDraw);
 				return bmCanvas;
 
@@ -8492,9 +8618,9 @@ return cItems;
 
 
 				#region OLD
-				// Dim szfCanvas = szCanvas. e_ToSizeF
+				// Dim szfCanvas = szCanvas. eToSizeF
 				// Dim bmCanvas = New Bitmap(szCanvas.Width, szCanvas.Height, Imaging.PixelFormat.Format32bppArgb)
-				// Dim ptfCanvasCanter = szfCanvas. e_ToRectangle. e_GetCenter
+				// Dim ptfCanvasCanter = szfCanvas. eToRectangle. eGetCenter
 				// Using G = Graphics.FromImage(bmCanvas)
 				// G.PageUnit = GraphicsUnit.Pixel
 				// Call G.Clear(Color.Transparent)
@@ -8504,23 +8630,23 @@ return cItems;
 				// Указан размер изображения на эскизе (сам размер эскиза задан другими размерами!) Всегда масштабируем
 				// Dim szImageToDraw = TargetImageSize.Value
 
-				// Dim rcfImageToDraw = szImageToDraw. e_ToRectangle. e_ToRectangleF. e_CenterTo(ptfCanvasCanter)
+				// Dim rcfImageToDraw = szImageToDraw. eToRectangle. eToRectangleF. eCenterTo(ptfCanvasCanter)
 				// Call G.DrawImage(imgImageToDraw, rcfImageToDraw)
 
 				// Else
 				// Принудательный размер не указан Маленькие рисуем как есть, большие уменьшаем
-				// Dim szfImageToDraw = imgImageToDraw.Size. e_ToSizeF
+				// Dim szfImageToDraw = imgImageToDraw.Size. eToSizeF
 
 				// If (Not ScaleSmallImgaes) AndAlso ((szfImageToDraw.Width <= szCanvas.Width) AndAlso (szfImageToDraw.Height <= szCanvas.Height)) Then
 				// Изображание не превышает размеров холста
-				// Dim rcfDrawTo = szfImageToDraw. e_ToRectangle. e_CenterTo(ptfCanvasCanter)
+				// Dim rcfDrawTo = szfImageToDraw. eToRectangle. eCenterTo(ptfCanvasCanter)
 				// Call G.DrawImage(imgImageToDraw, rcfDrawTo)
 
 				// Else
 				// Изображение больше холста - вписываем с сохранением пропорций
-				// Dim fScaled = imgImageToDraw.Size. e_ToSizeF. e_ВписатьВ(szfCanvas)
-				// Dim rcfScaled = fScaled.TargetSize. e_ToRectangle
-				// rcfScaled = rcfScaled. e_CenterTo(ptfCanvasCanter)
+				// Dim fScaled = imgImageToDraw.Size. eToSizeF. eВписатьВ(szfCanvas)
+				// Dim rcfScaled = fScaled.TargetSize. eToRectangle
+				// rcfScaled = rcfScaled. eCenterTo(ptfCanvasCanter)
 				// Call G.DrawImage(imgImageToDraw, rcfScaled)
 				// End If
 				// End If
@@ -8529,17 +8655,174 @@ return cItems;
 				#endregion
 
 			}
+
+
+
+
+
+
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static StringAlignment eGetAlignment(this ContentAlignment ca)
+				=> ca switch
+				{
+					var ca2
+					when ca2 == ContentAlignment.TopLeft || ca2 == ContentAlignment.MiddleLeft || ca2 == ContentAlignment.BottomLeft
+					=> StringAlignment.Near,
+
+					var ca2
+					when ca2 == ContentAlignment.TopCenter || ca2 == ContentAlignment.MiddleCenter || ca2 == ContentAlignment.BottomCenter
+					=> StringAlignment.Center,
+
+					var ca2
+					when ca2 == ContentAlignment.TopRight || ca2 == ContentAlignment.MiddleRight || ca2 == ContentAlignment.BottomRight
+						=> StringAlignment.Far,
+
+					_ => StringAlignment.Center,
+				};
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static StringAlignment eGetLineAlignment(this ContentAlignment ca)
+				=> ca switch
+				{
+					var ca2
+					when ca2 == ContentAlignment.TopLeft || ca2 == ContentAlignment.TopCenter || ca2 == ContentAlignment.TopRight
+					=> StringAlignment.Near,
+
+					var ca2
+					when ca2 == ContentAlignment.MiddleLeft || ca2 == ContentAlignment.MiddleCenter || ca2 == ContentAlignment.MiddleRight
+					=> StringAlignment.Center,
+
+					var ca2
+					when ca2 == ContentAlignment.BottomLeft || ca2 == ContentAlignment.BottomCenter || ca2 == ContentAlignment.BottomRight
+						=> StringAlignment.Far,
+
+					_ => StringAlignment.Center,
+				};
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static TextFormatFlags eToTextFormatFlags(this ContentAlignment ca)
+			=> ca switch
+			{
+				ContentAlignment.TopLeft => TextFormatFlags.Left | TextFormatFlags.Top,
+				ContentAlignment.TopCenter => TextFormatFlags.HorizontalCenter | TextFormatFlags.Top,
+				ContentAlignment.TopRight => TextFormatFlags.Right | TextFormatFlags.Top,
+
+				ContentAlignment.MiddleLeft => TextFormatFlags.Left | TextFormatFlags.VerticalCenter,
+				ContentAlignment.MiddleCenter => TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter,
+				ContentAlignment.MiddleRight => TextFormatFlags.Right | TextFormatFlags.VerticalCenter,
+
+				ContentAlignment.BottomLeft => TextFormatFlags.Left | TextFormatFlags.Bottom,
+				ContentAlignment.BottomCenter => TextFormatFlags.HorizontalCenter | TextFormatFlags.Bottom,
+				ContentAlignment.BottomRight => TextFormatFlags.Right | TextFormatFlags.Bottom,
+				_ => TextFormatFlags.Default
+			};
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static StringFormat eToStringFormat(this ContentAlignment ca)
+			{
+				var sf = new StringFormat()
+				{
+					Alignment = ca.eGetAlignment(),
+					LineAlignment = ca.eGetLineAlignment()
+				};
+				return sf;
+			}
+
+
+
+
+
+
+
+
+
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void eDrawTextEx(
+			this Graphics g,
+			string text,
+			Font font,
+			Color textcolor,
+			Rectangle rect,
+			ContentAlignment textAlign)
+			{
+				using Brush brText = new SolidBrush(textcolor);
+				g.eDrawTextEx(text, font, brText, rect, textAlign);
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void eDrawTextEx(
+				this Graphics g,
+				string text,
+				Font font,
+				Brush textbrush,
+				Rectangle rect,
+				ContentAlignment textAlign)
+			{
+				using var sf = textAlign.eToStringFormat();
+				g.DrawString(text, font, textbrush, rect, sf);
+			}
+
+
+
 		}
 
-
-		internal static class Extensions_Drawing
+		internal static class Extensions_DrawingMath
 		{
+
+
+
+			public enum Direction { Up, Down, Right, Left }
+			public enum GeoOrientation { North, South, East, West }
+			public static GeoOrientation ToGeoOrientation(Direction direction) => direction switch
+			{
+				Direction.Up => GeoOrientation.North,
+				Direction.Right => GeoOrientation.East,
+				Direction.Down => GeoOrientation.South,
+				Direction.Left => GeoOrientation.West,
+				_ => throw new ArgumentOutOfRangeException(nameof(direction), $"Not expected direction value: {direction}"),
+			};
+
+
+
+			internal enum PaperOrientations : int { Portrait, Landscape, Square }
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static PaperOrientations eGetOrientation(this System.Drawing.Size szScreen)
+				=> (szScreen.Width == szScreen.Height)
+				? PaperOrientations.Square
+				: (szScreen.Width > szScreen.Height)
+					? PaperOrientations.Landscape
+					: PaperOrientations.Portrait;
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static bool eOrientationIsLandscape(this System.Drawing.Size szScreen)
+			{
+				return szScreen.eGetOrientation() == PaperOrientations.Landscape;
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static bool eOrientationIsPortrait(this System.Drawing.Size szScreen)
+			{
+				return szScreen.eGetOrientation() == PaperOrientations.Portrait;
+			}
+
+
+
 
 			#region Inches / centimeters / pixels
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SizeF e_Inches_ToPixels(this Graphics g, SizeF SizeInInches)
+			internal static SizeF eInches_ToPixels(this Graphics g, SizeF SizeInInches)
 				=> new(
 					SizeInInches.Width * g.DpiX,
 					SizeInInches.Height * g.DpiY
@@ -8547,65 +8830,65 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SizeF e_MM_ToPixels(this Graphics g, SizeF SizeInMM)
+			internal static SizeF eMM_ToPixels(this Graphics g, SizeF SizeInMM)
 				=> new(
-					SizeInMM.Width.e_MMToInches() * g.DpiX,
-					SizeInMM.Height.e_MMToInches() * g.DpiY
+					SizeInMM.Width.eMMToInches() * g.DpiX,
+					SizeInMM.Height.eMMToInches() * g.DpiY
 					);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SizeF e_InchesToCM(this SizeF valueInInches)
+			internal static SizeF eInchesToCM(this SizeF valueInInches)
 				=> new(
-					valueInInches.Width.e_InchesToCM(),
-					valueInInches.Height.e_InchesToCM());
+					valueInInches.Width.eInchesToCM(),
+					valueInInches.Height.eInchesToCM());
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF e_InchesToCM(this RectangleF valueInInches)
+			internal static RectangleF eInchesToCM(this RectangleF valueInInches)
 				=> new(
-					valueInInches.Left.e_InchesToCM(),
-					valueInInches.Top.e_InchesToCM(),
-					valueInInches.Width.e_InchesToCM(),
-					valueInInches.Height.e_InchesToCM()
+					valueInInches.Left.eInchesToCM(),
+					valueInInches.Top.eInchesToCM(),
+					valueInInches.Width.eInchesToCM(),
+					valueInInches.Height.eInchesToCM()
 					);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF e_CMToInches(this RectangleF CM)
+			internal static RectangleF eCMToInches(this RectangleF CM)
 				=> new(
-					CM.Left.e_CMToInches(),
-					CM.Top.e_CMToInches(),
-					CM.Width.e_CMToInches(),
-					CM.Height.e_CMToInches()
+					CM.Left.eCMToInches(),
+					CM.Top.eCMToInches(),
+					CM.Width.eCMToInches(),
+					CM.Height.eCMToInches()
 					);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.SizeF e_Pixels_To_Inches(this Size pixels, System.Drawing.Point dpi)
+			internal static System.Drawing.SizeF ePixels_To_Inches(this Size pixels, System.Drawing.Point dpi)
 				=> new(
 					(float)pixels.Width / (float)dpi.X,
 					(float)pixels.Height / (float)dpi.Y);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.Point e_Inches_To_Pixels(this PointF Inches, System.Drawing.Point DPI)
+			internal static System.Drawing.Point eInches_To_Pixels(this PointF Inches, System.Drawing.Point DPI)
 				=> new(
 					(int)(Inches.X * DPI.X),
 					(int)(Inches.Y * DPI.Y));
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.Size e_Inches_To_Pixels(this SizeF Inches, System.Drawing.Point DPI)
+			internal static System.Drawing.Size eInches_To_Pixels(this SizeF Inches, System.Drawing.Point DPI)
 				=> new(
 					(int)(Inches.Width * DPI.X),
 					(int)(Inches.Height * DPI.Y));
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Rectangle e_Inches_To_Pixels(this System.Drawing.RectangleF rcfДюймы, System.Drawing.Point DPI)
+			internal static Rectangle eInches_To_Pixels(this System.Drawing.RectangleF rcfДюймы, System.Drawing.Point DPI)
 				=> new(
-					rcfДюймы.Location.e_Inches_To_Pixels(DPI),
-					rcfДюймы.Size.e_Inches_To_Pixels(DPI));
+					rcfДюймы.Location.eInches_To_Pixels(DPI),
+					rcfДюймы.Size.eInches_To_Pixels(DPI));
 
 			#endregion
 
@@ -8621,13 +8904,13 @@ return cItems;
 			/// <param name="target">Целевой размер, В КОТОРЫЙ надо вписать</param>
 			/// <returns>Zoom = коэффициент масштабирования</returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static (System.Drawing.Size TargetSize, float Zoom) e_ВписатьВ(this System.Drawing.Size source, System.Drawing.Size target
+			internal static (System.Drawing.Size TargetSize, float Zoom) eВписатьВ(this System.Drawing.Size source, System.Drawing.Size target
 				)
 			{
 				//float sngZoom = 0f;
 				var SourceF = new SizeF(source.Width, source.Height);
 				var LimitF = new SizeF(target.Width, target.Height);
-				var (TargetSize, Zoom) = SourceF.e_ВписатьВ(LimitF);
+				var (TargetSize, Zoom) = SourceF.eВписатьВ(LimitF);
 				return (TargetSize.ToSize(), Zoom);
 			}
 
@@ -8636,7 +8919,7 @@ return cItems;
 			/// <param name="target">Целевой размер, В КОТОРЫЙ надо вписать</param>
 			/// <returns>Zoom = коэффициент масштабирования</returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static (System.Drawing.SizeF TargetSize, float Zoom) e_ВписатьВ(this SizeF source, SizeF target)
+			internal static (System.Drawing.SizeF TargetSize, float Zoom) eВписатьВ(this SizeF source, SizeF target)
 			{
 				float zoom, w, h;
 
@@ -8693,7 +8976,7 @@ return cItems;
 
 			/// <summary>Размер = текущему разрешению экрана? Наверное будет гнать в многомониторной системе</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_IsLikeScreen(this System.Drawing.Size szTarget)
+			internal static bool eIsLikeScreen(this System.Drawing.Size szTarget)
 			{
 				throw new NotImplementedException();
 
@@ -8703,7 +8986,7 @@ return cItems;
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_IsFullHD(this System.Drawing.Size szTarget)
+			internal static bool eIsFullHD(this System.Drawing.Size szTarget)
 			{
 				var szFullHD = new Size(1920, 1080);
 				return (szTarget == szFullHD);
@@ -8711,42 +8994,44 @@ return cItems;
 
 
 
+
+
 			#region Point / Size / Rectangle - Туда / сюда преобразования
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SizeF e_Multiply(this SizeF Source, float Zoom) => new(Source.Width * Zoom, Source.Height * Zoom);
+			internal static SizeF eMultiply(this SizeF Source, float Zoom) => new(Source.Width * Zoom, Source.Height * Zoom);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static PointF e_Multiply(this PointF Source, float Zoom) => new(Source.X * Zoom, Source.Y * Zoom);
+			internal static PointF eMultiply(this PointF Source, float Zoom) => new(Source.X * Zoom, Source.Y * Zoom);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.Point e_ToPoint(this PointF Source) => new((int)Source.X, (int)Source.Y);
+			internal static System.Drawing.Point eToPoint(this PointF Source) => new((int)Source.X, (int)Source.Y);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static PointF e_ToPoint(this SizeF Source) => new(Source.Width, Source.Height);
+			internal static PointF eToPoint(this SizeF Source) => new(Source.Width, Source.Height);
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Point e_ToPoint(this Size Source) => new(Source.Width, Source.Height);
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static PointF e_ToPointF(this Size Source) => new(Source.Width, Source.Height);
+			internal static Point eToPoint(this Size Source) => new(Source.Width, Source.Height);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SizeF e_ToSize(this PointF Source) => new(Source.X, Source.Y);
+			internal static PointF eToPointF(this Size Source) => new(Source.Width, Source.Height);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SizeF e_ToSizeF(this Size Source) => new(Source.Width, Source.Height);
+			internal static SizeF eToSize(this PointF Source) => new(Source.X, Source.Y);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF e_ToRectangleF(this System.Drawing.SizeF Source, PointF? newLocation = null)
+			internal static SizeF eToSizeF(this Size Source) => new(Source.Width, Source.Height);
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static RectangleF eToRectangleF(this System.Drawing.SizeF Source, PointF? newLocation = null)
 				=> new(
 					newLocation.HasValue
 						? newLocation.Value
@@ -8755,7 +9040,7 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Rectangle e_ToRectangle(this System.Drawing.Size Source, Point? newLocation = null)
+			internal static Rectangle eToRectangle(this System.Drawing.Size Source, Point? newLocation = null)
 				=> new(
 					  newLocation.HasValue
 						? newLocation.Value
@@ -8764,13 +9049,13 @@ return cItems;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF e_ToRectangleF(this Rectangle RC) => new(RC.Left, RC.Top, RC.Width, RC.Height);
+			internal static RectangleF eToRectangleF(this Rectangle RC) => new(RC.Left, RC.Top, RC.Width, RC.Height);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Rectangle e_ToRectangle(this RectangleF RCF)
+			internal static Rectangle eToRectangle(this RectangleF RCF)
 			{
-				RCF = RCF.e_Round(0);
+				RCF = RCF.eRound(0);
 				return new(
 					(int)RCF.Left,
 					(int)RCF.Top,
@@ -8784,44 +9069,16 @@ return cItems;
 
 
 
-			internal enum Orientations : int
-			{
-				Portrait,
-				Landscape,
-				Square
-			}
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Orientations e_GetOrientation(this System.Drawing.Size szScreen)
-			{
-				Orientations ret;
-				if (szScreen.Width == szScreen.Height) ret = Orientations.Square;
-				else if (szScreen.Width > szScreen.Height) ret = Orientations.Landscape;
-				else ret = Orientations.Portrait;
-				return ret;
-			}
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_OrientationIsLandscape(this System.Drawing.Size szScreen)
-			{
-				return szScreen.e_GetOrientation() == Orientations.Landscape;
-			}
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_OrientationIsPortrait(this System.Drawing.Size szScreen)
-			{
-				return szScreen.e_GetOrientation() == Orientations.Portrait;
-			}
 
 			/// <summary>Округляет, используя Round(Precission)</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF e_Round(this RectangleF RCF, int Precission)
+			internal static RectangleF eRound(this RectangleF RCF, int Precission)
 			{
 				float X, Y, W, H;
-				X = RCF.Left.e_Round(Precission);
-				Y = RCF.Top.e_Round(Precission);
-				W = RCF.Width.e_Round(Precission);
-				H = RCF.Height.e_Round(Precission);
+				X = RCF.Left.eRound(Precission);
+				Y = RCF.Top.eRound(Precission);
+				W = RCF.Width.eRound(Precission);
+				H = RCF.Height.eRound(Precission);
 				var RC = new RectangleF(X, Y, W, H);
 				return RC;
 			}
@@ -8874,9 +9131,9 @@ return cItems;
 			/// <param name="AngleRad">Угол в радианах</param>
 			/// <param name="sngRadius">Радиус</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static PointF e_RotateAround(this PointF ptfCenter, float AngleRad, float sngRadius)
+			internal static PointF eRotateAround(this PointF ptfCenter, float AngleRad, float sngRadius)
 			{
-				var ptfOffset = AngleRad.e_RotateAround(sngRadius);
+				var ptfOffset = AngleRad.eRotateAround(sngRadius);
 				return new PointF(ptfCenter.X + ptfOffset.X, ptfCenter.Y + ptfOffset.Y);
 			}
 
@@ -8885,9 +9142,9 @@ return cItems;
 			/// <param name="AngleRad">Угол в радианах</param>
 			/// <param name="Radius">Радиус X,Y</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.PointF e_RotateAround(this PointF ptfCenter, float AngleRad, System.Drawing.SizeF Radius)
+			internal static System.Drawing.PointF eRotateAround(this PointF ptfCenter, float AngleRad, System.Drawing.SizeF Radius)
 			{
-				var ptfOffset = AngleRad.e_RotateAround(Radius);
+				var ptfOffset = AngleRad.eRotateAround(Radius);
 				return new PointF(ptfCenter.X + ptfOffset.X, ptfCenter.Y + ptfOffset.Y);
 			}
 
@@ -8895,7 +9152,7 @@ return cItems;
 			/// <param name="AngleRad">Угол в радианах</param>
 			/// <param name="Radius">Радиус X,Y</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.PointF e_RotateAround(this float AngleRad, System.Drawing.SizeF Radius)
+			internal static System.Drawing.PointF eRotateAround(this float AngleRad, System.Drawing.SizeF Radius)
 			{
 				return new PointF((float)(Math.Cos(AngleRad) * Radius.Width), (float)(Math.Sin(AngleRad) * Radius.Height));
 			}
@@ -8904,9 +9161,9 @@ return cItems;
 			/// <param name="AngleRad">Угол в радианах</param>
 			/// <param name="sngRadius">Радиус</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static PointF e_RotateAround(this float AngleRad, float sngRadius)
+			internal static PointF eRotateAround(this float AngleRad, float sngRadius)
 			{
-				return AngleRad.e_RotateAround(new SizeF(sngRadius, sngRadius));
+				return AngleRad.eRotateAround(new SizeF(sngRadius, sngRadius));
 			}
 
 
@@ -8916,36 +9173,36 @@ return cItems;
 
 			/// <summary>Делит каждое значение на заданное</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF e_DivideTo(this Rectangle RC, float Делитель) => new(RC.Left / Делитель, RC.Top / Делитель, RC.Width / Делитель, RC.Height / Делитель);
+			internal static RectangleF eDivideTo(this Rectangle RC, float Делитель) => new(RC.Left / Делитель, RC.Top / Делитель, RC.Width / Делитель, RC.Height / Делитель);
 
 
 			/// <summary>Делит каждое значение на заданное</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF e_MultipleTo(this RectangleF RC, float Множитель) => new(RC.Left * Множитель, RC.Top * Множитель, RC.Width * Множитель, RC.Height * Множитель);
+			internal static RectangleF eMultipleTo(this RectangleF RC, float Множитель) => new(RC.Left * Множитель, RC.Top * Множитель, RC.Width * Множитель, RC.Height * Множитель);
 
 
 			/// <summary>Находит центр прямоугольника</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static PointF e_GetCenter(this RectangleF RC) => new(RC.Left + (RC.Width / 2), RC.Top + (RC.Height / 2));
+			internal static PointF eGetCenter(this RectangleF RC) => new(RC.Left + (RC.Width / 2), RC.Top + (RC.Height / 2));
 
-			internal static PointF e_Round(this PointF pt, int digits = 0) => new(
+			internal static PointF eRound(this PointF pt, int digits = 0) => new(
 				(float)Math.Round(pt.X, digits),
 				(float)Math.Round(pt.Y, digits));
 
-			internal static Point e_RoundToInt(this PointF pt)
+			internal static Point eRoundToInt(this PointF pt)
 			{
-				pt = pt.e_Round(0);
+				pt = pt.eRound(0);
 				return new((int)pt.X, (int)pt.Y);
 			}
 
-			internal static Size e_GetVectorTo(this Point source, Point target)
+			internal static Size eGetVectorTo(this Point source, Point target)
 			{
 				int dx = source.X - target.X;
 				int dy = source.Y - target.Y;
 				return new(dx, dy);
 			}
 
-			internal static double e_GetHypotenuse(this Size vector)
+			internal static double eGetHypotenuse(this Size vector)
 			{
 				var dx = Math.Pow((double)vector.Width, 2d);
 				var dy = Math.Pow((double)vector.Height, 2d);
@@ -8955,22 +9212,22 @@ return cItems;
 
 			/// <summary>Находит центр прямоугольника</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static PointF e_GetCenter(this Rectangle RC) => RC.e_ToRectangleF().e_GetCenter();
+			internal static PointF eGetCenter(this Rectangle RC) => RC.eToRectangleF().eGetCenter();
 
 
 			/// <summary>Центрирует Короткую линию по более длинной</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static float e_CenterTo(this float ShortLineWidth, float LongLineWidth) => (LongLineWidth - ShortLineWidth) / 2f;
+			internal static float eCenterTo(this float ShortLineWidth, float LongLineWidth) => (LongLineWidth - ShortLineWidth) / 2f;
 
 
 			/// <summary>Центрирует Короткую линию по более длинной</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static int e_CenterTo(this int ShortLineWidth, int LongLineWidth) => (int)Math.Round((LongLineWidth - ShortLineWidth) / 2f);
+			internal static int eCenterTo(this int ShortLineWidth, int LongLineWidth) => (int)Math.Round((LongLineWidth - ShortLineWidth) / 2f);
 
 
 			/// <summary>Центрирует прямоугольник относительно заданной точки</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF e_CenterTo(this RectangleF RC, PointF ptCenter)
+			internal static RectangleF eCenterTo(this RectangleF RC, PointF ptCenter)
 				=> new(
 					ptCenter.X - RC.Width / 2,
 					ptCenter.Y - RC.Height / 2,
@@ -8981,7 +9238,7 @@ return cItems;
 
 			/// <summary>Центрирует прямоугольник относительно заданной точки</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Rectangle e_CenterTo(this Rectangle RC, Point ptCenter)
+			internal static Rectangle eCenterTo(this Rectangle RC, Point ptCenter)
 				=> new(
 					ptCenter.X - RC.Width / 2,
 					ptCenter.Y - RC.Height / 2,
@@ -8993,7 +9250,7 @@ return cItems;
 
 			/// <summary>Центрирует прямоугольник относительно заданной точки</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Rectangle e_AlignTo(this Rectangle src, Rectangle trg, ContentAlignment alignment, Point? offset = null)
+			internal static Rectangle eAlignTo(this Rectangle src, Rectangle trg, ContentAlignment alignment, Point? offset = null)
 			{
 				Point ptLocation = src.Location;
 
@@ -9017,7 +9274,7 @@ return cItems;
 						case ContentAlignment.MiddleCenter:
 						case ContentAlignment.MiddleRight:
 							{
-								Rectangle rcCentered = src.e_CenterTo(trg.e_GetCenter().e_ToPoint());
+								Rectangle rcCentered = src.eCenterTo(trg.eGetCenter().eToPoint());
 								ptLocation.Y = rcCentered.Y;
 								break;
 							}
@@ -9057,7 +9314,7 @@ return cItems;
 						case ContentAlignment.MiddleCenter:
 						case ContentAlignment.BottomCenter:
 							{
-								Rectangle rcCentered = src.e_CenterTo(trg.e_GetCenter().e_ToPoint());
+								Rectangle rcCentered = src.eCenterTo(trg.eGetCenter().eToPoint());
 								ptLocation.X = rcCentered.X;
 								break;
 							}
@@ -9080,7 +9337,7 @@ return cItems;
 
 			/// <summary>Центрирует прямоугольник относительно заданной точки</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF e_AlignTo(this RectangleF src, RectangleF trg, ContentAlignment alignment, Point? offset = null)
+			internal static RectangleF eAlignTo(this RectangleF src, RectangleF trg, ContentAlignment alignment, Point? offset = null)
 			{
 				PointF ptLocation = src.Location;
 
@@ -9104,7 +9361,7 @@ return cItems;
 						case ContentAlignment.MiddleCenter:
 						case ContentAlignment.MiddleRight:
 							{
-								RectangleF rcCentered = src.e_CenterTo(trg.e_GetCenter());
+								RectangleF rcCentered = src.eCenterTo(trg.eGetCenter());
 								ptLocation.Y = rcCentered.Y;
 								break;
 							}
@@ -9144,7 +9401,7 @@ return cItems;
 						case ContentAlignment.MiddleCenter:
 						case ContentAlignment.BottomCenter:
 							{
-								RectangleF rcCentered = src.e_CenterTo(trg.e_GetCenter());
+								RectangleF rcCentered = src.eCenterTo(trg.eGetCenter());
 								ptLocation.X = rcCentered.X;
 								break;
 							}
@@ -9178,7 +9435,7 @@ return cItems;
 
 			/// <summary>Точка внутри?</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool e_IsInRect(this System.Drawing.Rectangle RC, System.Drawing.Point PT)
+			internal static bool eIsInRect(this System.Drawing.Rectangle RC, System.Drawing.Point PT)
 			{
 				if (PT.X < RC.Left) return false;
 				if (PT.X > RC.Right) return false;
@@ -9189,7 +9446,7 @@ return cItems;
 
 			/// <summary>Сделать, чтобы точка не выходила за пределы</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.RectangleF e_EnsureInRect(this System.Drawing.RectangleF src, System.Drawing.RectangleF trg)
+			internal static System.Drawing.RectangleF eEnsureInRect(this System.Drawing.RectangleF src, System.Drawing.RectangleF trg)
 			{
 				if (src.Left > trg.Right) src.X = trg.Right;
 				if (src.Top > trg.Bottom) src.Y = trg.Bottom;
@@ -9200,9 +9457,12 @@ return cItems;
 				return src;
 			}
 
-			/// <inheritdoc cref="e_EnsureInRect"/>
+
+
+
+			/// <inheritdoc cref="eEnsureInRect"/>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.Rectangle e_EnsureInRect(this System.Drawing.Rectangle src, System.Drawing.Rectangle trg)
+			internal static System.Drawing.Rectangle eEnsureInRect(this System.Drawing.Rectangle src, System.Drawing.Rectangle trg)
 			{
 				if (src.Left > trg.Right) src.X = trg.Right;
 				if (src.Top > trg.Bottom) src.Y = trg.Bottom;
@@ -9215,7 +9475,7 @@ return cItems;
 
 			/// <summary>Normalizing rectangle</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.Rectangle e_Normalize(this System.Drawing.Rectangle src)
+			internal static System.Drawing.Rectangle eNormalize(this System.Drawing.Rectangle src)
 			{
 				int l = new int[] { src.Left, src.Right }.Min();
 				int r = new int[] { src.Left, src.Right }.Max();
@@ -9226,7 +9486,7 @@ return cItems;
 
 			/// <summary>Normalizing rectangle</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.RectangleF e_Normalize(this System.Drawing.RectangleF src)
+			internal static System.Drawing.RectangleF eNormalize(this System.Drawing.RectangleF src)
 			{
 				float l = new float[] { src.Left, src.Right }.Min();
 				float r = new float[] { src.Left, src.Right }.Max();
@@ -9238,17 +9498,23 @@ return cItems;
 
 
 
+
+
+
+
 		}
+
+
 
 		internal static class Extensions_Imaging
 		{
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Image e_ToGrayscale(this Bitmap src) => ToolStripRenderer.CreateDisabledImage(src);
+			internal static Image eToGrayscale(this Bitmap src) => ToolStripRenderer.CreateDisabledImage(src);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Bitmap e_MakeGrayscale_Matrix(this Bitmap original)
+			internal static Bitmap eMakeGrayscale_Matrix(this Bitmap original)
 			{
 				// create a blank bitmap the same size as original
 				Bitmap newBitmap = new(original.Width, original.Height, PixelFormat.Format16bppGrayScale);
@@ -9287,17 +9553,441 @@ return cItems;
 
 		}
 
+		internal static class Extensions_Localization
+		{
+			internal const string LOCALIZED_RES_NAME_TEMPLATE_L_UI = "L_UI_{0}";
+			internal const string LOCALIZED_RES_NAME_TEMPLATE_L_ENUM = "L_ENUM_{0}";
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string? eGetLocalizedText(this string? resName, System.Resources.ResourceManager rm, string fullResNameTemplate = LOCALIZED_RES_NAME_TEMPLATE_L_UI)
+			{
+				if (resName.eIsNullOrWhiteSpace()) return null;
+				resName = fullResNameTemplate.eFormat(resName!);
+				string? resStringValue = rm.GetString(resName);
+				if (resStringValue.eIsNotNullOrWhiteSpace()) return resStringValue;
+
+				return null;
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string? eGetLocalizedText(this string? resName, string fullResNameTemplate = LOCALIZED_RES_NAME_TEMPLATE_L_UI)
+				=> resName.eGetLocalizedText(uom.AppInfo.LocalizedStringsManager.Value, fullResNameTemplate);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			private static string? eGetLocalizedTextByPropertyName(this Component c, string propertyName = "Name")
+			{
+				string? componentName = c.eGetPropertyValueAs<string>(propertyName, null, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+				if (componentName.eIsNotNullOrWhiteSpace())
+					return componentName.eGetLocalizedText();
+
+				return null;
+			}
+
+
+			#region Menus
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void eLocalizeUITree(this MenuStrip mnuRoot)
+			{
+				ToolStripItem[] actl = [.. mnuRoot.Items.Cast<ToolStripItem>()];
+				actl.eLocalizeUI(true);
+			}
+
+
+			#endregion
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void eLocalizeUI(this Component c, bool recurse = true)
+			{
+
+				switch (c)
+				{
+					case ColumnHeader col:
+						{
+							var s = col.eGetLocalizedTextByPropertyName();
+							if (s != null) col.Text = s;
+							else
+							{
+								s = col.Text.eGetLocalizedText();
+								if (s != null) col.Text = s;
+							}
+							break;
+						}
+
+					case MenuStrip mnu:
+						{
+							mnu.Items.Cast<ToolStripItem>().eLocalizeUI(recurse);
+							break;
+						}
+
+					case ToolStripItem tsi:
+						{
+							switch (tsi)
+							{
+								case ToolStripSeparator sep: break;
+
+								case ToolStripButton:
+								case ToolStripDropDownButton:
+								case ToolStripLabel:
+								case ToolStripMenuItem:
+									{
+										var s = tsi.Name.eGetLocalizedText();
+										if (s != null) tsi.Text = s;
+										else
+										{
+											s = tsi.Text.eGetLocalizedText();
+											if (s != null) tsi.Text = s;
+										}
+
+										if (recurse && tsi is ToolStripMenuItem mnu)
+										{
+											//ToolStripItem[] actl = [.. mnu.DropDownItems.Cast<ToolStripItem>()];
+											mnu.DropDownItems.Cast<ToolStripItem>().eLocalizeUI(recurse);
+										}
+										break;
+									}
+
+							}
+							break;
+						}
+
+					case Control ctl:
+						{
+							var s = ctl.eGetLocalizedTextByPropertyName();
+							if (s != null) ctl.Text = s;
+							else
+							{
+								s = ctl.Text.eGetLocalizedText();
+								if (s != null) ctl.Text = s;
+							}
+							break;
+						}
+
+					default:
+						throw new NotImplementedException($"Localization of '{c.GetType()}' is not supported!");
+				}
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void eLocalizeUI(this IEnumerable<Component> cmpList, bool recurse = true)
+				=> cmpList.eForEach(ctl => ctl.eLocalizeUI(recurse));
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string eLocalize<T>(this T value, System.Resources.ResourceManager rm) where T : Enum
+			{
+				string enumResSuffix = $"{value.GetType().Name}.{value}";
+				string? localizedString = enumResSuffix.eGetLocalizedText(rm, LOCALIZED_RES_NAME_TEMPLATE_L_ENUM);
+				if (localizedString.eIsNotNullOrWhiteSpace()) return localizedString!;
+				return value.ToString().eInsertSpacesBeforeUpperCaseChars();
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string eLocalize<T>(this T value) where T : Enum
+			{
+				string enumResSuffix = $"{value.GetType().Name}.{value}";
+				string? localizedString = enumResSuffix.eGetLocalizedText(LOCALIZED_RES_NAME_TEMPLATE_L_ENUM);
+				if (localizedString.eIsNotNullOrWhiteSpace()) return localizedString!;
+				return value.ToString().eInsertSpacesBeforeUpperCaseChars();
+			}
+
+		}
 
 	}
 
-#pragma warning restore IDE1006 // Naming Styles
+
+
 
 
 	namespace WinAPI
 	{
 
-		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-		internal static partial class Errors
+		[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+		internal struct RECT(int L, int T, int R, int B)
+		{
+			public int Left = L;
+			public int Top = T;
+			public int Right = R;
+			public int Bottom = B;
+
+
+			internal int Width => Right - Left;
+			internal int Height => Bottom - Top;
+
+			internal Point Location => new(Left, Top);
+
+			public Rectangle ToRectangle() => new(Left, Top, Width, Height);
+
+
+			#region Constructor
+
+			public RECT(Rectangle R) : this(R.Left, R.Top, R.Right, R.Bottom) { }
+
+			public RECT(Point Location, Size Size) : this(new Rectangle(Location, Size)) { }
+
+			#endregion
+
+
+			public Size Size => new Size(Width, Height);
+
+
+			public override string ToString() => ((Rectangle)this).ToString();
+
+
+			#region Operator
+			public static bool operator ==(RECT R1, RECT R2)
+			{
+				return R1.Left == R2.Left && R1.Top == R2.Top && R1.Right == R2.Right && R1.Bottom == R2.Bottom;
+			}
+
+			public static bool operator !=(RECT R1, RECT R2) => !(R1 == R2);
+
+			public static implicit operator Rectangle(RECT R)
+			{
+				return new Rectangle(R.Left, R.Top, R.Width, R.Height);
+			}
+
+			#endregion
+
+			// Public Declare Function FillRectRc Lib "user32"  Alias "FillRect"(ByVal hdc As Integer, ByRef lpRect As Win.RECT, ByVal hBrush As Integer) As Integer
+			// Public Declare Function FrameRect Lib "user32" (ByVal hdc As Integer, ByRef lpRect As Win.RECT, ByVal hBrush As Integer) As Integer
+			// Public Declare Function InvertRect Lib "user32" (ByVal hdc As Integer, ByRef lpRect As Win.RECT) As Integer
+			// Public Declare Function SetRect Lib "user32" (ByRef lpRect As Win.RECT, ByVal X1 As Integer, ByVal Y1 As Integer, ByVal X2 As Integer, ByVal Y2 As Integer) As Integer
+			// Public Declare Function SetRectEmpty Lib "user32" (ByRef lpRect As Win.RECT) As Integer
+			// Public Declare Function CopyRect Lib "user32" (ByRef lpTargetикRect As Win.RECT, ByRef lpSourceникRect As Win.RECT) As Integer
+
+			// Public Declare Function InflateRect Lib "user32" (ByRef lpRect As Win.RECT, ByVal Dx As Integer, ByVal DY As Integer) As Integer
+
+			// Public Declare Function IntersectRect Lib "user32" (ByRef lpTargetикRect As Win.RECT, ByRef lpSourceник1Rect As Win.RECT, ByRef lpSourceник2Rect As Win.RECT) As Integer
+			// Public Declare Function UnionRect Lib "user32" (ByRef lpTargetикRect As Win.RECT, ByRef lpSourceник1Rect As Win.RECT, ByRef lpSourceник2Rect As Win.RECT) As Integer
+			// Public Declare Function SubtractRect Lib "user32" (ByRef lprcTargetик As Win.RECT, ByRef lprcSourceник1 As Win.RECT, ByRef lprcSourceник2 As Win.RECT) As Integer
+			// Public Declare Function OffSetRect Lib "user32" (lpRect As Win.RECT, ByVal X&, ByVal Y&) As Long
+			// Public Declare Function IsRectEmpty Lib "user32" (ByRef lpRect As Win.RECT) As Integer
+			// Public Declare Function EqualRect Lib "user32" (ByRef lpRect1 As Win.RECT, ByRef lpRect2 As Win.RECT) As Integer
+
+			// '	'UPGRADE_ISSUE: Declaring a parameter 'As Any' is not supported. Click for more: 'ms-help://MS.VSCC/commoner/redir/redirect.htm?keyword="vbup1016"'
+			// '	Public Declare Function CopyRectAny Lib "user32"  Alias "CopyRect"(ByRef lpTargetикRect As Any, ByRef lpSourceникRect As Any) As Integer
+
+		}
+
+
+		/// <summary>Win32 Safe Handles for diferent API</summary>
+		internal static partial class safeHandles
+		{
+
+			//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
+			[DebuggerDisplay("Win32FilebHandle={handle}")]
+			internal partial class Win32FileHandle : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid
+			{
+				public Win32FileHandle(bool OwnsHandle = true) : base(OwnsHandle) { SetHandle(IntPtr.Zero); }
+
+				public Win32FileHandle(IntPtr hFile, bool OwnsHandle = true) : this(OwnsHandle) { SetHandle(hFile); }
+
+				public new void Close() => ReleaseHandle();
+
+				protected override bool ReleaseHandle()
+				{
+					if (IsInvalid) return true;
+
+					bool bResult = WinAPI.core.CloseHandle(handle);
+					if (bResult) SetHandle(IntPtr.Zero);
+					return bResult;
+				}
+			}
+
+			//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
+			[DebuggerDisplay("Win32LibHandle={handle}")]
+			internal partial class Win32LibHandle : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid
+			{
+
+				#region LoadLibrary / FreeLibrary
+
+				[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+				internal static extern IntPtr GetModuleHandle(
+					[In, MarshalAs(UnmanagedType.LPTStr)] string lpModuleName);
+
+
+				[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+				internal static extern IntPtr LoadLibrary(
+					[In, MarshalAs(UnmanagedType.LPTStr)] string lpLibFileName);
+
+				internal enum LoadLibraryExFlags : int
+				{
+					DONT_RESOLVE_DLL_REFERENCES = 0x1,
+					LOAD_LIBRARY_AS_DATAFILE = 0x2,
+					LOAD_IGNORE_CODE_AUTHZ_LEVEL = 0x10,
+					LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE = 0x40,
+					LOAD_LIBRARY_AS_IMAGE_RESOURCE = 0x20,
+					LOAD_WITH_ALTERED_SEARCH_PATH = 0x8
+				}
+
+				[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+				internal static extern IntPtr LoadLibraryEx(
+					[In, MarshalAs(UnmanagedType.LPTStr)] string lpLibFileName,
+					[In] IntPtr hFile,
+					[In] LoadLibraryExFlags dwFlags);
+
+
+				[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+				internal static extern bool FreeLibrary([In] IntPtr hLibModule);
+
+				#endregion
+
+
+				[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+				internal static extern IntPtr GetProcAddress(
+					[In] IntPtr hModule,
+					[In] string lpProcName);
+
+
+				[MethodImpl(MethodImplOptions.AggressiveInlining)]
+				internal IntPtr GetProcAddress(string lpProcName)
+					=> GetProcAddress(DangerousGetHandle(), lpProcName);
+
+
+				/// <summary>Только для информации. НИГДЕ НЕ ПРИМЕНЯЕТСЯ!</summary>
+				public readonly string? LibFile;
+
+				#region Constructor/destructor
+				[DebuggerNonUserCode, DebuggerStepThrough]
+				public Win32LibHandle(IntPtr hLib, bool ownsHandle = true, string? sLibFileName = null) : base(ownsHandle)
+				{
+					if (hLib.eIsNotValid()) throw new ArgumentNullException(nameof(hLib));
+					SetHandle(hLib);
+					LibFile = sLibFileName;
+					if (IsInvalid) errors.ThrowLastWin23Error();
+				}
+
+				[DebuggerNonUserCode, DebuggerStepThrough]
+				public Win32LibHandle(string LibFileName) : this(LibFileName, LoadLibraryExFlags.LOAD_LIBRARY_AS_DATAFILE) { }
+
+				[DebuggerNonUserCode, DebuggerStepThrough]
+				public Win32LibHandle(string sLibFileName, LoadLibraryExFlags Flags, bool ownsHandle = true) : base(ownsHandle)
+				{
+					SetHandle(LoadLibraryEx(sLibFileName, IntPtr.Zero, Flags));
+					LibFile = sLibFileName;
+					if (IsInvalid) errors.ThrowLastWin23Error();
+				}
+
+				[MethodImpl(MethodImplOptions.AggressiveInlining)]
+				protected override bool ReleaseHandle()
+				{
+					if (IsInvalid) return true;
+					bool bResult = FreeLibrary(handle);
+					if (bResult) SetHandle(IntPtr.Zero);
+					return bResult;
+				}
+				#endregion
+
+
+
+
+				[MethodImpl(MethodImplOptions.AggressiveInlining)]
+				internal static Win32LibHandle GetRunningLibraryOrLoad(string LibFileName, LoadLibraryExFlags LLF, bool NotUnloadLibOnDispose = false)
+				{
+					// check first to see if the module is already mapped into this process.
+					var hModule = GetModuleHandle(LibFileName);
+					if (hModule.eIsValid()) return new Win32LibHandle(hModule, false, LibFileName);
+
+					// need to load module into this process.
+					return new Win32LibHandle(LibFileName, LLF, NotUnloadLibOnDispose);
+				}
+
+
+				[MethodImpl(MethodImplOptions.AggressiveInlining)]
+				internal static Win32LibHandle GetRunningLibraryOrLoad_AsResource(string LibFileName, bool NotUnloadLibOnDispose = false)
+					=> GetRunningLibraryOrLoad(LibFileName, LoadLibraryExFlags.LOAD_LIBRARY_AS_IMAGE_RESOURCE, NotUnloadLibOnDispose);
+
+
+				#region IsProcedureExported - used to determine if an API function is exported.
+
+
+				/// <summary>used to determine if an API function is exported.</summary>
+				public static bool IsProcedureExported(string ModuleName, string ProcName, bool NotUnloadLibOnDispose = false)
+				{
+					bool bNeedFreeLib = false;
+
+					// check first to see if the module is already mapped into this process.
+					var hModule = GetModuleHandle(ModuleName);
+
+					// need to load module into this process.
+					if (!hModule.eIsValid())
+					{
+						hModule = LoadLibrary(ModuleName);
+						bNeedFreeLib = !NotUnloadLibOnDispose;
+					}
+
+					try
+					{
+						// if the module is mapped, check procedure address to verify it's exported.
+						if (hModule.eIsValid())
+						{
+							var lpProc = GetProcAddress(hModule, ProcName);
+							return lpProc.eIsValid();
+						}
+					}
+					finally
+					{
+						// unload library if we loaded it here.
+						if (bNeedFreeLib) FreeLibrary(hModule);
+					}
+
+					return false;
+				}
+
+
+				#endregion
+
+
+
+
+				#region Operator
+				// Shared Operator =(ByVal Mem1 As LocalMemory, ByVal LMB2 As LocalMemory) As Boolean
+				// If (Mem1.IsValid AndAlso LMB2.IsValid) Then Return (Mem1.DangerousGetHandle = LMB2.DangerousGetHandle)
+				// Return False
+				// End Operator
+				// Shared Operator <>(ByVal LMB1 As LocalMemory, ByVal LMB2 As LocalMemory) As Boolean
+				// Return (Not (LMB1 = LMB2))
+				// End Operator
+
+				public static implicit operator IntPtr(Win32LibHandle WLH)
+				{
+					return WLH.DangerousGetHandle();
+				}
+
+
+				// Public Shared Widening Operator CType(ByVal LMB1 As LocalMemory) As String
+				// Return LMB1.ToString
+				// End Operator
+				// Public Shared Widening Operator CType(ByVal LMB1 As LocalMemory) As Integer()
+				// Return LMB1.ToIntegers
+				// End Operator
+				// Public Shared Widening Operator CType(ByVal LMB1 As LocalMemory) As System.Drawing.Point()
+				// Return LMB1.ToPoints
+				// End Operator
+
+
+
+
+
+				#endregion
+
+
+
+			}
+
+
+		}
+
+
+		/// <summary>Win32 Errors API</summary>
+		internal static partial class errors
 		{
 
 			//  Values are 32 bit values layed [Out ] as follows:
@@ -9481,7 +10171,7 @@ return cItems;
 				ERROR_NOT_DOS_DISK = 26,
 				/// <summary>The drive cannot find the sector requested.</summary>
 				ERROR_SECTOR_NOT_FOUND = 27,
-				/// <summary>The printer is [Out ] of paper.</summary>
+				/// <summary>The printer is Out of paper.</summary>
 				ERROR_OUT_OF_PAPER = 28,
 				/// <summary>The system cannot write to the specified device.</summary>
 				ERROR_WRITE_FAULT = 29,
@@ -9665,7 +10355,7 @@ return cItems;
 				ERROR_SYSTEM_TRACE = 150,
 				/// <summary>The number of specified semaphore events for DosMuxSemWait is not correct.</summary>
 				ERROR_INVALID_EVENT_COUNT = 151,
-				/// <summary>DosMuxSemWait did not e_runute; too many semaphores are already set.</summary>
+				/// <summary>DosMuxSemWait did not erunute; too many semaphores are already set.</summary>
 				ERROR_TOO_MANY_MUXWAITERS = 152,
 				/// <summary>The DosMuxSemWait list is not correct.</summary>
 				ERROR_INVALID_LIST_FORMAT = 153,
@@ -9945,7 +10635,7 @@ return cItems;
 				ERROR_CANNOT_DETECT_PROCESS_ABORT = 1081,
 				/// <summary>No recovery program has been configured for this service.</summary>
 				ERROR_NO_RECOVERY_PROGRAM = 1082,
-				/// <summary>The e_runutable program that this service is configured to run in does not implement the service.</summary>
+				/// <summary>The erunutable program that this service is configured to run in does not implement the service.</summary>
 				ERROR_SERVICE_NOT_IN_EXE = 1083,
 				/// <summary>This service cannot be started in Safe Mode.</summary>
 				ERROR_NOT_SAFEBOOT_SERVICE = 1084,
@@ -10226,7 +10916,7 @@ return cItems;
 				ERROR_SYNC_FOREGROUND_REFRESH_REQUIRED = 1274,
 				/// <summary>This driver has been blocked from loading.</summary>
 				ERROR_DRIVER_BLOCKED = 1275,
-				/// <summary>A dynamic link library (DLL) referenced a module that was neither a DLL nor the process's e_runutable image.</summary>
+				/// <summary>A dynamic link library (DLL) referenced a module that was neither a DLL nor the process's erunutable image.</summary>
 				ERROR_INVALID_IMPORT_OF_NON_DLL = 1276,
 				/// <summary>Windows cannot open this program since it has been disabled.</summary>
 				ERROR_ACCESS_DISABLED_WEBBLADE = 1277,
@@ -10246,7 +10936,7 @@ return cItems;
 				ERROR_DEBUGGER_INACTIVE = 1284,
 				/// <summary>An attempt to delay-load a .dll or get a function address in a delay-loaded .dll failed.</summary>
 				ERROR_DELAY_LOAD_FAILED = 1285,
-				/// <summary>%1 is a 16-bit System.Windows.Forms.Application. You do not have permissions to e_runute 16-bit applications. Check your permissions with your system administrator.</summary>
+				/// <summary>%1 is a 16-bit System.Windows.Forms.Application. You do not have permissions to erunute 16-bit applications. Check your permissions with your system administrator.</summary>
 				ERROR_VDM_DISALLOWED = 1286,
 
 
@@ -10646,9 +11336,9 @@ return cItems;
 				ERROR_INSTALL_TRANSFORM_FAILURE = 1624,
 				/// <summary>This installation is forbidden by system policy. = Contact your system administrator.</summary>
 				ERROR_INSTALL_PACKAGE_REJECTED = 1625,
-				/// <summary>Function could not be e_runuted.</summary>
+				/// <summary>Function could not be erunuted.</summary>
 				ERROR_FUNCTION_NOT_CALLED = 1626,
-				/// <summary>Function failed during e_runution.</summary>
+				/// <summary>Function failed during erunution.</summary>
 				ERROR_FUNCTION_FAILED = 1627,
 				/// <summary>Invalid or unknown table specified.</summary>
 				ERROR_INVALID_TABLE = 1628,
@@ -10746,7 +11436,7 @@ return cItems;
 				RPC_S_NO_CALL_ACTIVE = 1725,
 				///<summary> The remote procedure call failed.</summary> 
 				RPC_S_CALL_FAILED = 1726,
-				///<summary> The remote procedure call failed and did not e_runute.</summary> 
+				///<summary> The remote procedure call failed and did not erunute.</summary> 
 				RPC_S_CALL_FAILED_DNE = 1727,
 				///<summary> A remote procedure call (RPC) protocol error occurred.</summary> 
 				RPC_S_PROTOCOL_ERROR = 1728,
@@ -12943,12 +13633,12 @@ return cItems;
 			///<summary> The directory partition is not available at this time. Please wait
 			//  a few minutes and try again.</summary>
 	DNS_ERROR_DP_NOT_AVAILABLE = 9905L
-			// '''''''''''''''''''''''''/
+			// '/
 			// = '
 			// = End of DNS Error Codes = '
 			// = '
 			// = 9000 to 9999 = '
-			// '''''''''''''''''''''''''/
+			// '/
 
 				*/
 
@@ -12972,7 +13662,7 @@ return cItems;
 				WSAEMFILE = 10024,
 				///<summary> A non-blocking socket operation could not be completed immediately.</summary>
 				WSAEWOULDBLOCK = 10035,
-				///<summary> A blocking operation is currently e_runuting.</summary>
+				///<summary> A blocking operation is currently erunuting.</summary>
 				WSAEINPROGRESS = 10036,
 				///<summary> An operation was attempted on a non-blocking socket that already had an operation in progress.</summary>
 				WSAEALREADY = 10037,
@@ -13163,7 +13853,7 @@ return cItems;
 				ERROR_SXS_VERSION_CONFLICT = 14008,
 				///<summary> The type requested activation context section does not match the query API used.</summary>
 				ERROR_SXS_WRONG_SECTION_TYPE = 14009,
-				///<summary> Lack of system resources has required isolated activation to be disabled for the current thread of e_runution.</summary>
+				///<summary> Lack of system resources has required isolated activation to be disabled for the current thread of erunution.</summary>
 				ERROR_SXS_THREAD_QUERIES_DISABLED = 14010,
 				///<summary> An attempt to set the process default activation context failed because the process default activation context was already set.</summary>
 				ERROR_SXS_PROCESS_DEFAULT_ALREADY_SET = 14011,
@@ -13549,7 +14239,7 @@ return cItems;
 
 				public Win32ExceptionEx(Win32Errors err, string? ErrorAction = null) : this(
 					(int)err,
-					($"[{(int)err} - {err}]: {GetErrorMessage(err)}" + (ErrorAction.e_IsNullOrWhiteSpace() ? String.Empty : ($"\nError source: {ErrorAction}"))).Trim()
+					($"[{(int)err} - {err}]: {GetErrorMessage(err)}" + (ErrorAction.eIsNullOrWhiteSpace() ? String.Empty : ($"\nError source: {ErrorAction}"))).Trim()
 					)
 				{ }
 
@@ -13626,11 +14316,11 @@ return cItems;
 			#endregion
 
 
-			internal static (string ErrorMessage, bool MessageFound) GetErrorMessage(int iCode)
+			internal static (string Message, bool Found) GetErrorMessage(int iCode)
 			{
+				StringBuilder? sb = null;
 				try
 				{
-					StringBuilder? Buffer = null;
 					int strLen = FormatMessage(
 						FormatMessageFlags.FORMAT_MESSAGE_FROM_SYSTEM |
 						FormatMessageFlags.FORMAT_MESSAGE_IGNORE_INSERTS |
@@ -13638,29 +14328,32 @@ return cItems;
 						IntPtr.Zero,
 						iCode,
 						0,
-						ref Buffer,
+						ref sb,
 						0,
 						IntPtr.Zero);
 
-					if (strLen > 0)
+					if (strLen > 0 && sb != null)
 					{
-						string sError = Buffer!.ToString();
-						Buffer = null;//Free mem;
-						sError = sError.e_RemoveAtEnd(constants.vbCrLf);
-						return (sError, true);
+						string err = sb!.ToString().eRemoveAtEnd(constants.vbCrLf);
+						return (err, true);
 					}
 					//Can't read error message!
 				}
 				catch { }
+				finally
+				{
+					sb = null;//Free mem;						
+				}
+
 				return ($"Unknown Error: {iCode}", false);
 			}
 
 
 			internal static string GetErrorMessage(Win32Errors eCode)
 			{
-				var (ErrorMessage, MessageFound) = GetErrorMessage((int)eCode);
-				return MessageFound
-					? ErrorMessage
+				var r = GetErrorMessage((int)eCode);
+				return r.Found
+					? r.Message
 					: eCode.ToString();
 			}
 
@@ -13682,14 +14375,16 @@ return cItems;
 				}
 			}
 
+
+
 			internal static class COMErrors
 			{
 
-				// ''''''''''''''''''
+				// 
 				//                                '
 				//     COM Error Codes            '
 				//                                '
-				// ''''''''''''''''''
+				// 
 
 				// The return value of COM functions and methods is an HRESULT.
 				// This is not a handle to anything, but is merely a 32-bit value
@@ -13902,7 +14597,7 @@ return cItems;
 					public Win32Errors ToWin32Exception()
 					{
 						Win32Errors wex = ToWin32();
-						uom.WinAPI.Errors.ThrowWin23Error
+						uom.WinAPI.errors.ThrowWin23Error
 
 					}
 					 */
@@ -14970,11 +15665,11 @@ return cItems;
 
 				//</summary> CAT_E_NODESCRIPTION              _HRESULT_TYPEDEF_(= 0x80040161L)
 
-				// ''''''''''''''''''
+				// 
 				//                                '
 				//     Class Store Error Codes    '
 				//                                '
-				// ''''''''''''''''''
+				// 
 				//</summary> CS_E_FIRST     = 0x80040164L
 				//</summary> CS_E_LAST      = 0x8004016FL
 
@@ -16921,7 +17616,7 @@ return cItems;
 
 				//<summary>
 
-				//  Server e_runution failed
+				//  Server erunution failed
 
 				//</summary> CO_E_SERVER_EXEC_FAILURE         _HRESULT_TYPEDEF_(= 0x80080005L)
 
@@ -17962,7 +18657,7 @@ return cItems;
 
 				//<summary>
 
-				//  The callee (server [not server application]) is not available and disappeared; all connections are invalid. The call may have e_runuted.
+				//  The callee (server [not server application]) is not available and disappeared; all connections are invalid. The call may have erunuted.
 
 				//</summary> RPC_E_SERVER_DIED                _HRESULT_TYPEDEF_(= 0x80010007L)
 
@@ -18061,7 +18756,7 @@ return cItems;
 
 				//<summary>
 
-				//  The callee (server [not server application]) is not available and disappeared; all connections are invalid. The call did not e_runute.
+				//  The callee (server [not server application]) is not available and disappeared; all connections are invalid. The call did not erunute.
 
 				//</summary> RPC_E_SERVER_DIED_DNE            _HRESULT_TYPEDEF_(= 0x80010012L)
 
@@ -18652,13 +19347,13 @@ return cItems;
 
 
 
-				// '''''''''''''''''''
+				// '
 				//                                  '
 				// Additional Security Status Codes '
 				//                                  '
 				// Facility=Security                '
 				//                                  '
-				// '''''''''''''''''''
+				// '
 
 
 
@@ -18681,11 +19376,11 @@ return cItems;
 
 
 
-				// ''''''''''''''''''''''/
+				// '/
 				//                                         '
 				// end of Additional Security Status Codes '
 				//                                         '
-				// ''''''''''''''''''''''/
+				// '/
 
 
 
@@ -23602,7 +24297,7 @@ return cItems;
 
 				//<summary>
 
-				//  The COM+ Catalog Server threw an exception during e_runution
+				//  The COM+ Catalog Server threw an exception during erunution
 
 				//</summary> COMADMIN_E_CAT_SERVERFAULT       _HRESULT_TYPEDEF_(= 0x80110486L)
 
@@ -23940,51 +24635,128 @@ return cItems;
 
 			#region Фиксация ошибки в журнале и в DEBUG MODE вывод сообщения
 
-			/// <summary>Фиксация ошибки в журнале и в DEBUG MODE вывод сообщения</summary>
-			internal static void NTLogWrite(string Message, EventLogEntryType ET, string NT_LOG_NAME = "UOM")
+			/// <summary>Wrires message into NTLog and _ERRORS.LOG file in AppData Local dir</summary>
+			internal static void ErrorLogWrite(string message, EventLogEntryType et = EventLogEntryType.Error, UInt16 eventID = 1001, string NT_LOG_NAME = "UOM")
 			{
-				string erorHeader = $"{DateTime.Now.e_ToFileName()} | {Application.ProductName} (ver.:{Application.ProductVersion}) \n{Application.ExecutablePath}\n";
+				StringBuilder sb = new(4096);
+				sb.AppendLine($"{DateTime.Now.eToFileName()} | {message}");
 #if DEBUG
-				erorHeader += "mode: DEBUG";
+				sb.AppendLine("mode: DEBUG");
 #else
-				erorHeader += "mode: RELEASE";
+				sb.AppendLine("mode: RELEASE");
 #endif
-				Message = $"{erorHeader}\n{Message}";
-				try
+
+				var loc = uom.AppInfo.Assembly.Location;
+
+				sb.AppendLine($"Product Name: {Application.ProductName} (Version: {Application.ProductVersion})");
+				sb.AppendLine($"ExecutablePath: {Application.ExecutablePath}");
+				sb.AppendLine(uom.AppInfo.Assembly.eDumpObjectToString(excludeMembers: ["EscapedCodeBase", "CustomAttributes", "DefinedTypes", "ExportedTypes", "IsCollectible", "Modules", "ReflectionOnly", "SecurityRuleSet"]));
+				//sb.AppendLine($"FileVersionInfo: {uom.AppInfo.AssemblyFileVersionInfo.eDumpObjectToString()}");
+
+				string[] exl = ["DefaultThreadCurrentCulture", "DefaultThreadCurrentUICulture", "IetfLanguageTag", "InvariantCulture", "NumberFormat", "OptionalCalendars", "UseUserOverride", "IsReadOnly", "CultureTypes", "DateTimeFormat", "EnglishName", "IsNeutralCulture", "InstalledUICulture", "DisplayName"];
+				//sb.AppendLine($"CurrentCulture: {System.Globalization.CultureInfo.CurrentCulture.eDumpObjectToString(excludeMembers: exl)}");
+				sb.AppendLine($"CurrentThread.CurrentUICulture: {Thread.CurrentThread.CurrentUICulture.eDumpObjectToString(excludeMembers: exl)}");
+				sb.AppendLine(typeof(System.Environment).eDumpStaticMembers("ExitCode", "NewLine", "StackTrace"));
+
+				message = sb.ToString();
+
+				void WriteNTLog()
 				{
-					var FI = new FileInfo(Application.ExecutablePath);
-					if (!EventLog.SourceExists(FI.Name)) EventLog.CreateEventSource(FI.Name, NT_LOG_NAME);
-					try { EventLog.WriteEntry(FI.Name, Message, ET); }
+
+					lock (_eaNTLogLockObject.Value)
+					{
+						//Trying Write To Standart Application Event Log...
+						static void WriteToApplicationLog(string msg, EventLogEntryType et, UInt16 eventID)
+						{
+							Extensions_DebugAndErrors.etryCatch(delegate
+							{
+								const string src = "Application";
+								using EventLog elApplication = new(src);
+								elApplication.Source = src;
+								elApplication.WriteEntry(msg, et, eventID);
+							});
+						}
+
+						var fiApp = new FileInfo(Application.ExecutablePath);
+						string src = fiApp.Name;
+						try
+						{
+							// searching the source throws a security exception ONLY if not exists!
+							if (!EventLog.SourceExists(src))
+							{
+								EventLog.CreateEventSource(src, NT_LOG_NAME);
+								using System.Diagnostics.Eventing.Reader.EventLogConfiguration elcUOM = new(NT_LOG_NAME);
+								elcUOM.LogMode = System.Diagnostics.Eventing.Reader.EventLogMode.Circular;
+								elcUOM.MaximumSizeInBytes = (long)10u.eMBToBytes();
+								elcUOM.SaveChanges();
+							}
+							using EventLog elUOM = new(NT_LOG_NAME);
+							elUOM.Source = src;
+							elUOM.WriteEntry(message, et, eventID);
+						}
+						catch (SecurityException)
+						{
+							WriteToApplicationLog($"{src}:\nEventlog source '{src}' is not registered for log {NT_LOG_NAME}!\nApp '{fiApp.FullName}' must be run with admin priveleges just once, to allow this source registration.", EventLogEntryType.Warning, eventID);
+							WriteToApplicationLog(message, et, eventID);
+						}
+						catch (Exception)
+						{
+							//Some shit happens...
+						}
+					}
+				}
+
+				void WriteFileLog()
+				{
+					const uint MAX_ERR_LOG_SIZE_MB = 10u;
+					const int MAX_ARHIVE_FILES_COUNT = 5;
+
+					try
+					{
+						lock (_eaFileLogLockObject.Value)
+						{
+							var fiErrorLog = uom.AppTools.GetFileIn_AppData("_Errors.log", false).eToFileInfo();
+							if (fiErrorLog != null)
+							{
+								if (fiErrorLog.Exists && fiErrorLog.Length >= (long)MAX_ERR_LOG_SIZE_MB.eMBToBytes())
+								{
+									try
+									{
+										fiErrorLog.eMoveToArhive(MAX_ARHIVE_FILES_COUNT);
+									}
+									catch { }
+								}
+
+								using var sw = fiErrorLog.AppendText();
+								sw.WriteLine('*'.eRepeat());
+								sw.WriteLine(message);
+								sw.Flush();
+							}
+						}
+					}
 					catch { }
 				}
-				catch { }
 
-				try
-				{
-					var fiErrorLog = "_ERRORS.LOG".e_GetFileIn_AppData_Local().e_ToFileInfo();
-					if (fiErrorLog != null)
-						using (var SW = fiErrorLog.AppendText())
-						{
-							SW.WriteLine('*'.e_Repeat());
-							SW.WriteLine(Message);
-							SW.Flush();
-							SW.Close();
-						}
-				}
-				catch
-				{
-				}
+				Task tskWriteNTLog = new(WriteNTLog, TaskCreationOptions.LongRunning);
+				Task tskWriteFileLog = new(WriteFileLog, TaskCreationOptions.LongRunning);
+				Task[] allTasks = [tskWriteNTLog, tskWriteFileLog];
+				allTasks.eForEach(t => t.Start());
+				Task.WaitAll(allTasks);
 			}
+
+			private static Lazy<EventArgs> _eaFileLogLockObject = new(() => new EventArgs());
+			private static Lazy<EventArgs> _eaNTLogLockObject = new(() => new EventArgs());
+
 			#endregion
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static void ThrowWin23Error(Win32Errors ErrorCode, string? DescriptionOfErrorAction = null)
-				=> new Win32Exception((int)ErrorCode, DescriptionOfErrorAction).e_Throw();
+				=> new Win32Exception((int)ErrorCode, DescriptionOfErrorAction).eThrow();
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static void ThrowLastWin23Error(string? DescriptionOfErrorAction = null)
-				=> new Win32Exception(DescriptionOfErrorAction).e_Throw();
+				=> new Win32Exception(DescriptionOfErrorAction).eThrow();
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -23996,8 +24768,8 @@ return cItems;
 			public static void ThrowLastWin23ErrorAssert(Win32Errors IgnoreErrorCode = Win32Errors.ERROR_SUCCESS)
 			{
 				Win32ExceptionEx WEX = LastWin23Error();
-				if (WEX.NativeErrorCode != IgnoreErrorCode) WEX.e_Throw();
-				$"ThrowLastWin23ErrorAssert skip: {WEX.Message}\n\t{WEX.StackTrace}".DEBUG_SHOW_LINE();
+				if (WEX.NativeErrorCode != IgnoreErrorCode) WEX.eThrow();
+				$"ThrowLastWin23ErrorAssert skip: {WEX.Message}\n\t{WEX.StackTrace}".eDebugWriteLine();
 			}
 
 			public static void trycatchWin32(Func<int> operation)
@@ -24011,215 +24783,18 @@ return cItems;
 			{
 				int result = operation.Invoke();
 				if (result == (int)Win32Errors.ERROR_SUCCESS) return;
-				throw new Win32Exception(result, messageTemplate.e_Format(messageArgs));
+				throw new Win32Exception(result, messageTemplate.eFormat(messageArgs));
 			}
 
 			public static void trycatchWin32(Func<bool> operation) { if (!operation.Invoke()) ThrowLastWin23Error(); }
 
-			public static void trycatchWin32(Func<bool> operation, string messageTemplate, params object[] messageArgs) { if (!operation.Invoke()) ThrowLastWin23Error(messageTemplate.e_Format(messageArgs)); }
+			public static void trycatchWin32(Func<bool> operation, string messageTemplate, params object[] messageArgs) { if (!operation.Invoke()) ThrowLastWin23Error(messageTemplate.eFormat(messageArgs)); }
 
 		}
 
 
-		internal static partial class SafeHandles
-		{
-
-			//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-			[DebuggerDisplay("Win32FilebHandle={handle}")]
-			internal partial class Win32FileHandle : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid
-			{
-				public Win32FileHandle(bool OwnsHandle = true) : base(OwnsHandle) { SetHandle(IntPtr.Zero); }
-
-				public Win32FileHandle(IntPtr hFile, bool OwnsHandle = true) : this(OwnsHandle) { SetHandle(hFile); }
-
-				public new void Close() => ReleaseHandle();
-
-				protected override bool ReleaseHandle()
-				{
-					if (IsInvalid) return true;
-
-					bool bResult = WinAPI.core.CloseHandle(handle);
-					if (bResult) SetHandle(IntPtr.Zero);
-					return bResult;
-				}
-			}
-
-			//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-			[DebuggerDisplay("Win32LibHandle={handle}")]
-			internal partial class Win32LibHandle : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid
-			{
-
-				#region LoadLibrary / FreeLibrary
-
-				[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-				internal static extern IntPtr GetModuleHandle(string lpModuleName);
-
-
-				[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-				internal static extern IntPtr LoadLibrary(string lpLibFileName);
-
-				internal enum LoadLibraryExFlags : int
-				{
-					DONT_RESOLVE_DLL_REFERENCES = 0x1,
-					LOAD_LIBRARY_AS_DATAFILE = 0x2,
-					LOAD_IGNORE_CODE_AUTHZ_LEVEL = 0x10,
-					LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE = 0x40,
-					LOAD_LIBRARY_AS_IMAGE_RESOURCE = 0x20,
-					LOAD_WITH_ALTERED_SEARCH_PATH = 0x8
-				}
-
-				[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-				internal static extern IntPtr LoadLibraryEx([MarshalAs(UnmanagedType.LPTStr)] string lpLibFileName, IntPtr hFile, LoadLibraryExFlags dwFlags);
-
-
-				[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-				internal static extern bool FreeLibrary(IntPtr hLibModule);
-				#endregion
-
-
-				[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-				internal static extern IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
-
-				internal IntPtr GetProcAddress(string lpProcName)
-				{
-					return GetProcAddress(DangerousGetHandle(), lpProcName);
-				}
-
-				/// <summary>Только для информации. НИГДЕ НЕ ПРИМЕНЯЕТСЯ!</summary>
-				public readonly string? LibFile;
-
-				#region Constructor/destructor
-				[DebuggerNonUserCode, DebuggerStepThrough]
-				public Win32LibHandle(IntPtr hLib, bool ownsHandle = true, string? sLibFileName = null) : base(ownsHandle)
-				{
-					if (hLib.e_IsNotValid()) throw new ArgumentNullException(nameof(hLib));
-					SetHandle(hLib);
-					LibFile = sLibFileName;
-					if (IsInvalid) Errors.ThrowLastWin23Error();
-				}
-
-				[DebuggerNonUserCode, DebuggerStepThrough]
-				public Win32LibHandle(string LibFileName) : this(LibFileName, LoadLibraryExFlags.LOAD_LIBRARY_AS_DATAFILE) { }
-
-				[DebuggerNonUserCode, DebuggerStepThrough]
-				public Win32LibHandle(string sLibFileName, LoadLibraryExFlags Flags, bool ownsHandle = true) : base(ownsHandle)
-				{
-					SetHandle(LoadLibraryEx(sLibFileName, IntPtr.Zero, Flags));
-					LibFile = sLibFileName;
-					if (IsInvalid) Errors.ThrowLastWin23Error();
-				}
-
-				[MethodImpl(MethodImplOptions.AggressiveInlining)]
-				protected override bool ReleaseHandle()
-				{
-					if (IsInvalid) return true;
-					bool bResult = FreeLibrary(handle);
-					if (bResult) SetHandle(IntPtr.Zero);
-					return bResult;
-				}
-				#endregion
-
-
-
-
-				[MethodImpl(MethodImplOptions.AggressiveInlining)]
-				internal static Win32LibHandle GetRunningLibraryOrLoad(string LibFileName, LoadLibraryExFlags LLF, bool NotUnloadLibOnDispose = false)
-				{
-
-					// Dim ownsHandle As bool  = False
-					// check first to see if the module is already mapped into this process.
-					var hModule = GetModuleHandle(LibFileName);
-					if (hModule.e_IsValid())
-						return new Win32LibHandle(hModule, false, LibFileName);
-
-					// need to load module into this process.
-					return new Win32LibHandle(LibFileName, LLF, NotUnloadLibOnDispose);
-				}
-
-
-				[MethodImpl(MethodImplOptions.AggressiveInlining)]
-				internal static Win32LibHandle GetRunningLibraryOrLoad_AsResource(string LibFileName, bool NotUnloadLibOnDispose = false)
-				{
-					return GetRunningLibraryOrLoad(LibFileName, LoadLibraryExFlags.LOAD_LIBRARY_AS_IMAGE_RESOURCE, NotUnloadLibOnDispose);
-				}
-
-				#region IsProcedureExported - used to determine if an API function is exported.
-				/// <summary>used to determine if an API function is exported.</summary>
-				public static bool IsProcedureExported(string ModuleName, string ProcName, bool NotUnloadLibOnDispose = false)
-				{
-					bool bNeedFreeLib = false;
-					// check first to see if the module is already mapped into this process.
-					var hModule = GetModuleHandle(ModuleName);
-
-					// need to load module into this process.
-					if (!hModule.e_IsValid())
-					{
-						hModule = LoadLibrary(ModuleName);
-						bNeedFreeLib = !NotUnloadLibOnDispose;
-					}
-
-					try
-					{
-						// if the module is mapped, check procedure address to verify it's exported.
-						if (hModule.e_IsValid())
-						{
-							var lpProc = GetProcAddress(hModule, ProcName);
-							return lpProc.e_IsValid();
-						}
-					}
-					finally
-					{
-						// unload library if we loaded it here.
-						if (bNeedFreeLib)
-							FreeLibrary(hModule);
-					}
-
-					return false;
-				}
-				#endregion
-
-
-
-
-				#region Operator
-				// Shared Operator =(ByVal Mem1 As LocalMemory, ByVal LMB2 As LocalMemory) As Boolean
-				// If (Mem1.IsValid AndAlso LMB2.IsValid) Then Return (Mem1.DangerousGetHandle = LMB2.DangerousGetHandle)
-				// Return False
-				// End Operator
-				// Shared Operator <>(ByVal LMB1 As LocalMemory, ByVal LMB2 As LocalMemory) As Boolean
-				// Return (Not (LMB1 = LMB2))
-				// End Operator
-
-				public static implicit operator IntPtr(Win32LibHandle WLH)
-				{
-					return WLH.DangerousGetHandle();
-				}
-
-
-				// Public Shared Widening Operator CType(ByVal LMB1 As LocalMemory) As String
-				// Return LMB1.ToString
-				// End Operator
-				// Public Shared Widening Operator CType(ByVal LMB1 As LocalMemory) As Integer()
-				// Return LMB1.ToIntegers
-				// End Operator
-				// Public Shared Widening Operator CType(ByVal LMB1 As LocalMemory) As System.Drawing.Point()
-				// Return LMB1.ToPoints
-				// End Operator
-
-
-
-
-
-				#endregion
-
-
-
-			}
-		}
-		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-#pragma warning disable CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
+		/// <summary>Win32 core API</summary>
 		internal static partial class core
-#pragma warning restore CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 		{
 
 
@@ -24271,7 +24846,7 @@ return cItems;
 
 
 			internal const uint STANDARD_RIGHTS_REQUIRED = 0xF0000;
-			internal const uint GENERIC_READ = (uint)IO.NativeFileAccess.GenericRead;
+			internal const uint GENERIC_READ = (uint)io.NativeFileAccess.GenericRead;
 
 
 
@@ -24296,16 +24871,16 @@ return cItems;
 			internal delegate void OnStructureCreated<T>(ref T rStrucr) where T : struct;
 			/// <summary>Универсальный метод получения структур WinAPI через буфер в памяти</summary>
 			/// <typeparam name="T">Тип структуры</typeparam>
-			/// <param name="initNewStructure">Действие после создания нового экземпляра структуры (инициализация полей, размеров и т.д.). Структура передаётся по-ссылке</param>
-			/// <param name="mainAPI">Метод главного вызова API, с передачей ему указателя на буфер, который потом будет преобразован в структуру</param>
+			/// <param name="structInitializer">Действие после создания нового экземпляра структуры (инициализация полей, размеров и т.д.). Структура передаётся по-ссылке</param>
+			/// <param name="body">Метод главного вызова API, с передачей ему указателя на буфер, который потом будет преобразован в структуру</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static T UniversalGetWin32Structure<T>(OnStructureCreated<T> initNewStructure, Action<IntPtr> mainAPI) where T : struct
+			internal static T GetWinApiStruct<T>(OnStructureCreated<T> structInitializer, Action<IntPtr> body) where T : struct
 			{
 				var rStruct = new T();
-				initNewStructure?.Invoke(ref rStruct);                // Вызываем метод инициализации новой структуры - заполение полей, указание размеров и т.д., что требует конкретная API
-				using var mem = rStruct.e_StructureToMemoryBlock(); // Создаём буффер в памяти размером со структуру и копируем содержимое структуры в новый буфер																	
-				mainAPI.Invoke(mem.DangerousGetHandle());          // Главный вызов API, с указателем на буфер в памяти																														
-				return mem.DangerousGetHandle().e_ToStructure<T>();           // Преобразование буфера обратно в структуру
+				structInitializer?.Invoke(ref rStruct);                // Вызываем метод инициализации новой структуры - заполение полей, указание размеров и т.д., что требует конкретная API
+				using var mem = rStruct.eStructureToMemoryBlock(); // Создаём буффер в памяти размером со структуру и копируем содержимое структуры в новый буфер																	
+				body.Invoke(mem.DangerousGetHandle());          // Главный вызов API, с указателем на буфер в памяти																														
+				return mem.DangerousGetHandle().eToStructure<T>();           // Преобразование буфера обратно в структуру
 			}
 
 			#endregion
@@ -24319,88 +24894,10 @@ return cItems;
 
 		}
 
-		/// <summary>Multithreading and thread syncronisation helpers</summary>
-		internal static class MTSync
-		{
-
-			#region Event APIs
-
-			//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-			[DebuggerDisplay("Win32Event: hEvent:{handle}")]
-			internal sealed partial class Win32Event : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid
-			{
-
-				#region Constructor\Destructor
-
-				public Win32Event(
-					IntPtr EventSecurityAttributes,
-					bool ManualReset,
-					bool InitialState,
-					string? Name = null) : base(true)
-				{
-					ReleaseHandle();
-					var hEvent = CreateEvent(EventSecurityAttributes, ManualReset, InitialState, Name);
-					SetHandle(hEvent);
-					if (IsInvalid) Errors.ThrowLastWin23Error();
-				}
-
-				public Win32Event(
-					bool ManualReset,
-					bool InitialState,
-					string? Name = null) : this(IntPtr.Zero, ManualReset, InitialState, Name) { }
 
 
-				public Win32Event(IntPtr hEvent, bool OwnHandle) : base(OwnHandle)
-				{
-					SetHandle(hEvent);
-					if (IsInvalid) Errors.ThrowLastWin23Error();
-				}
-
-				protected override bool ReleaseHandle()
-				{
-					if (!IsInvalid)
-					{
-						if (!core.CloseHandle(DangerousGetHandle())) return false;
-						SetHandle(IntPtr.Zero);
-					}
-					return true;
-				}
-				#endregion
-
-				internal WaitResults WaitForSingleObject(int Milliseconds = Timeout.Infinite)
-					=> WinAPI.MTSync.WaitForSingleObject(DangerousGetHandle(), Milliseconds);
-
-			}
-
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern IntPtr CreateEvent(
-				IntPtr lpEventSecurityAttributes,
-				bool bManualReset,
-				bool bInitialState,
-				[MarshalAs(UnmanagedType.LPTStr)] string? lpName);
-
-			internal enum WaitResults : uint
-			{
-				WAIT_FAILED = 0xFFFFFFFF,
-
-				/// <summary>The state of the specified object is signaled.</summary>
-				WAIT_OBJECT_0 = core.STATUS_WAIT_0,
-
-				/// <summary>The specified object is a mutex object that was not released by the thread that owned the mutex object before the owning thread terminated. Ownership of the mutex object is granted to the calling thread, and the mutex is set to nonsignaled.</summary>
-				WAIT_ABANDONED = core.STATUS_ABANDONED_WAIT_0 + 0
-			}
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern WaitResults WaitForSingleObject(IntPtr hHandle, int dwMilliseconds = Timeout.Infinite);
-
-
-			#endregion
-
-		}
-
-
-		internal static class Memory
+		/// <summary>Win32 Memory API</summary>
+		internal static class memory
 		{
 
 
@@ -24413,6 +24910,8 @@ return cItems;
 
 			[DllImport(core.WINDLL_MSVCRT, CallingConvention = CallingConvention.Cdecl)]
 			private static extern int memcmp(in byte a, in byte b, UInt64 p_Count);
+
+
 
 			/// <summary>This faster than memcmp(byte[] a, byte[] b) 
 			/// ONY when A & B is located in stack (stackalloc'ed)!
@@ -24573,16 +25072,16 @@ return cItems;
 				{
 					IsLocal = bIsLocal;
 					SetHandle(hMem);
-					if (IsInvalid) Errors.ThrowLastWin23Error();
+					if (IsInvalid) errors.ThrowLastWin23Error();
 
 					_HandleRef = new HandleRef(this, hMem);
 					_Size = (IsLocal) ? LocalSize(hMem) : GlobalSize(hMem);
 				}
 
 
-				public void ZeroMemory(int? nBytes = null) { if (IsValid) uom.WinAPI.Memory.ZeroMemory(DangerousGetHandle(), (int)(nBytes ?? Lenght)); }
+				public void ZeroMemory(int? nBytes = null) { if (IsValid) uom.WinAPI.memory.ZeroMemory(DangerousGetHandle(), (int)(nBytes ?? Lenght)); }
 
-				internal void FillMemory(byte Data, int? nBytes = null) { if (IsValid) uom.WinAPI.Memory.FillMemory(DangerousGetHandle(), (int)(nBytes ?? Lenght), Data); }
+				internal void FillMemory(byte Data, int? nBytes = null) { if (IsValid) uom.WinAPI.memory.FillMemory(DangerousGetHandle(), (int)(nBytes ?? Lenght), Data); }
 
 				public void ReAlloc(ulong lSize)
 				{
@@ -24594,7 +25093,7 @@ return cItems;
 						int iSize = (int)lSize;
 						var hMem = Marshal.AllocHGlobal(iSize);
 						SetHandle(hMem);
-						if (IsInvalid) Errors.ThrowLastWin23Error();
+						if (IsInvalid) errors.ThrowLastWin23Error();
 						_HandleRef = new HandleRef(this, hMem);
 					}
 					_Size = lSize;
@@ -24669,7 +25168,7 @@ return cItems;
 				}
 
 				[DebuggerNonUserCode, DebuggerStepThrough]
-				public byte[] ToBytes() => DangerousGetHandle().e_PtrToBytes(Lenght);
+				public byte[] ToBytes() => DangerousGetHandle().ePtrToBytes(Lenght);
 
 
 				public short[] ToShorts()
@@ -24747,7 +25246,7 @@ return cItems;
 						for (int i = 1; i <= iStringCount; i++)
 						{
 							//TODO: NEED Refactor!
-							string sValue = Marshal.PtrToStringAuto(ptr, stringSizeBytes)?.e_NString() ?? string.Empty;
+							string sValue = Marshal.PtrToStringAuto(ptr, stringSizeBytes)?.eNString() ?? string.Empty;
 
 							lResult.Add(sValue);
 							ptr += sringSizeChars;
@@ -24756,7 +25255,7 @@ return cItems;
 					return lResult.ToArray();
 				}
 
-				public string DumpHex() => DangerousGetHandle().e_DumpHexToString(Lenght);
+				public string DumpHex() => DangerousGetHandle().eDumpHexToString(Lenght);
 
 				public override string ToString() => DumpHex();
 
@@ -24817,17 +25316,17 @@ return cItems;
 						_OwnerMemory = M;
 						var hMem = (_OwnerMemory.IsLocal) ? LocalLock(_OwnerMemory.DangerousGetHandle()) : GlobalLock(_OwnerMemory.DangerousGetHandle());
 						SetHandle(hMem);
-						if (IsInvalid) Errors.ThrowLastWin23Error();
+						if (IsInvalid) errors.ThrowLastWin23Error();
 					}
 
 					protected override bool ReleaseHandle()
 					{
 						var hMem = DangerousGetHandle();
-						if (hMem.e_IsValid())
+						if (hMem.eIsValid())
 						{
 							hMem = _OwnerMemory!.DangerousGetHandle();
 							var bUnlock = (_OwnerMemory.IsLocal) ? LocalUnlock(hMem) : GlobalUnlock(hMem);
-							if (!bUnlock) Errors.ThrowLastWin23Error();
+							if (!bUnlock) errors.ThrowLastWin23Error();
 							SetHandle(IntPtr.Zero);
 						}
 						return true;
@@ -24840,44 +25339,3831 @@ return cItems;
 		}
 
 
-		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-		internal static partial class ProcessAPI
+
+		/// <summary>Win32 Multithreading and syncronisation API</summary>
+		internal static class sync
 		{
+
+			#region Event APIs
+
+			//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
+			[DebuggerDisplay("Win32Event: hEvent:{handle}")]
+			internal sealed partial class Win32Event : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid
+			{
+
+				#region Constructor\Destructor
+
+				public Win32Event(
+					IntPtr EventSecurityAttributes,
+					bool ManualReset,
+					bool InitialState,
+					string? Name = null) : base(true)
+				{
+					ReleaseHandle();
+					var hEvent = CreateEvent(EventSecurityAttributes, ManualReset, InitialState, Name);
+					SetHandle(hEvent);
+					if (IsInvalid) errors.ThrowLastWin23Error();
+				}
+
+				public Win32Event(
+					bool ManualReset,
+					bool InitialState,
+					string? Name = null) : this(IntPtr.Zero, ManualReset, InitialState, Name) { }
+
+
+				public Win32Event(IntPtr hEvent, bool OwnHandle) : base(OwnHandle)
+				{
+					SetHandle(hEvent);
+					if (IsInvalid) errors.ThrowLastWin23Error();
+				}
+
+				protected override bool ReleaseHandle()
+				{
+					if (!IsInvalid)
+					{
+						if (!core.CloseHandle(DangerousGetHandle())) return false;
+						SetHandle(IntPtr.Zero);
+					}
+					return true;
+				}
+				#endregion
+
+				internal WaitResults WaitForSingleObject(int Milliseconds = Timeout.Infinite)
+					=> WinAPI.sync.WaitForSingleObject(DangerousGetHandle(), Milliseconds);
+
+			}
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern IntPtr CreateEvent(
+				IntPtr lpEventSecurityAttributes,
+				bool bManualReset,
+				bool bInitialState,
+				[MarshalAs(UnmanagedType.LPTStr)] string? lpName);
+
+			internal enum WaitResults : uint
+			{
+				WAIT_FAILED = 0xFFFFFFFF,
+
+				/// <summary>The state of the specified object is signaled.</summary>
+				WAIT_OBJECT_0 = core.STATUS_WAIT_0,
+
+				/// <summary>The specified object is a mutex object that was not released by the thread that owned the mutex object before the owning thread terminated. Ownership of the mutex object is granted to the calling thread, and the mutex is set to nonsignaled.</summary>
+				WAIT_ABANDONED = core.STATUS_ABANDONED_WAIT_0 + 0
+			}
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern WaitResults WaitForSingleObject(IntPtr hHandle, int dwMilliseconds = Timeout.Infinite);
+
+
+			#endregion
+
+		}
+
+
+
+
+		/// <summary>Win32 Process and Threads API</summary>
+		internal static partial class process
+		{
+			/*
+			public const Int32 GENERIC_ALL_ACCESS = 0x10000000;
+			public const UInt32 INFINITE = 0xFFFFFFFF;
+			public const UInt32 WAIT_FAILED = 0xFFFFFFFF;
+			 */
+
+
+			#region Enums
+
+
+
+			[Flags]
+			public enum CreateProcessFlags : uint
+			{
+				DEBUG_PROCESS = 0x00000001,
+				DEBUG_ONLY_THIS_PROCESS = 0x00000002,
+				CREATE_SUSPENDED = 0x00000004,
+				DETACHED_PROCESS = 0x00000008,
+				CREATE_NEW_CONSOLE = 0x00000010,
+				NORMAL_PRIORITY_CLASS = 0x00000020,
+				IDLE_PRIORITY_CLASS = 0x00000040,
+				HIGH_PRIORITY_CLASS = 0x00000080,
+				REALTIME_PRIORITY_CLASS = 0x00000100,
+				CREATE_NEW_PROCESS_GROUP = 0x00000200,
+				CREATE_UNICODE_ENVIRONMENT = 0x00000400,
+				CREATE_SEPARATE_WOW_VDM = 0x00000800,
+				CREATE_SHARED_WOW_VDM = 0x00001000,
+				CREATE_FORCEDOS = 0x00002000,
+				BELOW_NORMAL_PRIORITY_CLASS = 0x00004000,
+				ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000,
+				INHERIT_PARENT_AFFINITY = 0x00010000,
+				INHERIT_CALLER_PRIORITY = 0x00020000,
+				CREATE_PROTECTED_PROCESS = 0x00040000,
+				EXTENDED_STARTUPINFO_PRESENT = 0x00080000,
+				PROCESS_MODE_BACKGROUND_BEGIN = 0x00100000,
+				PROCESS_MODE_BACKGROUND_END = 0x00200000,
+				CREATE_BREAKAWAY_FROM_JOB = 0x01000000,
+				CREATE_PRESERVE_CODE_AUTHZ_LEVEL = 0x02000000,
+				CREATE_DEFAULT_ERROR_MODE = 0x04000000,
+				CREATE_NO_WINDOW = 0x08000000,
+				PROFILE_USER = 0x10000000,
+				PROFILE_KERNEL = 0x20000000,
+				PROFILE_SERVER = 0x40000000,
+				CREATE_IGNORE_SYSTEM_DEFAULT = 0x80000000,
+			}
+
+			[Flags]
+			public enum DuplicateOptions : uint
+			{
+				DUPLICATE_CLOSE_SOURCE = 0x00000001,
+				DUPLICATE_SAME_ACCESS = 0x00000002
+			}
+
+			[Flags]
+			public enum LogonFlags
+			{
+				LOGON_WITH_PROFILE = 0x00000001,
+				LOGON_NETCREDENTIALS_ONLY = 0x00000002
+			}
+
+			[Flags]
+			public enum LogonType
+			{
+				LOGON32_LOGON_INTERACTIVE = 2,
+				LOGON32_LOGON_NETWORK = 3,
+				LOGON32_LOGON_BATCH = 4,
+				LOGON32_LOGON_SERVICE = 5,
+				LOGON32_LOGON_UNLOCK = 7,
+				LOGON32_LOGON_NETWORK_CLEARTEXT = 8,
+				LOGON32_LOGON_NEW_CREDENTIALS = 9
+			}
+
+			[Flags]
+			public enum LogonProvider
+			{
+				LOGON32_PROVIDER_DEFAULT = 0,
+				LOGON32_PROVIDER_WINNT35,
+				LOGON32_PROVIDER_WINNT40,
+				LOGON32_PROVIDER_WINNT50
+			}
+
+
+			public enum SecurityImpersonationLevel
+			{
+				SecurityAnonymous = 0,
+				SecurityIdentification = 1,
+				SecurityImpersonation = 2,
+				SecurityDelegation = 3
+			}
+
+			public enum TokenType
+			{
+				TokenPrimary = 1,
+				TokenImpersonation = 2
+			}
+
+
+			#endregion
+
+
+			public enum TokenInformationClass
+			{
+				/// <summary>
+				/// The buffer receives a TOKEN_USER structure that contains the user account of the token.
+				/// </summary>
+				TokenUser = 1,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_GROUPS structure that contains the group accounts associated with the token.
+				/// </summary>
+				TokenGroups,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_PRIVILEGES structure that contains the privileges of the token.
+				/// </summary>
+				TokenPrivileges,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_OWNER structure that contains the default owner security identifier (SID) for newly created objects.
+				/// </summary>
+				TokenOwner,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_PRIMARY_GROUP structure that contains the default primary group SID for newly created objects.
+				/// </summary>
+				TokenPrimaryGroup,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_DEFAULT_DACL structure that contains the default DACL for newly created objects.
+				/// </summary>
+				TokenDefaultDacl,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_SOURCE structure that contains the source of the token. TOKEN_QUERY_SOURCE access is needed to retrieve this information.
+				/// </summary>
+				TokenSource,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_TYPE value that indicates whether the token is a primary or impersonation token.
+				/// </summary>
+				TokenType,
+
+				/// <summary>
+				/// The buffer receives a SECURITY_IMPERSONATION_LEVEL value that indicates the impersonation level of the token. If the access token is not an impersonation token, the function fails.
+				/// </summary>
+				TokenImpersonationLevel,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_STATISTICS structure that contains various token statistics.
+				/// </summary>
+				TokenStatistics,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_GROUPS structure that contains the list of restricting SIDs in a restricted token.
+				/// </summary>
+				TokenRestrictedSids,
+
+				/// <summary>
+				/// The buffer receives a DWORD value that indicates the Terminal Services session identifier that is associated with the token. 
+				/// </summary>
+				TokenSessionId,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_GROUPS_AND_PRIVILEGES structure that contains the user SID, the group accounts, the restricted SIDs, and the authentication ID associated with the token.
+				/// </summary>
+				TokenGroupsAndPrivileges,
+
+				/// <summary>
+				/// Reserved.
+				/// </summary>
+				TokenSessionReference,
+
+				/// <summary>
+				/// The buffer receives a DWORD value that is nonzero if the token includes the SANDBOX_INERT flag.
+				/// </summary>
+				TokenSandBoxInert,
+
+				/// <summary>
+				/// Reserved.
+				/// </summary>
+				TokenAuditPolicy,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_ORIGIN value. 
+				/// </summary>
+				TokenOrigin,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_ELEVATION_TYPE value that specifies the elevation level of the token.
+				/// </summary>
+				TokenElevationType,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_LINKED_TOKEN structure that contains a handle to another token that is linked to this token.
+				/// </summary>
+				TokenLinkedToken,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_ELEVATION structure that specifies whether the token is elevated.
+				/// </summary>
+				TokenElevation,
+
+				/// <summary>
+				/// The buffer receives a DWORD value that is nonzero if the token has ever been filtered.
+				/// </summary>
+				TokenHasRestrictions,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_ACCESS_INFORMATION structure that specifies security information contained in the token.
+				/// </summary>
+				TokenAccessInformation,
+
+				/// <summary>
+				/// The buffer receives a DWORD value that is nonzero if virtualization is allowed for the token.
+				/// </summary>
+				TokenVirtualizationAllowed,
+
+				/// <summary>
+				/// The buffer receives a DWORD value that is nonzero if virtualization is enabled for the token.
+				/// </summary>
+				TokenVirtualizationEnabled,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_MANDATORY_LABEL structure that specifies the token's integrity level. 
+				/// </summary>
+				TokenIntegrityLevel,
+
+				/// <summary>
+				/// The buffer receives a DWORD value that is nonzero if the token has the UIAccess flag set.
+				/// </summary>
+				TokenUIAccess,
+
+				/// <summary>
+				/// The buffer receives a TOKEN_MANDATORY_POLICY structure that specifies the token's mandatory integrity policy.
+				/// </summary>
+				TokenMandatoryPolicy,
+
+				/// <summary>
+				/// The buffer receives the token's logon security identifier (SID).
+				/// </summary>
+				TokenLogonSid,
+
+				/// <summary>
+				/// The maximum value for this enumeration
+				/// </summary>
+				MaxTokenInfoClass
+			}
+
+
+
+			#region Struct
+
+
+
+			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+			struct STARTUPINFOEX
+			{
+				public STARTUPINFO StartupInfo;
+				public IntPtr lpAttributeList;
+			}
+
+			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+			public struct PROCESS_INFORMATION
+			{
+				public IntPtr hProcess;
+				public IntPtr hThread;
+				public uint dwProcessId;
+				public uint dwThreadId;
+			}
+
+			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+			public struct STARTUPINFO
+			{
+				public uint cb = 0;
+				public IntPtr lpReserved = IntPtr.Zero;
+				public IntPtr lpDesktop = IntPtr.Zero; // MUST be Zero
+				public string? lpTitle = null;
+				public uint dwX = 0;
+				public uint dwY;
+				public uint dwXSize = 0;
+				public uint dwYSize = 0;
+				public uint dwXCountChars = 0;
+				public uint dwYCountChars = 0;
+				public uint dwFillAttribute = 0;
+				public uint dwFlags = 0;
+				public short wShowWindow = 0;
+				public short cbReserved2 = 0;
+				public IntPtr lpReserved2 = IntPtr.Zero;
+				public IntPtr hStdInput = IntPtr.Zero;
+				public IntPtr hStdOutput = IntPtr.Zero;
+				public IntPtr hStdError = IntPtr.Zero;
+
+				public STARTUPINFO()
+				{
+					this.cb = (uint)Marshal.SizeOf(this);
+				}
+			}
+
+			[StructLayout(LayoutKind.Sequential)]
+			public struct SECURITY_ATTRIBUTES
+			{
+				public int nLength = 0;
+				public IntPtr lpSecurityDescriptor = IntPtr.Zero;
+				public bool bInheritHandle = false;
+
+				public SECURITY_ATTRIBUTES()
+				{
+					this.nLength = Marshal.SizeOf(this);
+				}
+			}
+
+
+
+
+			#endregion
+
+
+
+			// http://www.pinvoke.net/default.aspx/userenv.createenvironmentblock
+			[DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+			public static extern bool CreateEnvironmentBlock(out IntPtr lpEnvironment, IntPtr hToken, bool bInherit);
+
+
+			#region Token API
+
+
+			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			public static extern bool DuplicateTokenEx(
+				IntPtr hExistingToken,
+				uint dwDesiredAccess,
+				SECURITY_ATTRIBUTES lpTokenAttributes,
+				SecurityImpersonationLevel impersonationLevel,
+				TokenType tokenType,
+				out IntPtr hNewToken);
+
+
+			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			public static extern bool SetTokenInformation(
+				IntPtr hToken,
+				TokenInformationClass tokenInformationClass,
+				ref uint TokenInformation,
+				uint TokenInformationLength);
+
+
+			#endregion
+
+
+
+			#region Process API
+
+
 
 			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
 			public static extern IntPtr GetCurrentProcess();
 
 
+			/// <summary>
+			/// Creates a new process and its primary thread. The new process runs in the security context of the calling process.
+			/// If the calling process is impersonating another user, the new process uses the token for the calling process, not the impersonation token.To run the new process in the security context of the user represented by the impersonation token, use the CreateProcessAsUser or CreateProcessWithLogon function.
+			/// https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw
+			/// </summary>
+			/// <param name="lpApplicationName"></param>
+			/// <param name="lpCommandLine"></param>
+			/// <param name="lpProcessAttributes"></param>
+			/// <param name="lpThreadAttributes"></param>
+			/// <param name="bInheritHandles"></param>
+			/// <param name="dwCreationFlags"></param>
+			/// <param name="lpEnvironment"></param>
+			/// <param name="lpCurrentDirectory"></param>
+			/// <param name="lpStartupInfo"></param>
+			/// <param name="lpProcessInformation"></param>
+			/// <returns></returns>
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			internal static extern bool CreateProcess(
+				[In, Optional, MarshalAs(UnmanagedType.LPTStr)] string? lpApplicationName,
+				[In, Optional, MarshalAs(UnmanagedType.LPTStr)] string? lpCommandLine,
+				[In, Optional] IntPtr lpProcessAttributes,
+				[In, Optional] IntPtr lpThreadAttributes,
+				[In] bool bInheritHandles,
+				[In] uint dwCreationFlags,
+				[In, Optional] IntPtr lpEnvironment,
+				[In, Optional] string? lpCurrentDirectory,
+				[In] ref STARTUPINFO lpStartupInfo,
+				[Out] out PROCESS_INFORMATION lpProcessInformation);
+
+
+			/// <summary>c# Analog for VB.Interaction.Shell</summary>
+			/// <param name="cmdWithArgs">Sample: "cmd /c powershell"</param>
+			/// <returns></returns>
+			/// <exception cref="Win32Exception"></exception>
+			internal static PROCESS_INFORMATION InteractionShell(string cmdWithArgs, bool waitForExit = false)
+			{
+				STARTUPINFO si = new();
+				PROCESS_INFORMATION pi = new();
+				if (!CreateProcess(
+								   /* app name     */ null,
+								   /* cmd line     */ cmdWithArgs,
+								   /* proc atts    */ IntPtr.Zero,
+								   /* thread atts  */ IntPtr.Zero,
+								   /* inh handles  */ false,
+								   /* create flags */ 0,
+								   /* env ptr      */ IntPtr.Zero,
+								   /* current dir  */ null,
+								   /* startupinfo  */ ref si,
+								   /* processinfo  */ out pi)) throw new Win32Exception();
+
+				// Wait until child process exits.
+				if (waitForExit)
+				{
+					sync.WaitForSingleObject(pi.hProcess);
+					core.CloseHandle(pi.hThread);
+					core.CloseHandle(pi.hProcess);
+				}
+				return pi;
+			}
+
+
+
+			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			internal static extern bool CreateProcessAsUser(
+				IntPtr hToken,
+				String lpApplicationName,
+				[In] StringBuilder lpCommandLine,
+				SECURITY_ATTRIBUTES lpProcessAttributes,
+				SECURITY_ATTRIBUTES lpThreadAttributes,
+				bool bInheritHandles,
+				CreateProcessFlags dwCreationFlags,
+				IntPtr lpEnvironment,
+				String lpCurrentDirectory,
+				[In] STARTUPINFO lpStartupInfo,
+				out PROCESS_INFORMATION lpProcessInformation
+				);
+
+
+			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			internal static extern bool CreateProcessWithLogon
+			(
+				String lpUserName,
+				String lpDomain,
+				String lpPassword,
+				LogonFlags dwLogonFlags,
+				String lpApplicationName,
+				StringBuilder lpCommandLine,
+				CreateProcessFlags dwCreationFlags,
+				IntPtr lpEnvironment,
+				String lpCurrentDirectory,
+				[In] STARTUPINFO lpStartupInfo,
+				out PROCESS_INFORMATION lpProcessInformation
+			);
+
+
+			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			internal static extern bool CreateProcessWithToken
+			(
+				IntPtr hToken,
+				LogonFlags dwLogonFlags,
+				String lpApplicationName,
+				String lpCommandLine,
+				CreateProcessFlags dwCreationFlags,
+				IntPtr lpEnvironment,
+				String lpCurrentDirectory,
+				[In] STARTUPINFO lpStartupInfo,
+				out PROCESS_INFORMATION lpProcessInformation
+			);
+
+
+
+			#endregion
+
+
+			#region  Threads API
+
 			/// <summary>Retrieves the thread identifier of the calling thread.
 			/// Until the thread terminates, the thread identifier uniquely identifies the thread throughout the system.</summary>
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
 			public static extern int GetCurrentThreadId();
 
 
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			internal static extern uint ResumeThread(IntPtr hThread);
+
+
+
+			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			public static extern IntPtr GetThreadDesktop(int dwThreadId);
+
+
+			#endregion
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			internal static extern IntPtr GetEnvironmentStrings();
+
+
+			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			public static extern IntPtr GetProcessWindowStation();
+
+
+
+			#region ProcThreadAttribute API
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			internal static extern bool UpdateProcThreadAttribute(IntPtr lpAttributeList, uint dwFlags, IntPtr Attribute, IntPtr lpValue, IntPtr cbSize, IntPtr lpPreviousValue, IntPtr lpReturnSize);
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			internal static extern bool InitializeProcThreadAttributeList(IntPtr lpAttributeList, int dwAttributeCount, int dwFlags, ref IntPtr lpSize);
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			internal static extern bool InitializeProcThreadAttributeList(out IntPtr lpAttributeList, int dwAttributeCount, int dwFlags, ref IntPtr lpSize);
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			internal static extern bool DeleteProcThreadAttributeList(IntPtr lpAttributeList);
+
+
+			#endregion
+
+
+
+
+			#region ADVAPI32 User, Logon and Impersonation API
+
+
+			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			internal static extern bool RevertToSelf();
+
+
+
+			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[return: MarshalAs(UnmanagedType.Bool)]
+			public static extern bool LogonUser(
+				String lpszUserName,
+				String lpszDomain,
+				String lpszPassword,
+				LogonType dwLogonType,
+				LogonProvider dwLogonProvider,
+				out IntPtr phToken);
+
+
+
+
+			internal enum ProfileInfoFlags : Int32
+			{
+				PI_NOUI = 0x00000001,
+
+				/// <summary>Not supported</summary>
+				PI_APPLYPOLICY = 0x00000002
+			}
+
+
+			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+			internal class ProfileInfo
+			{
+				public Int32 dwSize = 0;
+
+				public ProfileInfoFlags dwFlags = ProfileInfoFlags.PI_NOUI;
+
+				[MarshalAs(UnmanagedType.LPTStr)]
+				public String lpUserName = string.Empty;
+
+				[MarshalAs(UnmanagedType.LPTStr)]
+				public String lpProfilePath = string.Empty;
+
+				[MarshalAs(UnmanagedType.LPTStr)]
+				public String lpDefaultPath = string.Empty;
+
+				[MarshalAs(UnmanagedType.LPTStr)]
+				public String lpServerName = string.Empty;
+
+				[MarshalAs(UnmanagedType.LPTStr)]
+				public String lpPolicyPath = string.Empty;
+
+				public IntPtr hProfile = IntPtr.Zero;
+
+				public ProfileInfo()
+				{
+					this.dwSize = Marshal.SizeOf(this);
+				}
+			}
+
+			[DllImport(core.WINDLL_USERENV, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool LoadUserProfile(
+				[In] IntPtr hToken,
+				[In, Out] ref ProfileInfo lpProfileInfo);
+
+
+			[DllImport(core.WINDLL_USERENV, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool UnloadUserProfile(IntPtr hToken, IntPtr hProfile);
+
+
+
+			internal sealed class SafeUserTokenHandle : SafeHandleZeroOrMinusOneIsInvalid
+			{
+				public SafeUserTokenHandle() : base(true)
+				{
+				}
+
+				public SafeUserTokenHandle(IntPtr existingHandle) : base(true)
+				{
+					base.SetHandle(existingHandle);
+				}
+
+				public static explicit operator IntPtr(SafeUserTokenHandle userTokenHandle)
+				{
+					return userTokenHandle.DangerousGetHandle();
+				}
+
+				protected override bool ReleaseHandle()
+				{
+					return uom.WinAPI.core.CloseHandle(this.handle);
+				}
+			}
+
+
+
+			#endregion
+
+
+
+
+			/*
+
+			public static bool CreateProcess(int parentProcessId)
+			{
+				const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+				const int PROC_THREAD_ATTRIBUTE_PARENT_PROCESS = 0x00020000;
+
+				PROCESS_INFORMATION pInfo = new();
+				STARTUPINFOEX sInfoEx = new();
+
+				sInfoEx.StartupInfo.cb = Marshal.SizeOf(sInfoEx);
+				IntPtr lpValue = IntPtr.Zero;
+
+				try
+				{
+					if (parentProcessId > 0)
+					{
+						var lpSize = IntPtr.Zero;
+						var success = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref lpSize);
+						if (success || lpSize == IntPtr.Zero)
+						{
+							return false;
+						}
+
+						sInfoEx.lpAttributeList = Marshal.AllocHGlobal(lpSize);
+						success = InitializeProcThreadAttributeList(sInfoEx.lpAttributeList, 1, 0, ref lpSize);
+						if (!success)
+						{
+							return false;
+						}
+
+						var parentHandle = Process.GetProcessById(parentProcessId).Handle;
+						// This value should persist until the attribute list is destroyed using the DeleteProcThreadAttributeList function
+						lpValue = Marshal.AllocHGlobal(IntPtr.Size);
+						Marshal.WriteIntPtr(lpValue, parentHandle);
+
+						success = UpdateProcThreadAttribute(
+							sInfoEx.lpAttributeList,
+							0,
+							(IntPtr)PROC_THREAD_ATTRIBUTE_PARENT_PROCESS,
+							lpValue,
+							(IntPtr)IntPtr.Size,
+							IntPtr.Zero,
+							IntPtr.Zero);
+
+						if (!success) return false;
+					}
+
+					var pSec = new SECURITY_ATTRIBUTES();
+					var tSec = new SECURITY_ATTRIBUTES();
+					pSec.nLength = Marshal.SizeOf(pSec);
+					tSec.nLength = Marshal.SizeOf(tSec);
+					var lpApplicationName = Path.Combine(Environment.SystemDirectory, "notepad.exe");
+					return CreateProcess(lpApplicationName, null, ref pSec, ref tSec, false, EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, null, ref sInfoEx, out pInfo);
+
+				}
+				finally
+				{
+					// Free the attribute list
+					if (sInfoEx.lpAttributeList != IntPtr.Zero)
+					{
+						DeleteProcThreadAttributeList(sInfoEx.lpAttributeList);
+						Marshal.FreeHGlobal(sInfoEx.lpAttributeList);
+					}
+					Marshal.FreeHGlobal(lpValue);
+
+					// Close process and thread handles
+					if (pInfo.hProcess != IntPtr.Zero) uom.WinAPI.core.CloseHandle(pInfo.hProcess);
+					if (pInfo.hThread != IntPtr.Zero) uom.WinAPI.core.CloseHandle(pInfo.hThread);
+				}
+			}
+
+			 */
+
 		}
 
 
 
-		[StructLayout(LayoutKind.Sequential)]
-		internal struct RECT
+		internal static class hooks
 		{
-			public int Left;
-			public int Top;
-			public int Right;
-			public int Bottom;
 
 
-			public int Width => Right - Left;
-			public int Height => Bottom - Top;
+			internal enum CbtHookAction
+			{
+				HCBT_MOVESIZE,
+				HCBT_MINMAX,
+				HCBT_QS,
+				HCBT_CREATEWND,
+				HCBT_DESTROYWND,
+				HCBT_ACTIVATE,
+				HCBT_CLICKSKIPPED,
+				HCBT_KEYSKIPPED,
+				HCBT_SYSCOMMAND,
+				HCBT_SETFOCUS
+			}
 
-			public Point Location => new(Left, Top);
+			internal enum HookType
+			{
+				WH_JOURNALRECORD,
+				WH_JOURNALPLAYBACK,
+				WH_KEYBOARD,
+				WH_GETMESSAGE,
+				WH_CALLWNDPROC,
+				WH_CBT,
+				WH_SYSMSGFILTER,
+				WH_MOUSE,
+				WH_HARDWARE,
+				WH_DEBUG,
+				WH_SHELL,
+				WH_FOREGROUNDIDLE,
+				WH_CALLWNDPROCRET,
+				WH_KEYBOARD_LL,
+				WH_MOUSE_LL
+			}
 
-			public Rectangle ToRectangle() => new(Left, Top, Width, Height);
+			internal class CbtEventArgs(IntPtr hwnd, string title, string className, bool isDialog) : EventArgs()
+			{
+				public readonly IntPtr Handle = hwnd;
+				public readonly string Title = title;
+				public readonly string ClassName = className;
+				public readonly bool IsDialogWindow = isDialog;
+			}
+
+			internal class HookEventArgs(int code, IntPtr wp, IntPtr lp) : EventArgs()
+			{
+				public readonly int HookCode = code;
+				public readonly IntPtr wParam = wp;
+				public readonly IntPtr lParam = lp;
+			}
+
+			internal class LocalWindowsHook : AutoDisposableUniversal
+			{
+				public delegate int HookProc(int code, IntPtr wParam, IntPtr lParam);
+
+				public delegate void HookEventHandler(object sender, HookEventArgs e);
+
+				protected IntPtr _hhook = IntPtr.Zero;
+				protected HookProc _filterFunc;
+				protected HookType _hookType;
+
+				public event HookEventHandler HookInvoked = delegate { };
+
+				protected void OnHookInvoked(HookEventArgs e) => HookInvoked?.Invoke(this, e);
+
+				private LocalWindowsHook(HookProc? func) : base()
+				{
+					_filterFunc = func ?? CoreHookProc;
+					this.RegisterDisposeCallback(() => Uninstall(), false);
+				}
+
+				public LocalWindowsHook(HookType hook) : this(null) { _hookType = hook; }
+
+				public LocalWindowsHook(HookType hook, HookProc func) : this(func) { _hookType = hook; }
+
+
+				protected int CoreHookProc(int code, IntPtr wParam, IntPtr lParam)
+				{
+					if (code < 0) return CallNextHookEx(_hhook, code, wParam, lParam);
+					HookEventArgs hookEventArgs = new(code, wParam, lParam);
+					OnHookInvoked(hookEventArgs);
+					return CallNextHookEx(_hhook, code, wParam, lParam);
+				}
+
+				public void Install()
+				{
+					//Don't Work: m_hhook = SetWindowsHookEx(m_hookType, m_filterFunc, IntPtr.Zero, System.Threading.Thread.CurrentThread.ManagedThreadId);
+					_hhook = SetWindowsHookEx(_hookType, _filterFunc, IntPtr.Zero, uom.WinAPI.process.GetCurrentThreadId());
+				}
+
+				public void Uninstall()
+				{
+					if (_hhook.eIsValid()) UnhookWindowsHookEx(_hhook);
+					_hhook = IntPtr.Zero;
+				}
+
+
+				[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+				internal static extern IntPtr SetWindowsHookEx(HookType code, HookProc func, IntPtr hInstance, int threadID);
+
+				[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+				internal static extern int UnhookWindowsHookEx(IntPtr hhook);
+
+				[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+				internal static extern int CallNextHookEx(IntPtr hhook, int code, IntPtr wParam, IntPtr lParam);
+			}
+
+			internal class LocalCbtHook : LocalWindowsHook
+			{
+				//public delegate void CbtEventHandler(object sender, CbtEventArgs e);
+
+				protected IntPtr _hwnd = IntPtr.Zero;
+				protected string _title = "";
+				protected string _class = "";
+				protected bool _isDialog = false;
+				public event EventHandler<CbtEventArgs> WindowCreated = delegate { };
+				public event EventHandler<CbtEventArgs> WindowDestroyed = delegate { };
+				public event EventHandler<CbtEventArgs> WindowActivated = delegate { };
+
+				public LocalCbtHook() : base(HookType.WH_CBT) { base.HookInvoked += CbtHookInvoked; }
+
+				public LocalCbtHook(HookProc func) : base(HookType.WH_CBT, func) { base.HookInvoked += CbtHookInvoked; }
+
+				private void CbtHookInvoked(object sender, HookEventArgs e)
+				{
+					CbtHookAction hookCode = (CbtHookAction)e.HookCode;
+					IntPtr wParam = e.wParam;
+					IntPtr lParam = e.lParam;
+					switch (hookCode)
+					{
+						case CbtHookAction.HCBT_CREATEWND:
+							HandleCreateWndEvent(wParam, lParam);
+							break;
+						case CbtHookAction.HCBT_DESTROYWND:
+							HandleDestroyWndEvent(wParam, lParam);
+							break;
+						case CbtHookAction.HCBT_ACTIVATE:
+							HandleActivateEvent(wParam, lParam);
+							break;
+					}
+				}
+
+				private void HandleCreateWndEvent(IntPtr wParam, IntPtr lParam)
+				{
+					UpdateWindowData(wParam);
+					OnWindowCreated();
+				}
+
+				private void HandleDestroyWndEvent(IntPtr wParam, IntPtr lParam)
+				{
+					UpdateWindowData(wParam);
+					OnWindowDestroyed();
+				}
+
+				private void HandleActivateEvent(IntPtr wParam, IntPtr lParam)
+				{
+					UpdateWindowData(wParam);
+					OnWindowActivated();
+				}
+
+				private void UpdateWindowData(IntPtr wParam)
+				{
+					_hwnd = wParam;
+					_class = uom.WinAPI.windows.GetClassName(_hwnd);
+					_title = uom.WinAPI.windows.GetWindowText(_hwnd);
+					_isDialog = _class == "#32770";
+				}
+
+				protected virtual void OnWindowCreated() => WindowCreated?.Invoke(this, PrepareEventData());
+
+				protected virtual void OnWindowDestroyed() => WindowDestroyed?.Invoke(this, PrepareEventData());
+
+				protected virtual void OnWindowActivated() => WindowActivated?.Invoke(this, PrepareEventData());
+
+				private CbtEventArgs PrepareEventData() => new(_hwnd, _title, _class, _isDialog);
+
+			}
+
+
 		}
 
 
-		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-		internal static partial class Windows
+
+		/// <summary>Win32 I/O API</summary>
+		internal static partial class io
+		{
+
+			internal const int MAX_PATH = 260;
+
+			/// <summary>This prefix indicates to NTFS that the path is to be treated as a non-interpretedpath in the virtual file system.</summary>
+			internal const string UNC_PATH_PREFIX = @"\\?\";
+			// Public Const LONG_PATH_PREFIX As String = "\??\"
+
+
+			/// <summary>Use System.Runtime.InteropServices.ComTypes.FILETIME instead</summary>
+			[Obsolete("Use System.Runtime.InteropServices.ComTypes.FILETIME instead")]
+			[StructLayout(LayoutKind.Sequential)]
+			internal partial struct FILETIME
+			{
+				public int dwLowDateTime;
+				public int dwHighDateTime;
+			}
+
+			[StructLayout(LayoutKind.Sequential)]
+			internal partial struct SYSTEMTIME
+			{
+				public short wYear;
+				public short wMonth;
+				public short wDayOfWeek;
+				public short wDay;
+				public short wHour;
+				public short wMinute;
+				public short wSecond;
+				public short wMilliseconds;
+			}
+
+
+			/// <summary>Переполнится, когда они код отработает 585 миллиардов лет.
+			/// При гибернации не сбрасывается!</summary>
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			internal static extern ulong GetTickCount64();
+
+
+			public static DateTime SystemTimeToDate(ref SYSTEMTIME stx, bool Localize = false)
+			{
+				var st = default(SYSTEMTIME);
+				var ft = default(System.Runtime.InteropServices.ComTypes.FILETIME);
+				// Windows NT/2000 *ONLY* Shortcut:
+				// Using NULL for lpTimeZoneInformation converts SYSTEMTIME structure from UTC to currently active time zone with call
+				// to SystemTimeToTzSpecificLocalTime
+				// If Localize Then
+				// Call SystemTimeToTzSpecificLocalTime(ByVal 0&, stx, st)
+
+				if (Localize)
+				{
+					// Convert to FILETIME, localize, then convert back to SYSTEMTIME.
+					_ = SystemTimeToFileTime(ref stx, ref ft);
+					_ = FileTimeToLocalFileTime(ref ft, ref ft);
+					_ = FileTimeToSystemTime(ref ft, ref st);
+				}
+				else
+				{
+					// Structures can't be passed byval; make copy.  :-(
+					st = stx;
+				}
+				// Convert to VB-style date (double).
+				return new DateTime(st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+			}
+
+
+
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			public static extern int FileTimeToLocalFileTime(
+				[In] ref System.Runtime.InteropServices.ComTypes.FILETIME lpFileTime,
+				[In, Out] ref System.Runtime.InteropServices.ComTypes.FILETIME lpLocalFileTime);
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			public static extern int FileTimeToSystemTime(
+				[In] ref System.Runtime.InteropServices.ComTypes.FILETIME lpFileTime,
+				[In, Out] ref SYSTEMTIME lpSystemTime);
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			public static extern int SystemTimeToFileTime(
+				[In] ref SYSTEMTIME lpSystemTime,
+				[In, Out] ref System.Runtime.InteropServices.ComTypes.FILETIME lpFileTime);
+
+			#region Files
+
+			#region GetFileType
+			[Flags()]
+			public enum FileTypes : int
+			{
+				/// <summary>The specified file is a character file, typically an LPT device or a console.</summary>
+				FILE_TYPE_CHAR = 0x2,
+				/// <summary>The specified file is a disk file.</summary>
+				FILE_TYPE_DISK = 0x1,
+				/// <summary>The specified file is a socket, a named pipe, or an anonymous pipe.</summary>
+				FILE_TYPE_PIPE = 0x3,
+				/// <summary>Unused.</summary>
+				FILE_TYPE_REMOTE = 0x8000,
+				/// <summary>Either the type of the specified file is unknown, or the function failed.</summary>
+				FILE_TYPE_UNKNOWN = 0x0
+			}
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			public static extern FileTypes GetFileType(Microsoft.Win32.SafeHandles.SafeFileHandle handle);
+
+			#endregion
+
+			#region CreateFile
+			[Flags()]
+			public enum NativeFileFlags : uint
+			{
+				OPEN_EXISTING = 3,
+				FILE_SHARE_READ = 0x1,
+				FILE_SHARE_WRITE = 0x2,
+				FILE_ATTRIBUTE_NORMAL = 0x80,
+				OpenNoRecall = 0x100000,
+				PosixSemantics = 0x1000000,
+				DeleteOnClose = 0x4000000,
+				SequentialScan = 0x8000000,
+				RandomAccess = 0x10000000,
+				NoBuffering = 0x20000000,
+				Overlapped = 0x40000000,
+				WriteThrough = 0x80000000,
+				FILE_FLAG_BACKUP_SEMANTICS = 0x2000000,
+				FILE_FLAG_OPEN_REPARSE_POINT = 0x200000
+			}
+
+			[Flags()]
+			public enum NativeFileAccess : uint
+			{
+				GenericRead = 0x80000000,
+				GenericWrite = 0x40000000,
+				GenericExecute = 0x20000000,
+				GenericAll = 0x10000000
+			}
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			public static extern IntPtr CreateFile([In, MarshalAs(UnmanagedType.LPTStr)] string name, [In, MarshalAs(UnmanagedType.I4)] NativeFileAccess access, [In, MarshalAs(UnmanagedType.I4)] FileShare share, [In, MarshalAs(UnmanagedType.SysInt)] IntPtr security, [In, MarshalAs(UnmanagedType.I4)] FileMode mode, [In, MarshalAs(UnmanagedType.I4)] NativeFileFlags flags, [In, MarshalAs(UnmanagedType.SysInt)] IntPtr template);
+
+
+			[DllImport(core.WINDLL_KERNEL, EntryPoint = "CreateFile", SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileAsSafeFileHandle([In, MarshalAs(UnmanagedType.LPTStr)] string name, [In, MarshalAs(UnmanagedType.I4)] NativeFileAccess access, [In, MarshalAs(UnmanagedType.I4)] FileShare share, [In, MarshalAs(UnmanagedType.SysInt)] IntPtr security, [In, MarshalAs(UnmanagedType.I4)] FileMode mode, [In, MarshalAs(UnmanagedType.I4)] NativeFileFlags flags, [In, MarshalAs(UnmanagedType.SysInt)] IntPtr template);
+			#endregion
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool DeleteFile(string name);
+
+
+			[Flags()]
+			public enum EFileAttributes : uint
+			{
+				FILE_ATTRIBUTE_READONLY = 0x1,    // A file that is read-only. Applications can read the file, but cannot write to it or delete it. This attribute is not honored on directories. For more information, see Online  "You cannot view or change the Read-only or the System attributes of folders in Windows Server 2003, in Windows XP, or in Windows Vista".
+				FILE_ATTRIBUTE_HIDDEN = 0x2,    // The file or directory is hidden. It is not included in an ordinary directory listing.
+				FILE_ATTRIBUTE_SYSTEM = 0x4,    // A file or directory that the operating system uses a part of, or uses exclusively.
+				FILE_ATTRIBUTE_DIRECTORY = 0x10,    // The handle that identifies a directory.
+				FILE_ATTRIBUTE_ARCHIVE = 0x20,    // A file or directory that is an archive file or directory. Applications typically use this attribute to mark files for backup or removal.
+				FILE_ATTRIBUTE_DEVICE = 0x40,    // This value is reserved for system use.
+				FILE_ATTRIBUTE_NORMAL = 0x80,    // A file that does not have other attributes set. This attribute is valid only when used alone.
+				FILE_ATTRIBUTE_TEMPORARY = 0x100,    // A file that is being used for temporary storage. File systems avoid writing data back to mass storage if sufficient cache memory is available, because typically, an application deletes a temporary file after the handle is closed. In that scenario, the system can entirely avoid writing the data. Otherwise, the data is written after the handle is closed.
+				FILE_ATTRIBUTE_SPARSE_FILE = 0x200,    // A file that is a sparse file.
+				FILE_ATTRIBUTE_REPARSE_POINT = 0x400,    // A file or directory that has an associated reparse point, or a file that is a symbolic link.
+				FILE_ATTRIBUTE_COMPRESSED = 0x800,    // A file or directory that is compressed. For a file, all of the data in the file is compressed. For a directory, compression is the default for newly created files and subdirectories.
+				FILE_ATTRIBUTE_ENCRYPTED = 0x4000,    // Afile or directory that is encrypted. For a file, all data streams in the file are encrypted. For a directory, encryption is the default for newly created files and subdirectories.
+				FILE_ATTRIBUTE_NOT_CONTENT_INDEXED = 0x2000,    // The file or directory is not to be indexed by the content indexing service.
+				FILE_ATTRIBUTE_OFFLINE = 0x1000,    // The data of a file is not available immediately. This attribute indicates that the file data is physically moved to offline storage. This attribute is used by Remote Storage, which is the hierarchical storage management software. Applications should not arbitrarily change this attribute.
+				FILE_ATTRIBUTE_VIRTUAL = 0x10000,  // This value is reserved for system use.
+
+				Write_Through = 0x80000000,
+				Overlapped = 0x40000000,
+				NoBuffering = 0x20000000,
+				RandomAccess = 0x10000000,
+				SequentialScan = 0x8000000,
+				DeleteOnClose = 0x4000000,
+				BackupSemantics = 0x2000000,
+				PosixSemantics = 0x1000000,
+				OpenReparsePoint = 0x200000,
+				OpenNoRecall = 0x100000,
+				FirstPipeInstance = 0x80000
+			}
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			internal static extern EFileAttributes GetFileAttributes(string fileName);
+
+
+			#region GetFileInformationByHandle
+			[StructLayout(LayoutKind.Sequential)]
+			internal partial struct BY_HANDLE_FILE_INFORMATION
+			{
+				public int dwFileAttributes;
+				public System.Runtime.InteropServices.ComTypes.FILETIME ftCreationTime;
+				public System.Runtime.InteropServices.ComTypes.FILETIME ftLastAccessTime;
+				public System.Runtime.InteropServices.ComTypes.FILETIME ftLastWriteTime;
+				public int dwVolumeSerialNumber;
+				public int nFileSizeHigh;
+				public int nFileSizeLow;
+				public int nNumberOfLinks;
+				public int nFileIndexHigh;
+				public int nFileIndexLow;
+			}
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			private static extern bool GetFileInformationByHandle(
+				IntPtr hFile,
+			   [In, Out] ref BY_HANDLE_FILE_INFORMATION lpFileInformation);
+
+
+			internal static BY_HANDLE_FILE_INFORMATION GetFileInformationByHandle(IntPtr hFile)
+			{
+				BY_HANDLE_FILE_INFORMATION BHFI = new();
+
+				GetFileInformationByHandle(hFile, ref BHFI)
+					.eThrowLastWin32Exception_AssertFalse();
+
+
+				//if (!bResult) "GetFileInformationByHandle".eThrowLastWin32Exception();
+				return BHFI;
+			}
+
+
+			#endregion
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			internal static extern int GetFinalPathNameByHandle(
+				[In] IntPtr hFile,
+				[In, Out, MarshalAs(UnmanagedType.LPTStr)] StringBuilder lpszFilePath,
+				[In, Out] ref Int32 cchFilePath,
+				[In] Int32 dwFlags);
+
+
+			// < DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)> 
+			// < return: MarshalAs(UnmanagedType. bool  )> 
+			// private static extern  bool   GetFileSizeEx(SafeFileHandle handle, [Out ] LargeInteger size) 
+
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool ReadFile(IntPtr hFile, byte[] lpBuffer, int nNumberOfBytesToRead, ref int lpNumberOfBytesRead, IntPtr lpOverlapped);
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool ReadFile(IntPtr hFile, IntPtr lpBuffer, int nNumberOfBytesToRead, ref int lpNumberOfBytesRead, ref NativeOverlapped lpOverlapped);
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool WriteFile(IntPtr hFile, byte[] lpBuffer, int nNumberOfBytesToWrite, ref int lpNumberOfBytesWritten, IntPtr lpOverlapped);
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool WriteFile(IntPtr hFile, IntPtr lpBuffer, int nNumberOfBytesToWrite, ref int lpNumberOfBytesWritten, ref NativeOverlapped lpOverlapped);
+
+
+			/// <summary>Flushes the buffers of a specified file and causes all buffered data to be written to a file.</summary>
+			/// <param name="hFile">A handle to the open file.
+			/// The file handle must have the GENERIC_WRITE access right. For more information, see File Security And Access Rights.
+			/// If hFile Is a handle To a communications device, the Function only flushes the transmit buffer.
+			/// If hFile Is a handle To the server End Of a named pipe, the Function does Not Return until the client has read all buffered data from the pipe.</param>
+			/// <returns></returns>
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool FlushFileBuffers(IntPtr hFile);
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool GetOverlappedResult([In] IntPtr hFile,
+				[In] NativeOverlapped lpOverlapped,
+				[In, Out] ref int lpNumberOfBytesTransferred,
+				[In] bool bWait);
+
+			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool CancelIo([In] IntPtr hFile);
+
+			#endregion
+
+
+
+			//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
+			internal static class NTFS
+			{
+
+
+				#region NTFSStreamInfo
+				/// <summary>Represents the details of an alternative data stream.</summary>
+				[DebuggerDisplay("{FullPath}")]
+				internal partial class NTFSStreamInfo
+				{
+					// Implements  IEquatable(of  <NTFSStreamInfo>
+
+					public const char STREAM_SEPARATOR = ':';
+					internal const int DEFAULT_BUFFER_SIZE = 1024 * 1024;
+					public const int PATH_LIMIT = MAX_PATH - 4; // 256I
+					public const int DefaultBufferSize = 0x1000;
+					public const string FULL_STREAM_PATH_SUFFIX = @":$DATA";
+					#region Enum
+
+					/// <summary>Represents the type of data in a stream.</summary>
+					public enum FileStreamType : int
+					{
+						/// <summary>Unknown stream type.</summary>
+						Unknown = 0,
+						/// <summary>Standard data.</summary>
+						BACKUP_DATA = 0x1,
+						/// <summary>Extended attribute data.</summary>
+						BACKUP_EA_DATA = 0x2,
+						/// <summary>Security data.</summary>
+						BACKUP_SECURITY_DATA = 0x3,
+						/// <summary>Alternate data stream.</summary>
+						BACKUP_ALTERNATE_DATA = 0x4,
+						/// <summary>Hard link information.</summary>
+						BACKUP_LINK = 0x5,
+						/// <summary>Property data.</summary>
+						BACKUP_PROPERTY_DATA = 0x6,
+						/// <summary>Object identifiers.</summary>
+						BACKUP_OBJECT_ID = 0x7,
+						/// <summary>Reparse points.</summary>
+						BACKUP_REPARSE_DATA = 0x8,
+						/// <summary>Sparse file.</summary>
+						BACKUP_SPARSE_BLOCK = 0x9,
+						/// <summary>Transactional NTFS (TxF) data stream
+						/// Windows Server 2003 and Windows XP/2000:  This value is not supported.</summary>
+						BACKUP_TXFS_DATA = 0xA
+					}
+
+					/// <summary>Represents the attributes of a file stream.</summary>
+					[Flags()]
+					public enum FileStreamAttributes : int
+					{
+						/// <summary>No attributes.</summary>
+						None = 0,
+						/// <summary>Attribute set if the stream contains data that is modified when read. Allows the backup application to know that verification of data will fail.</summary>
+						STREAM_MODIFIED_WHEN_READ = 1,
+						/// <summary>Stream contains security data (general attributes). Allows the stream to be ignored on cross-operations restore.</summary>
+						STREAM_CONTAINS_SECURITY = 2,
+						/// <summary>Set if the stream contains properties.</summary>
+						ContainsProperties = 4,
+						/// <summary>Set if the stream is sparse.</summary>
+						Sparse = 8
+					}
+					#endregion
+
+					/// <summary>http:'msdn.microsoft.com/en-us/library/aa365247(v=VS.85).aspx</summary></summary>					
+					public static readonly char[] InvalidStreamNameChars = Path.GetInvalidFileNameChars().ToArray();
+
+
+
+					#region Properties
+					/// <summary>Returns the full path of this stream.</summary>
+					public string FullPath { get; private set; }
+					/// <summary>Returns the full path of the file which contains the stream.</summary>
+					public string FilePath { get; private set; }
+					/// <summary>Returns the name of the stream.</summary>
+					public string Name { get; private set; }
+					/// <summary>Returns the size of the stream, in bytes.</summary>
+					public long Size { get; private set; }
+
+					/// <summary>Returns the type of data.</summary>
+					[EditorBrowsable(EditorBrowsableState.Advanced)]
+					public FileStreamType StreamType { get; private set; }
+
+					/// <summary>Returns attributes of the data stream.</summary>
+					[EditorBrowsable(EditorBrowsableState.Advanced)]
+					public FileStreamAttributes Attributes { get; private set; }
+
+					#endregion
+
+
+					#region Constructor
+					private NTFSStreamInfo(string filePath, WIN32_STREAM_ID info, string sStreamName)
+					{
+						FilePath = filePath;
+						StreamType = info.StreamId;
+						Attributes = info.StreamAttributes;
+						Size = info.Size;
+						Name = sStreamName;
+						FullPath = BuildStreamPath(FilePath, Name);
+					}
+
+					/// <summary>
+					/// Initializes a new instance of the <see cref="NTFSStreamInfo"/> class.
+					/// </summary>
+					/// <param name="filePath">
+					/// The full path of the file.
+					/// This argument must not be <see langword=" nothing "/>.
+					/// </param>
+					/// <param name="streamName">
+					/// The name of the stream
+					/// This argument must not be <see langword=" nothing "/>.
+					/// </param>
+					/// <param name="fullPath">
+					/// The full path of the stream.
+					/// If this argument is <see langword=" nothing "/>, it will be generated from the 
+					/// <paramref name="filePath"/> and <paramref name="streamName"/> arguments.
+					/// </param>
+					/// <param name="exists">
+					/// <see langword="true"/> if the stream exists 
+					/// otherwise, <see langword="false"/>.
+					/// </param>
+					private NTFSStreamInfo(string filePath, string streamName, string fullPath)
+					{
+						if (string.IsNullOrEmpty(fullPath)) fullPath = BuildStreamPath(filePath, streamName);
+						StreamType = FileStreamType.BACKUP_ALTERNATE_DATA;
+						FilePath = filePath;
+						Name = streamName;
+						FullPath = fullPath;
+					}
+					#endregion
+
+
+
+					#region Methods
+
+					#region -IEquatable
+
+					// ''<summary>
+					// ''Returns a <see cref="String"/> that represents the current instance.
+					// ''</summary>
+					// ''<returns>
+					// ''A <see cref="String"/> that represents the current instance.
+					// ''</returns>
+					// public override string ToString()
+					// {
+					// return  me.FullPath 
+					// }
+
+					// ''<summary>
+					// ''Serves as a hash function for a particular type.
+					// ''</summary>
+					// ''<returns>
+					// ''A hash code for the current <see cref="Object"/>.
+					// ''</returns>
+					// public override integer GetHashCode()
+					// {
+					// var comparer = StringComparer.OrdinalIgnoreCase 
+					// return comparer.GetHashCode(_filePath ?? string.Empty)
+					// ^ comparer.GetHashCode(_streamName ?? string.Empty) 
+					// }
+
+					// ''<summary>
+					// ''Indicates whether the current object is equal to another object of the same type.
+					// ''</summary>
+					// ''<param name="obj">
+					// ''An object to compare with this object.
+					// ''</param>
+					// ''<returns>
+					// ''<see langword="true"/> if the current object is equal to the <paramref name="obj"/> parameter 
+					// ''otherwise, <see langword="false"/>.
+					// ''</returns>
+					// public override  bool   Equals(object obj)
+					// {
+					// if (object.ReferenceEquals( nothing , obj)) return false 
+					// if (object.ReferenceEquals(this, obj)) return true 
+
+					// NTFSStreamInfo other = obj as NTFSStreamInfo 
+					// if ( not object.ReferenceEquals( nothing , other)) return  me.Equals(other) 
+
+					// return false 
+					// }
+
+					// ''<summary>
+					// ''Returns a value indicating whether
+					// ''this instance is equal to another instance.
+					// ''</summary>
+					// ''<param name="other">
+					// ''The instance to compare to.
+					// ''</param>
+					// ''<returns>
+					// ''<see langword="true"/> if the current object is equal to the <paramref name="other"/> parameter 
+					// ''otherwise, <see langword="false"/>.
+					// ''</returns>
+					// public  bool   Equals(NTFSStreamInfo other)
+					// {
+					// if (object.ReferenceEquals( nothing , other)) return false 
+					// if (object.ReferenceEquals(this, other)) return true 
+
+					// var comparer = StringComparer.OrdinalIgnoreCase 
+					// return comparer.Equals( me._filePath ?? string.Empty, other._filePath ?? string.Empty)
+					// && comparer.Equals( me._streamName ?? string.Empty, other._streamName ?? string.Empty) 
+					// }
+
+					// ''<summary>
+					// ''The equality operator.
+					// ''</summary>
+					// ''<param name="first">
+					// ''The first object.
+					// ''</param>
+					// ''<param name="second">
+					// ''The second object.
+					// ''</param>
+					// ''<returns>
+					// ''<see langword="true"/> if the two objects are equal 
+					// ''otherwise, <see langword="false"/>.
+					// ''</returns>
+					// public shared  bool   operator ==(NTFSStreamInfo first, NTFSStreamInfo second)
+					// {
+					// if (object.ReferenceEquals(first, second)) return true 
+					// if (object.ReferenceEquals( nothing , first)) return false 
+					// if (object.ReferenceEquals( nothing , second)) return false 
+					// return first.Equals(second) 
+					// }
+
+					// ''<summary>
+					// ''The inequality operator.
+					// ''</summary>
+					// ''<param name="first">
+					// ''The first object.
+					// ''</param>
+					// ''<param name="second">
+					// ''The second object.
+					// ''</param>
+					// ''<returns>
+					// ''<see langword="true"/> if the two objects are not equal 
+					// ''otherwise, <see langword="false"/>.
+					// ''</returns>
+					// public shared  bool   Operator <>(NTFSStreamInfo first, NTFSStreamInfo second)
+					// {
+					// if (object.ReferenceEquals(first, second)) return false 
+					// if (object.ReferenceEquals( nothing , first)) return true 
+					// if (object.ReferenceEquals( nothing , second)) return true 
+					// return !first.Equals(second) 
+					// }
+
+					#endregion
+
+					#region -Delete
+					/// <summary>Deletes this stream from the parent file.</summary>
+					/// <returns><see langword="true"/> if the stream was deleted otherwise, <see langword="false"/>.</returns>
+					/// <exception cref="SecurityException"> The caller does not have the required permission.</exception>
+					/// <exception cref="UnauthorizedAccessException">The caller does not have the required permission, or the file is read-only.</exception>
+					/// <exception cref="IOException">The specified file is in use.</exception>
+					/// <exception cref="ArgumentException">The path of the stream is invalid.</exception>
+					public bool Delete()
+					{
+#pragma warning disable SYSLIB0003 // Type or member is obsolete
+						(new FileIOPermission(FileIOPermissionAccess.Write, FilePath)).Demand();
+#pragma warning restore SYSLIB0003 // Type or member is obsolete
+						return SafeDeleteFile(FullPath);
+					}
+
+					#endregion
+
+					#region -Open
+
+#pragma warning disable SYSLIB0003 // Type or member is obsolete
+
+					/// <summary>Calculates the access to demand.</summary>
+					/// <param name="mode">The <see cref="FileMode"/>.</param>
+					/// <param name="access">The <see cref="FileAccess"/>.</param>
+					/// <returns>The <see cref="FileIOPermissionAccess"/>.</returns>
+					private static FileIOPermissionAccess CalculateAccess(FileMode mode, FileAccess access)
+					{
+						var permAccess = FileIOPermissionAccess.NoAccess;
+						switch (mode)
+						{
+							case FileMode.Append: permAccess = FileIOPermissionAccess.Append; break;
+							case FileMode.Create: break;
+							case FileMode.CreateNew: break;
+							case FileMode.OpenOrCreate: break;
+							case FileMode.Truncate: permAccess = FileIOPermissionAccess.Write; break;
+							case FileMode.Open: permAccess = FileIOPermissionAccess.Read; break;
+						}
+
+						switch (access)
+						{
+							case FileAccess.ReadWrite:
+								permAccess |= FileIOPermissionAccess.Write | FileIOPermissionAccess.Read; break;
+
+							case FileAccess.Write:
+								permAccess |= FileIOPermissionAccess.Write; break;
+
+							case FileAccess.Read:
+								permAccess |= FileIOPermissionAccess.Read; break;
+						}
+						return permAccess;
+					}
+#pragma warning restore SYSLIB0003 // Type or member is obsolete
+
+					/// <summary>
+					/// Opens this alternate data stream.
+					/// </summary>
+					/// <param name="mode">
+					/// A <see cref="FileMode"/> value that specifies whether a stream is created if one does not exist, 
+					/// and determines whether the contents of existing streams are retained or overwritten.
+					/// </param>
+					/// <param name="access">
+					/// A <see cref="FileAccess"/> value that specifies the operations that can be performed on the stream. 
+					/// </param>
+					/// <param name="share">
+					/// A <see cref="FileShare"/> value specifying the type of access other threads have to the file. 
+					/// </param>
+					/// <param name="bufferSize">
+					/// The size of the buffer to use.
+					/// </param>
+					/// <param name="useAsync">
+					/// <see langword="true"/> to enable async-IO 
+					/// otherwise, <see langword="false"/>.
+					/// </param>
+					/// <returns>
+					/// A <see cref="FileStream"/> for this alternate data stream.
+					/// </returns>
+					/// <exception cref="ArgumentOutOfRangeException">
+					/// <paramref name="bufferSize"/> is less than or equal to zero.
+					/// </exception>
+					/// <exception cref="SecurityException">
+					/// The caller does not have the required permission. 
+					/// </exception>
+					/// <exception cref="UnauthorizedAccessException">
+					/// The caller does not have the required permission, or the file is read-only.
+					/// </exception>
+					/// <exception cref="IOException">
+					/// The specified file is in use. 
+					/// </exception>
+					/// <exception cref="ArgumentException">
+					/// The path of the stream is invalid.
+					/// </exception>
+					/// <exception cref="Win32Exception">
+					/// There was an error opening the stream.
+					/// </exception>
+					public FileStream Open(FileMode mode, FileAccess access, FileShare share, int bufferSize, bool useAsync)
+					{
+						if (0 >= bufferSize) throw new ArgumentOutOfRangeException(nameof(bufferSize), bufferSize, null);
+
+#pragma warning disable SYSLIB0003 // Type or member is obsolete
+						(new FileIOPermission(CalculateAccess(mode, access), FilePath))
+							.Demand();
+#pragma warning restore SYSLIB0003 // Type or member is obsolete
+
+						var flags = useAsync ? io.NativeFileFlags.Overlapped : (io.NativeFileFlags)0;
+						var handle = CreateFileHandle(FullPath, ToNative(access), share, IntPtr.Zero, mode, flags, IntPtr.Zero);
+						handle.eIsValid().eThrowLastWin32Exception_AssertFalse("CreateFileHandle");
+						return new FileStream(handle, access, bufferSize, useAsync);
+					}
+
+
+					/// <summary>Opens this alternate data stream.</summary>
+					/// <param name="mode">A <see cref="FileMode"/> value that specifies whether a stream is created if one does not exist, and determines whether the contents of existing streams are retained or overwritten.</param>
+					/// <param name="access">A <see cref="FileAccess"/> value that specifies the operations that can be performed on the stream. </param>
+					/// <param name="share">A <see cref="FileShare"/> value specifying the type of access other threads have to the file. </param>
+					/// <param name="bufferSize">The size of the buffer to use.</param>
+					/// <returns>A <see cref="FileStream"/> for this alternate data stream.</returns>
+					/// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferSize"/> is less than or equal to zero.</exception>
+					/// <exception cref="SecurityException">The caller does not have the required permission. </exception>
+					/// <exception cref="UnauthorizedAccessException">The caller does not have the required permission, or the file is read-only.</exception>
+					/// <exception cref="IOException">The specified file is in use. </exception>
+					/// <exception cref="ArgumentException">The path of the stream is invalid.</exception>
+					/// <exception cref="Win32Exception">There was an error opening the stream.</exception>
+					public FileStream Open(FileMode mode, FileAccess access, FileShare share, int bufferSize)
+						=> Open(mode, access, share, bufferSize, false);
+
+
+					/// <summary>Opens this alternate data stream.</summary>
+					/// <param name="mode">A <see cref="FileMode"/> value that specifies whether a stream is created if one does not exist, and determines whether the contents of existing streams are retained or overwritten.</param>
+					/// <param name="access">A <see cref="FileAccess"/> value that specifies the operations that can be performed on the stream. </param>
+					/// <param name="share">A <see cref="FileShare"/> value specifying the type of access other threads have to the file. </param>
+					/// <returns>A <see cref="FileStream"/> for this alternate data stream.</returns>
+					/// <exception cref="SecurityException">The caller does not have the required permission. </exception>
+					/// <exception cref="UnauthorizedAccessException">The caller does not have the required permission, or the file is read-only.</exception>
+					/// <exception cref="IOException">The specified file is in use. </exception>
+					/// <exception cref="ArgumentException">The path of the stream is invalid.</exception>
+					/// <exception cref="Win32Exception">There was an error opening the stream.</exception>
+					public FileStream Open(FileMode mode, FileAccess access, FileShare share)
+						=> Open(mode, access, share, DefaultBufferSize, false);
+
+
+					/// <summary>Opens this alternate data stream.</summary>
+					/// <param name="mode">A <see cref="FileMode"/> value that specifies whether a stream is created if one does not exist, and determines whether the contents of existing streams are retained or overwritten.</param>
+					/// <param name="access">A <see cref="FileAccess"/> value that specifies the operations that can be performed on the stream.</param>
+					/// <returns>A <see cref="FileStream"/> for this alternate data stream.</returns>
+					/// <exception cref="SecurityException">The caller does not have the required permission. </exception>
+					/// <exception cref="UnauthorizedAccessException">The caller does not have the required permission, or the file is read-only.</exception>
+					/// <exception cref="IOException">The specified file is in use. </exception>
+					/// <exception cref="ArgumentException">The path of the stream is invalid.</exception>
+					/// <exception cref="Win32Exception">There was an error opening the stream.</exception>
+					public FileStream Open(FileMode mode, FileAccess access)
+						=> Open(mode, access, FileShare.None, DefaultBufferSize, false);
+
+
+					/// <summary>Opens this alternate data stream.</summary>
+					/// <param name="mode"> A <see cref="FileMode"/> value that specifies whether a stream is created if one does not exist, and determines whether the contents of existing streams are retained or overwritten.</param>
+					/// <returns>A <see cref="FileStream"/> for this alternate data stream.</returns>
+					/// <exception cref="SecurityException"> The caller does not have the required permission.  </exception>
+					/// <exception cref="UnauthorizedAccessException"> The caller does not have the required permission, or the file is read-only.</exception>
+					/// <exception cref="IOException"> The specified file is in use.  </exception>
+					/// <exception cref="ArgumentException"> The path of the stream is invalid. </exception>
+					/// <exception cref="Win32Exception"> There was an error opening the stream. </exception>
+					public FileStream Open(FileMode mode)
+						=> Open(mode, (FileMode.Append == mode)
+							? FileAccess.Write
+							: FileAccess.ReadWrite,
+							FileShare.None,
+							DefaultBufferSize,
+							false);
+
+					#endregion
+
+					#region -OpenRead / OpenWrite / OpenText
+
+					/// <summary>
+					/// Opens this stream for reading.
+					/// </summary>
+					/// <returns>
+					/// A read-only <see cref="FileStream"/> for this stream.
+					/// </returns>
+					/// <exception cref="SecurityException">
+					/// The caller does not have the required permission. 
+					/// </exception>
+					/// <exception cref="UnauthorizedAccessException">
+					/// The caller does not have the required permission, or the file is read-only.
+					/// </exception>
+					/// <exception cref="IOException">
+					/// The specified file is in use. 
+					/// </exception>
+					/// <exception cref="ArgumentException">
+					/// The path of the stream is invalid.
+					/// </exception>
+					/// <exception cref="Win32Exception">
+					/// There was an error opening the stream.
+					/// </exception>
+					public FileStream OpenRead() => Open(FileMode.Open, FileAccess.Read, FileShare.Read);
+
+					/// <summary>
+					/// Opens this stream for writing.
+					/// </summary>
+					/// <returns>
+					/// A write-only <see cref="FileStream"/> for this stream.
+					/// </returns>
+					/// <exception cref="SecurityException">
+					/// The caller does not have the required permission. 
+					/// </exception>
+					/// <exception cref="UnauthorizedAccessException">
+					/// The caller does not have the required permission, or the file is read-only.
+					/// </exception>
+					/// <exception cref="IOException">
+					/// The specified file is in use. 
+					/// </exception>
+					/// <exception cref="ArgumentException">
+					/// The path of the stream is invalid.
+					/// </exception>
+					/// <exception cref="Win32Exception">
+					/// There was an error opening the stream.
+					/// </exception>
+					public FileStream OpenWrite() => Open(FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+
+					/// <summary>
+					/// Opens this stream as a text file.
+					/// </summary>
+					/// <returns>
+					/// A <see cref="StreamReader"/> which can be used to read the contents of this stream.
+					/// </returns>
+					/// <exception cref="SecurityException">
+					/// The caller does not have the required permission. 
+					/// </exception>
+					/// <exception cref="UnauthorizedAccessException">
+					/// The caller does not have the required permission, or the file is read-only.
+					/// </exception>
+					/// <exception cref="IOException">
+					/// The specified file is in use. 
+					/// </exception>
+					/// <exception cref="ArgumentException">
+					/// The path of the stream is invalid.
+					/// </exception>
+					/// <exception cref="Win32Exception">
+					/// There was an error opening the stream.
+					/// </exception>
+					public StreamReader OpenText()
+					{
+						Stream FileStream = Open(FileMode.Open, FileAccess.Read, FileShare.Read);
+						return new StreamReader(FileStream);
+					}
+
+					#endregion
+
+					#endregion
+
+					#region Stream Exists
+
+					/// <summary>
+					/// <span style="font-weight:bold color:#a00 ">(Extension Method)</span><br />
+					/// Returns a flag indicating whether the specified alternate data stream exists.
+					/// </summary>
+					/// <param name="file">
+					/// The <see cref="FileInfo"/> to inspect.
+					/// </param>
+					/// <param name="streamName">
+					/// The name of the stream to find.
+					/// </param>
+					/// <returns>
+					/// <see langword="true"/> if the specified stream exists 
+					/// otherwise, <see langword="false"/>.
+					/// </returns>
+					/// <exception cref="ArgumentNullException">
+					/// <paramref name="file"/> is <see langword=" nothing "/>.
+					/// </exception>
+					/// <exception cref="ArgumentException">
+					/// <paramref name="streamName"/> contains invalid characters.
+					/// </exception>
+					public static bool StreamExists(string File, string streamName)
+					{
+						if (File.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(File));
+						ValidateStreamName(streamName);
+						string path = BuildStreamPath(File, streamName);
+						return -1 != SafeGetFileAttributes(path);
+					}
+
+					#endregion
+
+					#region Open Stream
+					/// <summary>
+					/// <span style="font-weight:bold color:#a00 ">(Extension Method)</span><br />
+					/// Opens an alternate data stream.
+					/// </summary>
+					/// <param name="file">
+					/// The <see cref="FileInfo"/> which contains the stream.
+					/// </param>
+					/// <param name="streamName">
+					/// The name of the stream to open.
+					/// </param>
+					/// <param name="mode">
+					/// One of the <see cref="FileMode"/> values, indicating how the stream is to be opened.
+					/// </param>
+					/// <returns>
+					/// An <see cref="NTFSStreamInfo"/> representing the stream.
+					/// </returns>
+					/// <exception cref="ArgumentNullException">
+					/// <paramref name="file"/> is <see langword="null"/>.
+					/// </exception>
+					/// <exception cref="FileNotFoundException">The specified <paramref name="file"/> was not found.</exception>
+					/// <exception cref="ArgumentException">
+					/// <paramref name="streamName"/> contains invalid characters.
+					/// </exception>
+					/// <exception cref="NotSupportedException">
+					/// <paramref name="mode"/> is either <see cref="FileMode.Truncate"/> or <see cref="FileMode.Append"/>.
+					/// </exception>
+					/// <exception cref="IOException">
+					/// <para><paramref name="mode"/> is <see cref="FileMode.Open"/>, and the stream doesn't exist.</para>
+					/// <para>-or-</para>
+					/// <para><paramref name="mode"/> is <see cref="FileMode.CreateNew"/>, and the stream already exists.</para>
+					/// </exception>
+					/// <exception cref="SecurityException">
+					/// The caller does not have the required permission. 
+					/// </exception>
+					/// <exception cref="UnauthorizedAccessException">
+					/// The caller does not have the required permission, or the file is read-only.
+					/// </exception>
+					public static NTFSStreamInfo GetAlternateDataStream(FileSystemInfo file, string streamName, FileMode mode)
+					{
+						if (null == file) throw new ArgumentNullException(nameof(file));
+						if (!file.Exists) throw new FileNotFoundException(null, file.FullName);
+
+						ValidateStreamName(streamName);
+						if (FileMode.Truncate == mode || FileMode.Append == mode)
+							throw new NotSupportedException("Error_InvalidMode");
+
+#pragma warning disable SYSLIB0003 // Type or member is obsolete
+						FileIOPermissionAccess permAccess =
+							(FileMode.Open == mode)
+							? FileIOPermissionAccess.Read
+							: (FileIOPermissionAccess.Read | FileIOPermissionAccess.Write);
+
+						(new FileIOPermission(permAccess, file.FullName)).Demand();
+
+#pragma warning restore SYSLIB0003 // Type or member is obsolete
+
+						string path = BuildStreamPath(file.FullName, streamName);
+						bool exists = -1 != SafeGetFileAttributes(path);
+						if (!exists && FileMode.Open == mode)
+							throw new IOException("Error_StreamNotFound");
+
+						if (exists && FileMode.CreateNew == mode)
+							throw new IOException("Error_StreamExists");
+
+						return new NTFSStreamInfo(file.FullName, streamName, path);
+					}
+
+					// ''<summary>
+					// ''<span style="font-weight:bold color:#a00 ">(Extension Method)</span><br />
+					// ''Opens an alternate data stream.
+					// ''</summary>
+					// ''<param name="file">
+					// ''The <see cref="FileInfo"/> which contains the stream.
+					// ''</param>
+					// ''<param name="streamName">
+					// ''The name of the stream to open.
+					// ''</param>
+					// ''<returns>
+					// ''An <see cref="NTFSStreamInfo"/> representing the stream.
+					// ''</returns>
+					// ''<exception cref="ArgumentNullException">
+					// ''<paramref name="file"/> is <see langword=" nothing "/>.
+					// ''</exception>
+					// ''<exception cref="FileNotFoundException">
+					// ''The specified <paramref name="file"/> was not found.
+					// ''</exception>
+					// ''<exception cref="ArgumentException">
+					// ''<paramref name="streamName"/> contains invalid characters.
+					// ''</exception>
+					// ''<exception cref="SecurityException">
+					// ''The caller does not have the required permission. 
+					// ''</exception>
+					// ''<exception cref="UnauthorizedAccessException">
+					// ''The caller does not have the required permission, or the file is read-only.
+					// ''</exception>
+					// public shared NTFSStreamInfo GetAlternateDataStream(this FileSystemInfo file, string streamName)
+					// {
+					// return file.GetAlternateDataStream(streamName, FileMode.OpenOrCreate) 
+					// }
+
+					// ''<summary>
+					// ''Opens an alternate data stream.
+					// ''</summary>
+					// ''<param name="filePath">
+					// ''The path of the file which contains the stream.
+					// ''</param>
+					// ''<param name="streamName">
+					// ''The name of the stream to open.
+					// ''</param>
+					// ''<param name="mode">
+					// ''One of the <see cref="FileMode"/> values, indicating how the stream is to be opened.
+					// ''</param>
+					// ''<returns>
+					// ''An <see cref="NTFSStreamInfo"/> representing the stream.
+					// ''</returns>
+					// ''<exception cref="ArgumentNullException">
+					// ''<paramref name="filePath"/> is <see langword=" nothing "/> or an empty string.
+					// ''</exception>
+					// ''<exception cref="FileNotFoundException">
+					// ''The specified <paramref name="filePath"/> was not found.
+					// ''</exception>
+					// ''<exception cref="ArgumentException">
+					// ''<para><paramref name="filePath"/> is not a valid file path.</para>
+					// ''<para>-or-</para>
+					// ''<para><paramref name="streamName"/> contains invalid characters.</para>
+					// ''</exception>
+					// ''<exception cref="NotSupportedException">
+					// ''<paramref name="mode"/> is either <see cref="FileMode.Truncate"/> or <see cref="FileMode.Append"/>.
+					// ''</exception>
+					// ''<exception cref="IOException">
+					// ''<para><paramref name="mode"/> is <see cref="FileMode.Open"/>, and the stream doesn't exist.</para>
+					// ''<para>-or-</para>
+					// ''<para><paramref name="mode"/> is <see cref="FileMode.CreateNew"/>, and the stream already exists.</para>
+					// ''</exception>
+					// ''<exception cref="SecurityException">
+					// ''The caller does not have the required permission. 
+					// ''</exception>
+					// ''<exception cref="UnauthorizedAccessException">
+					// ''The caller does not have the required permission, or the file is read-only.
+					// ''</exception>
+					// public shared NTFSStreamInfo GetAlternateDataStream(string filePath, string streamName, FileMode mode)
+					// {
+					// if (string.IsNullOrEmpty(filePath)) then throw  new ArgumentNullException("filePath") 
+					// return CreateInfo(filePath).GetAlternateDataStream(streamName, mode) 
+					// }
+
+					// ''<summary>
+					// ''Opens an alternate data stream.
+					// ''</summary>
+					// ''<param name="filePath">
+					// ''The path of the file which contains the stream.
+					// ''</param>
+					// ''<param name="streamName">
+					// ''The name of the stream to open.
+					// ''</param>
+					// ''<returns>
+					// ''An <see cref="NTFSStreamInfo"/> representing the stream.
+					// ''</returns>
+					// ''<exception cref="ArgumentNullException">
+					// ''<paramref name="filePath"/> is <see langword=" nothing "/> or an empty string.
+					// ''</exception>
+					// ''<exception cref="FileNotFoundException">
+					// ''The specified <paramref name="filePath"/> was not found.
+					// ''</exception>
+					// ''<exception cref="ArgumentException">
+					// ''<para><paramref name="filePath"/> is not a valid file path.</para>
+					// ''<para>-or-</para>
+					// ''<para><paramref name="streamName"/> contains invalid characters.</para>
+					// ''</exception>
+					// ''<exception cref="SecurityException">
+					// ''The caller does not have the required permission. 
+					// ''</exception>
+					// ''<exception cref="UnauthorizedAccessException">
+					// ''The caller does not have the required permission, or the file is read-only.
+					// ''</exception>
+					// public shared NTFSStreamInfo GetAlternateDataStream(string filePath, string streamName)
+					// {
+					// return GetAlternateDataStream(filePath, streamName, FileMode.OpenOrCreate) 
+					// }
+
+					#endregion
+
+					#region Delete Stream
+					/// <summary>
+					/// <span style="font-weight:bold color:#a00 ">(Extension Method)</span><br />
+					/// Deletes the specified alternate data stream if it exists.
+					/// </summary>
+					/// <param name="file">
+					/// The <see cref="FileInfo"/> to inspect.
+					/// </param>
+					/// <param name="streamName">
+					/// The name of the stream to delete.
+					/// </param>
+					/// <returns>
+					/// <see langword="true"/> if the specified stream is deleted 
+					/// otherwise, <see langword="false"/>.
+					/// </returns>
+					/// <exception cref="ArgumentNullException">
+					/// <paramref name="file"/> is <see langword=" nothing "/>.
+					/// </exception>
+					/// <exception cref="ArgumentException">
+					/// <paramref name="streamName"/> contains invalid characters.
+					/// </exception>
+					/// <exception cref="SecurityException">
+					/// The caller does not have the required permission. 
+					/// </exception>
+					/// <exception cref="UnauthorizedAccessException">
+					/// The caller does not have the required permission, or the file is read-only.
+					/// </exception>
+					/// <exception cref="IOException">
+					/// The specified file is in use. 
+					/// </exception>
+					public static bool DeleteStream(FileSystemInfo file, string streamName)
+					{
+						_ = file ?? throw new ArgumentNullException(nameof(file));
+
+						ValidateStreamName(streamName);
+
+#pragma warning disable SYSLIB0003 // Type or member is obsolete
+						(new FileIOPermission(FileIOPermissionAccess.Write, file.FullName))
+							.Demand();
+
+#pragma warning restore SYSLIB0003 // Type or member is obsolete
+
+						bool result = false;
+						if (file.Exists)
+						{
+							string path = BuildStreamPath(file.FullName, streamName);
+							if (-1 != SafeGetFileAttributes(path)) result = SafeDeleteFile(path);
+						}
+						return result;
+					}
+					#endregion
+
+					#region API
+
+					[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 1)]
+					private partial struct WIN32_STREAM_ID
+					{
+						public FileStreamType StreamId;
+						public FileStreamAttributes StreamAttributes;
+						public long Size;
+						public int StreamNameSize;
+
+
+						// DWORD         dwStreamId;
+						// DWORD         dwStreamAttributes;
+						// LARGE_INTEGER Size;
+						// DWORD         dwStreamNameSize;
+						// WCHAR         cStreamName[ANYSIZE_ARRAY];
+
+						public string? ReadStreamName(Microsoft.Win32.SafeHandles.SafeFileHandle hFile, ref IntPtr lpContext, ref bool bFinished)
+						{
+							if (StreamNameSize < 10) return null;
+
+							using memory.WinApiMemory hMem = new(StreamNameSize);
+							hMem.ZeroMemory();
+							int BytesRead = 0;
+							bool bNameRead = NTFSStreamInfo.BackupRead(hFile, hMem, StreamNameSize, ref BytesRead, false, false, ref lpContext);
+							if (!bNameRead)
+							{
+								bFinished = true;
+								return null;
+							}
+
+							// Unicode chars are 2 bytes:
+							int iChars = (int)Math.Round(StreamNameSize / 2d);
+							var sTempName = hMem.DangerousGetHandle().ePtrToString(iChars);
+							if (sTempName.eIsNullOrWhiteSpace()) return null;
+
+							// Name is of the format ":NAME:$DATA\0"
+							int separatorIndex = sTempName!.IndexOf(STREAM_SEPARATOR, 1);
+							if (separatorIndex != -1)
+							{
+								sTempName = sTempName.Substring(1, separatorIndex - 1);
+							}
+							else
+							{
+								// Should never happen!
+								separatorIndex = sTempName.IndexOf('\0');
+								if (1 < separatorIndex)
+								{
+									sTempName = sTempName.Substring(1, separatorIndex - 1);
+								}
+								else
+								{
+									sTempName = null;
+								}
+							}
+
+							return sTempName;
+						}
+
+						public static readonly int STRUCT_SIZE = Marshal.SizeOf(typeof(WIN32_STREAM_ID));
+					}
+
+					[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+					private static extern bool BackupRead(Microsoft.Win32.SafeHandles.SafeFileHandle hFile,
+						ref WIN32_STREAM_ID pBuffer,
+						int numberOfBytesToRead,
+						[In, Out] ref int numberOfBytesRead,
+						[MarshalAs(UnmanagedType.Bool)] bool abort,
+						[MarshalAs(UnmanagedType.Bool)] bool processSecurity,
+						ref IntPtr context);
+
+
+					[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+					private static extern bool BackupRead(Microsoft.Win32.SafeHandles.SafeFileHandle hFile,
+						IntPtr pBuffer,
+						int numberOfBytesToRead,
+						[In, Out] ref int numberOfBytesRead,
+						[MarshalAs(UnmanagedType.Bool)] bool abort,
+						[MarshalAs(UnmanagedType.Bool)] bool processSecurity,
+						ref IntPtr context);
+
+
+					[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+					private static extern bool BackupSeek(Microsoft.Win32.SafeHandles.SafeFileHandle hFile,
+						int bytesToSeekLow,
+						int bytesToSeekHigh,
+						[In, Out] ref int bytesSeekedLow,
+						[In, Out] ref int bytesSeekedHigh,
+						ref IntPtr context);
+
+					// /*
+					// < StructLayout(LayoutKind.Sequential)> 
+					// private struct FileInformationByHandle
+					// {
+					// public integer dwFileAttributes 
+					// public LargeInteger ftCreationTime 
+					// public LargeInteger ftLastAccessTime 
+					// public LargeInteger ftLastWriteTime 
+					// public integer dwVolumeSerialNumber 
+					// public LargeInteger FileSize 
+					// public integer nNumberOfLinks 
+					// public LargeInteger FileIndex 
+					// }
+					// */
+
+
+
+					private static Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileHandle(string path, io.NativeFileAccess access, FileShare share, IntPtr security, FileMode mode, io.NativeFileFlags flags, IntPtr template)
+					{
+						var Result = CreateFileAsSafeFileHandle(path, access, share, security, mode, flags, template);
+						if (!Result.IsInvalid && GetFileType(Result) != FileTypes.FILE_TYPE_DISK)
+						{
+							Result.Dispose();
+							throw new NotSupportedException();
+						}
+
+						return Result;
+					}
+
+					private static int SafeGetFileAttributes(string name)
+					{
+						if (name.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(name));
+						var result = GetFileAttributes(name);
+						if (-1 == (int)result)
+						{
+							var WEX = new errors.Win32ExceptionEx("GetFileAttributes");
+							WEX.eThrowIfNot(errors.Win32Errors.ERROR_FILE_NOT_FOUND);
+						}
+
+						return (int)result;
+					}
+
+					private static bool SafeDeleteFile(string name)
+					{
+						if (name.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(name));
+						bool result = DeleteFile(name);
+						if (!result)
+						{
+							var WEX = new errors.Win32ExceptionEx("DeleteFile");
+							WEX.eThrowIfNot(errors.Win32Errors.ERROR_FILE_NOT_FOUND);
+						}
+						return result;
+					}
+
+					private static NativeFileAccess ToNative(FileAccess access)
+					{
+						NativeFileAccess result = 0;
+						if (FileAccess.Read == (FileAccess.Read & access)) result |= NativeFileAccess.GenericRead;
+						if (FileAccess.Write == (FileAccess.Write & access)) result |= NativeFileAccess.GenericWrite;
+						return result;
+					}
+
+
+
+					// private shared long GetFileSize(string path, SafeFileHandle handle)
+					// {
+					// long result = 0L 
+					// if ( nothing <>handle && !handle.IsInvalid)
+					// {
+					// LargeInteger value 
+					// if (GetFileSizeEx(handle, [In,Out]value))
+					// {
+					// result = value.ToInt64() 
+					// }
+					// else
+					// {
+					// ThrowLastIOError(path) 
+					// }
+					// }
+
+					// return result 
+					// }
+
+					// public shared long GetFileSize(string path)
+					// {
+					// long result = 0L 
+					// if ( not string.IsNullOrEmpty(path))
+					// {
+					// using (SafeFileHandle handle = SafeCreateFile(path, NativeFileAccess.GenericRead, FileShare.Read, IntPtr.Zero, FileMode.Open, 0, IntPtr.Zero))
+					// {
+					// result = GetFileSize(path, handle) 
+					// }
+					// }
+
+					// return result 
+					// }
+
+					#region MakeHRFromErrorCode
+
+
+
+					// private shared integer MakeHRFromErrorCode( integer  errorCode)
+					// {
+					// return (-2147024896 | errorCode) 
+					// }
+
+					// private shared string GetErrorMessage( integer  errorCode)
+					// {
+					// var lpBuffer = new StringBuilder(0x200) 
+					// if (0<>FormatMessage(0x3200, IntPtr.Zero, errorCode, 0, lpBuffer, lpBuffer.Capacity, IntPtr.Zero))
+					// {
+					// return lpBuffer.ToString() 
+					// }
+
+					// return string.Format(Resources.Culture, Resources.Error_UnknownError, errorCode) 
+					// }
+
+					// private shared void ThrowIOError( integer  errorCode, string path)
+					// {
+					// switch (errorCode)
+					// {
+					// case 0:
+					// {
+					// break 
+					// }
+					// case 2: ' File not found
+					// {
+					// if (string.IsNullOrEmpty(path)) then throw  new FileNotFoundException() 
+					// throw new FileNotFoundException( nothing , path) 
+					// }
+					// case 3: ' Directory not found
+					// {
+					// if (string.IsNullOrEmpty(path)) then throw  new DirectoryNotFoundException() 
+					// throw new DirectoryNotFoundException(string.Format(Resources.Culture, Resources.Error_DirectoryNotFound, path)) 
+					// }
+					// case 5: ' Access denied
+					// {
+					// if (string.IsNullOrEmpty(path)) then throw  new UnauthorizedAccessException() 
+					// throw new UnauthorizedAccessException(string.Format(Resources.Culture, Resources.Error_AccessDenied_Path, path)) 
+					// }
+					// case 15: ' Drive not found
+					// {
+					// if (string.IsNullOrEmpty(path)) then throw  new DriveNotFoundException() 
+					// throw new DriveNotFoundException(string.Format(Resources.Culture, Resources.Error_DriveNotFound, path)) 
+					// }
+					// case 32: ' Sharing violation
+					// {
+					// if (string.IsNullOrEmpty(path)) then throw  new IOException(GetErrorMessage(errorCode), MakeHRFromErrorCode(errorCode)) 
+					// throw new IOException(string.Format(Resources.Culture, Resources.Error_SharingViolation, path), MakeHRFromErrorCode(errorCode)) 
+					// }
+					// case 80: ' File already exists
+					// {
+					// if ( not string.IsNullOrEmpty(path))
+					// {
+					// throw new IOException(string.Format(Resources.Culture, Resources.Error_FileAlreadyExists, path), MakeHRFromErrorCode(errorCode)) 
+					// }
+					// break 
+					// }
+					// case 87: ' Invalid parameter
+					// {
+					// throw new IOException(GetErrorMessage(errorCode), MakeHRFromErrorCode(errorCode)) 
+					// }
+					// case 183: ' File or directory already exists
+					// {
+					// if ( not string.IsNullOrEmpty(path))
+					// {
+					// throw new IOException(string.Format(Resources.Culture, Resources.Error_AlreadyExists, path), MakeHRFromErrorCode(errorCode)) 
+					// }
+					// break 
+					// }
+					// case 206: ' Path too long
+					// {
+					// throw new PathTooLongException() 
+					// }
+					// case 995: ' Operation cancelled
+					// {
+					// throw new OperationCanceledException() 
+					// }
+					// default:
+					// {
+					// Marshal.ThrowExceptionForHR(MakeHRFromErrorCode(errorCode)) 
+					// break 
+					// }
+					// }
+					// }
+
+					// public shared void ThrowLastIOError(string path)
+					// {
+					// integer  errorCode = Marshal.GetLastWin32Error() 
+					// if (0<>errorCode)
+					// {
+					// integer  hr = Marshal.GetHRForLastWin32Error() 
+					// if (0 <= hr) then throw  new Win32Exception(errorCode) 
+					// ThrowIOError(errorCode, path) 
+					// }
+					// }
+					#endregion
+					#endregion
+
+					public static string BuildStreamPath(string filePath, string streamName)
+					{
+						string Result = filePath;
+						if (filePath.eIsNotNullOrWhiteSpace())
+						{
+							if (Result.Length == 1) Result = @".\\" + Result;
+							Result += STREAM_SEPARATOR + streamName + FULL_STREAM_PATH_SUFFIX;
+							if (Result.Length >= PATH_LIMIT) Result = uom.WinAPI.io.UNC_PATH_PREFIX + Result;
+						}
+
+						return Result;
+					}
+
+					public string ReadablePath
+					{
+						get
+						{
+							string sPath = FullPath;
+							if (sPath.EndsWith(FULL_STREAM_PATH_SUFFIX))
+							{
+								sPath = sPath.Replace(FULL_STREAM_PATH_SUFFIX, "");
+							}
+
+							return sPath;
+						}
+					}
+
+					private static void ValidateStreamName(string streamName)
+					{
+						// Return tru
+						// if ( not string.IsNullOrEmpty(streamName) && -1<>streamName.IndexOfAny(InvalidStreamNameChars))
+						// {
+						// Throw New ArgumentException(Resources.Error_InvalidFileChars)
+						// }
+					}
+
+					#region GetStreams
+
+					public static NTFSStreamInfo[] GetStreams(FileSystemInfo rPath)
+					{
+						if (!rPath.Exists) throw new FileNotFoundException(null, rPath.FullName);
+						return GetStreams(rPath.FullName);
+					}
+
+					public static NTFSStreamInfo[] GetStreams(string sFullPath)
+					{
+						if (sFullPath.eIsNullOrWhiteSpace()) throw new ArgumentNullException("sFullPath");
+						var lResult = new List<NTFSStreamInfo>();
+
+#pragma warning disable SYSLIB0003 // Type or member is obsolete
+						sFullPath.DemandFileIOPermission(FileIOPermissionAccess.Read); // Запрос на доступ к файлу
+#pragma warning restore SYSLIB0003 // Type or member is obsolete
+
+						// NativeFileFlags.FILE_FLAG_OPEN_REPARSE_POINT Or NativeFileFlags.FILE_FLAG_BACKUP_SEMANTICS
+						using (var hFile = CreateFileHandle(sFullPath,
+							NativeFileAccess.GenericRead,
+							FileShare.Read,
+							IntPtr.Zero,
+							FileMode.Open,
+							NativeFileFlags.FILE_FLAG_BACKUP_SEMANTICS,
+							IntPtr.Zero))
+						{
+							if (!hFile.IsInvalid)
+							{
+								using memory.WinApiMemory hMem = new(DEFAULT_BUFFER_SIZE);
+								var lpContext = IntPtr.Zero;
+								int BytesRead = 0;
+								try
+								{
+									bool bFinished = false;
+									do
+									{
+										// Read the next stream header:
+										WIN32_STREAM_ID STREAM_ID = new();
+										bool bRead = NTFSStreamInfo.BackupRead(hFile, ref STREAM_ID, WIN32_STREAM_ID.STRUCT_SIZE, ref BytesRead, false, false, ref lpContext);
+										if (!bRead || BytesRead != WIN32_STREAM_ID.STRUCT_SIZE)
+										{
+											// Чтение не удалось, или прочитано менее размера заголовка
+											bFinished = true;
+										}
+										else // Заголовок потока прочитан нормально
+										{
+											string sStreamName = STREAM_ID.ReadStreamName(hFile, ref lpContext, ref bFinished)!;
+											// Add the stream info to the result:
+											if (sStreamName.eIsNotNullOrWhiteSpace())
+											{
+												var R = new NTFSStreamInfo(sFullPath, STREAM_ID, sStreamName);
+												lResult.Add(R);
+											}
+
+											// Skip the contents of the stream:
+											if (!bFinished) // Надо пропустить кусок содержимого потока
+											{
+												int bytesSeekedLow = 0; int bytesSeekedHigh = 0;
+												var V64 = STREAM_ID.Size.eToInt64();
+												bRead = NTFSStreamInfo.BackupSeek(hFile, V64.LoDWord, V64.HiDWord, ref bytesSeekedLow, ref bytesSeekedHigh, ref lpContext);
+												if (!bRead)
+													bFinished = true;
+											}
+										}
+									}
+									while (!bFinished);
+								}
+								finally
+								{
+									// Abort the backup:
+									NTFSStreamInfo.BackupRead(hFile, hMem, 0, ref BytesRead, true, false, ref lpContext);
+								}
+							}
+						}
+
+						return lResult.ToArray();
+					}
+					#endregion
+
+				}
+				#endregion
+
+				/// <summary>Жёсткая ссылка ТОЛЬКО ДЛЯ ФАЙЛОВ. </summary>
+				internal partial class HardLinks
+				{
+
+
+					#region CreateHardLink
+					/// <summary>Establishes a hard link between an existing file and a new file. This function is only supported on the NTFS file system, and only for files, not directories.</summary>
+					/// <param name="lpFileName">The name of the new file.This parameter cannot specify the name of a directory.</param>
+					/// <param name="lpExistingFileName">The name of the existing file.This parameter cannot specify the name of a directory.</param>
+					/// <param name="lpSecurityAttributes">Reserved; must be NULL.</param>
+					[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+					private static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+
+
+					/// <summary>Жёсткая ссылка ТОЛЬКО ДЛЯ ФАЙЛОВ. 
+					/// This function is only supported on the NTFS file system, and only for files, not directories.
+					/// Жёсткая ссылка может создаваться только в пределах одного логического раздела и только для файлов. 
+					/// В операционных системах Windows нет возможности создать жесткую ссылку на директорию. Однако похожего эффекта можно добиться используя NTFS junction point.</summary>
+					/// <param name="lpFileName">The name of the new file.This parameter cannot specify the name of a directory.</param>
+					/// <param name="lpExistingFileName">The name of the existing file.This parameter cannot specify the name of a directory.</param>
+					/// <remarks>Этот hardlink-файл не имеет атрибута REPARSE_POINT и потом никак не обнаруживается!!!
+					/// To retrieve the number of hard links of a file, use the GetFileInformationByHandle function: (http://msdn2.microsoft.com/en-us/library/aa364952(VS.85).aspx)</remarks>
+					public static void CreateHardLink(string lpFileName, string lpExistingFileName)
+					{
+						bool bResult = CreateHardLink(lpFileName, lpExistingFileName, IntPtr.Zero);
+						if (!bResult)
+							errors.ThrowLastWin23Error("CreateHardLink");
+					}
+					#endregion
+
+					/// <summary>Creates an enumeration of all the hard links to the specified file. The</summary>
+					internal partial class HardLinksEnumeration : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid
+					{
+						//[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+						//private static extern IntPtr FindFirstFileName___OLD([MarshalAs(UnmanagedType.LPWStr)] string lpFileName, int dwFlags, [In,Out] int StringLength, [In,MarshalAs(UnmanagedType.LPWStr),In,Out] string LinkName);
+
+						[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+						private static extern IntPtr FindFirstFileName(
+							[In, MarshalAs(UnmanagedType.LPWStr)] string lpFileName,
+							int dwFlags,
+							[In, Out] ref int StringLength,
+							[In, Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder? LinkName);
+
+						[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+						private static extern bool FindNextFileName(
+							[In] IntPtr hFindStream,
+							[In, Out] ref int StringLength,
+							[In, Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder? LinkName);
+
+						[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+						public static extern bool FindClose(IntPtr hFindFile);
+
+						public static (HardLinksEnumeration hFind, string FirstFile) FindFirstFile(string sFilePath)
+						{
+							// Узнаём размер буфера
+							int cbBuffer = 0;
+							var hFind = HardLinksEnumeration.FindFirstFileName(sFilePath, 0, ref cbBuffer, null);
+							if (hFind.eIsValid()) throw new Exception("Unexpected Error!"); // ЭТО НЕ должно окончиться удачно, т.к. передали нулевой буфер
+							errors.ThrowLastWin23ErrorAssert(errors.Win32Errors.ERROR_MORE_DATA);
+							StringBuilder sbBuffer = new(cbBuffer + 10);
+							hFind = HardLinksEnumeration.FindFirstFileName(sFilePath, 0, ref cbBuffer, sbBuffer); // А щас всё должно было получиться.
+							if (hFind.eIsNotValid()) errors.ThrowLastWin23Error();
+							var HLE = new HardLinksEnumeration(hFind);
+							return (HLE, sbBuffer.ToString());
+						}
+
+						private HardLinksEnumeration(IntPtr hFind) : base(true)
+						{
+							SetHandle(hFind);
+						}
+
+						public string? FindNextFileName()
+						{
+							int cbBuffer = 0;
+							bool bResult = HardLinksEnumeration.FindNextFileName(DangerousGetHandle(), ref cbBuffer, null); // Узнаём размер буфера для следующего элемента
+							if (bResult) throw new Exception("Unexpected Error!"); // ЭТО НЕ должно окончиться удачно, т.к. м передали нулевой буфер
+							string? sResult = null;
+							var iError = errors.GetLastError();
+							switch (iError)
+							{
+								case errors.Win32Errors.ERROR_HANDLE_EOF: // Нет больше данных
+									{
+										break;
+									}
+
+								case errors.Win32Errors.ERROR_MORE_DATA: // Получили размер буфера
+									{
+										var sbBuffer = new StringBuilder(cbBuffer + 10);
+										bResult = HardLinksEnumeration.FindNextFileName(DangerousGetHandle(), ref cbBuffer, sbBuffer);
+										if (!bResult)
+											errors.ThrowLastWin23Error(); // А щас всё должно было получиться.
+										sResult = sbBuffer.ToString();
+										break;
+									}
+
+								default:
+									{
+										errors.ThrowWin23Error(iError);
+										break;
+									}
+							}
+							return sResult;
+						}
+
+						protected override bool ReleaseHandle()
+						{
+							bool bResult = false;
+							if (handle.eIsValid())
+								bResult = FindClose(handle);
+							if (bResult)
+								SetHandle(IntPtr.Zero);
+							return bResult;
+						}
+					}
+
+
+
+
+
+
+
+					/// <summary>Получить количество всех жёстких ссылок, связанных с данным файлом
+					/// Технически, в NTFS, любой файл - это жёсткая ссылка с одной ссылкой.
+					/// Поэтому, отличить "обычный" файл от "жёсткой ссылки", можно ТОЛЬКо по количеству ссылок > 1</summary>
+					/// <param name="hFile"></param>
+					/// <returns></returns>
+					public static int GetFileHardLinksCount(IntPtr hFile) => GetFileInformationByHandle(hFile).nNumberOfLinks;
+
+
+					/// <summary>Получить имена всех жёстких ссылок, связанных с данным файлом
+					/// Технически, в NTFS, любой файл - это жёсткая ссылка с одной ссылкой.
+					/// Поэтому, отличить "обычный" файл от "жёсткой ссылки", можно ТОЛЬКо по количеству ссылок > 1</summary>
+					public static string[] GetFileHardLinksNames(string sFile)
+					{
+						using var hFile = CreateFile(sFile,
+							NativeFileAccess.GenericRead,
+							FileShare.Delete | FileShare.Read | FileShare.Write,
+							IntPtr.Zero,
+							FileMode.Open,
+							NativeFileFlags.FILE_FLAG_BACKUP_SEMANTICS,
+							IntPtr.Zero).eToSafeFileHandle();
+
+						var lResult = new List<string>();
+						int iLinks = GetFileHardLinksCount(hFile.DangerousGetHandle());
+						if (iLinks > 0)
+						{
+							var (hFind, FirstFile) = HardLinksEnumeration.FindFirstFile(sFile);
+							string sFoundName = FirstFile;
+							using var HLE = hFind;
+							while (sFoundName.eIsNotNullOrWhiteSpace())
+							{
+								lResult.Add(sFoundName);
+								sFoundName = HLE.FindNextFileName()!;
+							}
+						}
+
+						var aFiles = lResult.ToArray();
+						return aFiles;
+					}
+				}
+
+
+				#region ReparsePoint
+
+				/// <summary>The reparse tags are a DWORD. The 32 bits are laid [In,Out]as follows:
+				/// The reparse tags are a DWORD. The 32 bits are laid [In,Out]as follows:
+				/// 3 3 2 2 2 2 2 2 2 2 2 2 1 1 1 1 1 1 1 1 1 1
+				/// 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+				/// +-+-+-+-+-----------------------+-------------------------------+
+				/// |M|R|N|R|     Reserved bits     |       Reparse Tag Value       |
+				/// +-+-+-+-+-----------------------+-------------------------------+
+				/// M Is the Microsoft bit. When set to 1, it denotes a tag owned by Microsoft.
+				/// All ISVs must use a tag with a 0 in this position.
+				/// Note: If a Microsoft tag Is used by non-Microsoft software, the behavior Is Not defined.
+				/// R Is reserved.  Must be zero for non-Microsoft tags.
+				/// N Is name surrogate. When set to 1, the file represents another named entity in the system.
+				/// The M And N bits are Or-able.
+				/// The following macros check for the M And N bit values:
+				/// Macro to determine whether a reparse point tag corresponds to a tag owned by Microsoft.
+				/// #define IsReparseTagMicrosoft(_tag) (              \
+				///				         ((_tag) AND 0x80000000)   \
+				///                    )
+				/// 
+				/// Macro to determine whether a reparse point tag Is a name surrogate
+				/// #define IsReparseTagNameSurrogate(_tag) (          \
+				///                    ((_tag) AND 0x20000000)   \
+				///                    )
+				/// </summary>
+				[Flags()]
+				public enum REPARSE_TAG_TYPES : uint
+				{
+					// The following are Microsoft's predefined reparse tag values; they are defined in WinNT.h:
+					// IO_REPARSE_TAG_DEDUP
+					// IO_REPARSE_TAG_RESERVED_RANGE
+
+
+					/// <summary>Reserved reparse tag value.</summary>
+					[Description("Неизвестный")]
+					IO_REPARSE_TAG_RESERVED_ZERO = 0x0U,
+					/// <summary>Reserved reparse tag value.</summary>
+					IO_REPARSE_TAG_RESERVED_ONE = 0x1U,
+
+					/// <summary>Точки подключения дисковых томов и символьные связи каталогов. Технология доступна, начиная с Windows 2000.
+					/// Used for mount point support, specified in section 2.1.2.5.
+					/// Moiunt point or junction, see winnt.h
+					/// В файловой системе NTFS (начиная с Windows NT4[1]) поддерживаются жёсткие ссылки.
+					/// Жёсткая ссылка может создаваться только в пределах одного логического раздела и только для файлов.
+					/// В операционных системах Windows нет возможности создать жесткую ссылку на директорию. Однако похожего эффекта можно добиться используя NTFS junction point.</summary>
+					[Description("Точка монтирования")]
+					IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003u,
+
+					/// <summary>Hierarchical Storage Management - технология хранения данных, автоматически распределяющая данные между дорогими и дешёвыми накопителями.
+					/// Obsolete. Used by legacy Hierarchical Storage Manager Product.</summary>
+					[Description("Hierarchical Storage Manager")]
+					IO_REPARSE_TAG_HSM = 0xC0000004u,
+					/// <summary>Метаданные технологии Windows Home Server Drive Extender, используются для создания ссылок на файлы, продублированные на нескольких физических носителях.</summary>
+					[Description("Метаданные технологии Windows Home Server Drive Extender")]
+					IO_REPARSE_TAG_DRIVER_EXTENDER = 0x80000005u,
+					/// <summary>Obsolete. Used by legacy Hierarchical Storage Manager Product.</summary>
+					IO_REPARSE_TAG_HSM2 = 0x80000006U,
+					/// <summary>Single Instance Storage (SIS) в Windows Storage Server 2008 R2 технология, увеличивающая размер дискового пространства за счёт размещения дублирующих файлов в общем хранилище.</summary>
+					[Description("Single Instance Storage (SIS) в Windows Storage Server")]
+					IO_REPARSE_TAG_SIS = 0x80000007U,
+
+					/// <summary>Метаданные формата образа диска Windows Imaging Format, используемого в последних релизах ОС Windows.</summary>
+					[Description("Метаданные формата образа диска Windows Imaging Format")]
+					IO_REPARSE_TAG_WIM = 0x80000008U,
+					/// <summary>Cluster Shared Volumes Windows Server 2008 R2 технология, позволяющая иметь диск, доступный на чтение и запись всем нодам, входящим в кластер системы виртуализации Hyper-V.</summary>
+					[Description("Cluster Shared Volumes")]
+					IO_REPARSE_TAG_CSV = 0x80000009U,
+					/// <summary>Distributed File System (DFS) компонент Microsoft Windows, использующийся для упрощения доступа и управления файлами, физически распределёнными по сети.
+					/// Used by the DFS filter. The DFS is described in the Distributed File System (DFS): Referral Protocol Specification [MS-DFSC]. Server-side interpretation only, not meaningful over the wire.</summary>
+					[Description("Distributed File System (DFS)")]
+					IO_REPARSE_TAG_DFS = 0x8000000AU,
+					/// <summary>Used by filter manager test harness.</summary>
+					IO_REPARSE_TAG_FILTER_MANAGER = 0x8000000BU,
+					/// <summary>Точки повторной обработки, использующиеся в Internet Information Services(?)</summary>
+					[Description("Точки повторной обработки Internet Information Services")]
+					IO_REPARSE_TAG_IIS_CACHE = 0xA0000010U,
+					/// <summary>Used by the DFS filter. The DFS is described in [MS-DFSC]. Server-side interpretation only, not meaningful over the wire.</summary>
+					IO_REPARSE_TAG_DFSR = 0x80000012U,
+
+					/// <summary>Used for symbolic link support. See section 2.1.2.4.
+					/// Символьная ссылка - специальный файл в файловой системе, для которого не формируются никакие данные, кроме одной текстовой строки с указателем.
+					/// Эта строка трактуется как путь к файлу, который должен быть открыт при попытке обратиться к данной ссылке (файлу).
+					/// Символьная ссылка занимает ровно столько места в файловой системе, сколько требуется для записи её содержимого (нормальный файл занимает как минимум один блок раздела).
+					/// В отличие от жёстких ссылок, могут указывать на файлы и директории в других томах.
+					/// Целью ссылки может быть любой объект — например, другая ссылка, файл, папка, или даже несуществующий файл (в последнем случае при попытке открыть его должно выдаваться сообщение об отсутствии файла).
+					/// Ссылка, указывающая на несуществующий файл, называется висячей.
+					/// Практически символьные ссылки используются для более удобной организации структуры файлов на компьютере, так как позволяют одному файлу или каталогу иметь несколько имён, различных атрибутов и свободны от некоторых ограничений, присущих жёстким ссылкам (последние действуют только в пределах одного раздела и не могут ссылаться на каталоги).</summary>
+					[Description("Символьная ссылка")]
+					IO_REPARSE_TAG_SYMLINK = 0xA000000CU,
+
+					// Used by the Network File System (NFS) component. Server-side interpretation only, not meaningful over the wire.
+					[Description("Network File System (NFS)")]
+					IO_REPARSE_TAG_NFS = 0x80000014U,
+					IO_REPARSE_TAG_APPXSTRM = 0xC0000014U,
+					IO_REPARSE_TAG_DFM = 0x80000016U,
+					[Description("Linux symlink)")]
+					IO_REPARSE_TAG_LX_SYMLINK = 0xA000001DU,
+					IO_REPARSE_TAG_HFS = 0x8000001EU,
+					/// <summary>deduplicated</summary>
+					IO_REPARSE_TAG_DEDUP = 0x80000013U,
+					IO_REPARSE_TAG_FILE_PLACEHOLDER = 0x80000015U,
+					IO_REPARSE_TAG_WOF = 0x80000017U,
+					/// <summary>Windows container</summary>
+					[Description("Windows container")]
+					IO_REPARSE_TAG_WCI = 0x80000018U,
+					IO_REPARSE_TAG_GLOBAL_REPARSE = 0x80000019U,
+					// IO_REPARSE_TAG_FILE_PLACEHOLDER),
+					// IO_REPARSE_TAG_APPEXECLINK),
+					// IO_REPARSE_TAG_WCI_TOMBSTONE),
+					// IO_REPARSE_TAG_UNHANDLED),
+					// IO_REPARSE_TAG_ONEDRIVE),
+					// IO_REPARSE_TAG_GVFS_TOMBSTONE),
+					IO_REPARSE_TAG_GVFS = 0x9000001CU,
+					IO_REPARSE_TAG_CLOUD = 0x9000001AU,
+					IO_REPARSE_TAG_CLOUD_1 = 0x9000101AU,
+					// { =&h9000201A, "IO_REPARSE_TAG_CLOUD_2" },
+					// { =&h9000301A, "IO_REPARSE_TAG_CLOUD_3" },
+					// { =&h9000401A, "IO_REPARSE_TAG_CLOUD_4" },
+					// { =&h9000501A, "IO_REPARSE_TAG_CLOUD_5" },
+					// { =&h9000601A, "IO_REPARSE_TAG_CLOUD_6" },
+					// { =&h9000701A, "IO_REPARSE_TAG_CLOUD_7" },
+					// { =&h9000801A, "IO_REPARSE_TAG_CLOUD_8" },
+					// { =&h9000901A, "IO_REPARSE_TAG_CLOUD_9" },
+					// { =&h9000A01A, "IO_REPARSE_TAG_CLOUD_A" },
+					// { =&h9000B01A, "IO_REPARSE_TAG_CLOUD_B" },
+					// { =&h9000C01A, "IO_REPARSE_TAG_CLOUD_C" },
+					// { =&h9000D01A, "IO_REPARSE_TAG_CLOUD_D" },
+					// { =&h9000E01A, "IO_REPARSE_TAG_CLOUD_E" },
+					// { =&h9000F01A, "IO_REPARSE_TAG_CLOUD_F" },
+
+
+					IsReparseTagMicrosoft = 0x80000000U,
+					TagIsReparseTagNameSurrogate = 0x20000000U
+					// IO_REPARSE_TAG_VALID_VALUES = 0xF000FFFFui
+				}
+
+
+				/// <summary>Provides access to NTFS Symlinks or Junction Points in .Net.</summary>
+				internal partial class ReparsePoint
+				{
+
+					#region The reparse tags
+					/// <summary>The reparse tags are a DWORD. The 32 bits are laid [In,Out]as follows:
+					/// The reparse tags are a DWORD. The 32 bits are laid [In,Out]as follows:
+					/// 3 3 2 2 2 2 2 2 2 2 2 2 1 1 1 1 1 1 1 1 1 1
+					/// 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+					/// +-+-+-+-+-----------------------+-------------------------------+
+					/// |M|R|N|R|     Reserved bits     |       Reparse Tag Value       |
+					/// +-+-+-+-+-----------------------+-------------------------------+
+					/// M Is the Microsoft bit. When set to 1, it denotes a tag owned by Microsoft.
+					/// All ISVs must use a tag with a 0 in this position.
+					/// Note: If a Microsoft tag Is used by non-Microsoft software, the behavior Is Not defined.
+					/// R Is reserved.  Must be zero for non-Microsoft tags.
+					/// N Is name surrogate. When set to 1, the file represents another named entity in the system.
+					/// The M And N bits are Or-able.
+					/// </summary>
+					/// <returns></returns>
+					public static REPARSE_TAG_TYPES TagTrim(REPARSE_TAG_TYPES RTT)
+					{
+						const uint SIMPLY_TAG_MASK = 0x5FFFFFFFu;
+						uint B = (uint)RTT & SIMPLY_TAG_MASK;
+						return (REPARSE_TAG_TYPES)B;
+					}
+
+					#region The following macros check for the M And N bit values:
+					//<summary>Macro to determine whether a reparse point tag corresponds to a tag owned by Microsoft.
+					// ''#define IsReparseTagMicrosoft(_tag) (_tag) & 0x80000000)</summary>
+					// Public Shared Function TagIsReparseTagMicrosoft(_Tag As REPARSE_TAG_TYPES) As Boolean
+					// Dim bResult = (_Tag And 0x80000000UL) <> 0
+					// Return bResult
+					// End Function
+					//<summary>Macro to determine whether a reparse point tag Is a name surrogate
+					// ''#define IsReparseTagNameSurrogate(_tag) (((_tag) & 0x20000000)   \
+					// '' </summary>
+					// Public Shared Function TagIsReparseTagNameSurrogate(_Tag As REPARSE_TAG_TYPES) As Boolean
+					// Dim bResult = (_Tag And 0x20000000UL) <> 0
+					// Return bResult
+					// End Function
+					#endregion
+
+					#endregion
+
+					#region API
+
+					// '' I/O Completion Specific Access Rights.
+					// ''
+					// ''#define IO_COMPLETION_MODIFY_STATE  0x0002  
+					// ''#define IO_COMPLETION_ALL_ACCESS (STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE|0x3) 
+					// ''
+					// '' Object Manager Symbolic Link Specific Access Rights.
+					// ''
+					// ''#define DUPLICATE_CLOSE_SOURCE      0x00000001  
+					// ''#define DUPLICATE_SAME_ACCESS       0x00000002  
+
+
+
+					//<summary>The file or directory is not a reparse point.</summary>
+					// Private Const ERROR_NOT_A_REPARSE_POINT = 4390I
+					//<summary>The reparse point attribute cannot be set because it conflicts with an existing attribute.</summary>
+					// Private Const ERROR_REPARSE_ATTRIBUTE_CONFLICT = 4391I
+					//<summary>The data present in the reparse point buffer is invalid.</summary>
+					// Private Const ERROR_INVALID_REPARSE_DATA = 4392I
+					//<summary>The tag present in the reparse point buffer is invalid.</summary>
+					// Private Const ERROR_REPARSE_TAG_INVALID = 4393I
+					//<summary>There is a mismatch between the tag specified in the request and the tag present in the reparse point.</summary>
+					// Private Const ERROR_REPARSE_TAG_MISMATCH = 4394I
+
+					/// <summary>Maximum allowed size of the reparse data.</summary>
+					public const uint MAXIMUM_REPARSE_DATA_BUFFER_SIZE = 16 * 1024;
+					private const string NON_INTERPRETED_PATH_PREFIX = @"\??\";
+					private const string VOLUME_MOUNT_POINT = NON_INTERPRETED_PATH_PREFIX + "Volume";
+
+					[StructLayout(LayoutKind.Sequential)]
+					private partial struct REPARSE_GUID_DATA_BUFFER
+					{
+						public REPARSE_TAG_TYPES ReparseTag;
+						public ushort ReparseDataLength;
+						public ushort Reserved;
+						public ushort SubstituteNameOffset;
+						public ushort SubstituteNameLength;
+						public ushort PrintNameOffset;
+						public ushort PrintNameLength;
+
+						/// <summary>Contains the SubstituteName and the PrintName. The SubstituteName is the path of the target directory.</summary>
+						[MarshalAs(UnmanagedType.ByValArray, SizeConst = CHAR_BUFFER_SIZE)]
+						public byte[] PathBuffer;
+						internal const int CHAR_BUFFER_SIZE = 0x3FF0;
+
+						internal static byte[] EMPTY_CHAR_BUFFER
+						{
+							get
+							{
+								var BBB = memory.WinApiMemory.CreateEmptyArray(CHAR_BUFFER_SIZE);
+								return BBB;
+							}
+						}
+
+						public static int REPARSE_DATA_BUFFER_HEADER_SIZE = (int)Marshal.OffsetOf(typeof(REPARSE_GUID_DATA_BUFFER), "SubstituteNameOffset");
+
+						public enum FSCTL_COMMANDS : uint
+						{
+							//<summary>Command to get the reparse point data block.</summary>
+							FSCTL_GET_REPARSE_POINT = 0x900A8U,
+							/// <summary>Command to set the reparse point data block.</summary>
+							FSCTL_SET_REPARSE_POINT = 0x900A4U,
+							/// <summary>Command to delete the reparse point data base.</summary>
+							FSCTL_DELETE_REPARSE_POINT = 0x900ACU
+						}
+
+						[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+						public static extern bool DeviceIoControl(IntPtr hDevice, FSCTL_COMMANDS dwIoControlCode, ref REPARSE_GUID_DATA_BUFFER InBuffer, int nInBufferSize, IntPtr OutBuffer, int nOutBufferSize, ref int pBytesReturned, IntPtr lpOverlapped);
+
+						[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+						public static extern bool DeviceIoControl(IntPtr hDevice, FSCTL_COMMANDS dwIoControlCode, IntPtr InBuffer, int nInBufferSize, ref REPARSE_GUID_DATA_BUFFER OutBuffer, int nOutBufferSize, ref int pBytesReturned, IntPtr lpOverlapped);
+					}
+
+					private static Microsoft.Win32.SafeHandles.SafeFileHandle OpenReparsePoint(string reparsePoint, NativeFileAccess accessMode)
+					{
+						var reparsePointHandle = CreateFileAsSafeFileHandle(reparsePoint,
+							accessMode,
+							FileShare.Read | FileShare.Write | FileShare.Delete,
+							IntPtr.Zero,
+							FileMode.Open,
+							NativeFileFlags.FILE_FLAG_BACKUP_SEMANTICS | NativeFileFlags.FILE_FLAG_OPEN_REPARSE_POINT,
+							IntPtr.Zero);
+						var WEX = new errors.Win32ExceptionEx();
+						WEX.eThrowIfNot(0);
+						return reparsePointHandle;
+					}
+
+					public enum SYM_LINK_FLAG : int
+					{
+						/// <summary>The link target is a file.</summary>
+						SYMBOLIC_LINK_FLAG_FILE = 0,
+						/// <summary>The link target is a directory.</summary>
+						SYMBOLIC_LINK_FLAG_DIRECTORY = 0x1
+					}
+					/// <summary>Creates a symbolic link.</summary>
+					/// <param name="lpSymlinkFileName">The symbolic link to be created.</param>
+					/// <param name="lpTargetFileName">The name of the target for the symbolic link to be created. If lpTargetFileName has a device name associated with it, the link is treated as an absolute link; otherwise, the link is treated as a relative link.</param>
+					/// <remarks>Symbolic links can either be absolute or relative links. Absolute links are links that specify each portion of the path name; relative links are determined relative to where relative–link specifiers are in a specified path. Relative links are specified using the following conventions:</remarks>
+					[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+					private static extern bool CreateSymbolicLink(string lpSymlinkFileName, string lpTargetFileName, SYM_LINK_FLAG dwFlags);
+
+
+
+					#endregion
+
+					#region Properties
+					public readonly string Path = String.Empty;
+					public readonly string Target = String.Empty;
+
+					/// <summary>Note that if the symlink target path contains any ..s these are not normalised but returned as is.</summary>
+					public string TargetAbsolute
+					{
+						get
+						{
+							if (Target.eIsNullOrWhiteSpace()) return "";
+
+							var sAbsolute = Target;
+
+							switch (TagValue)
+							{
+								case REPARSE_TAG_TYPES.IO_REPARSE_TAG_SYMLINK:
+									{
+										if (sAbsolute.StartsWith(NON_INTERPRETED_PATH_PREFIX)) sAbsolute = Target.Substring(NON_INTERPRETED_PATH_PREFIX.Length);
+										// Symlinks can be relative.
+										if (sAbsolute.Length < 2 || sAbsolute[1] != ':')
+										{
+											// it's relative, we need to tack it onto the path
+											if (sAbsolute[0] == '\\') sAbsolute = sAbsolute.Substring(1);
+											//Need to take the symlink name off the path
+											sAbsolute = Path.Substring(0, Path.LastIndexOf(@"\")) + @"\" + TargetAbsolute;
+											// Note that if the symlink target path contains any ..s these are not normalised but returned as is.
+										}
+										return sAbsolute;
+									}
+
+								case REPARSE_TAG_TYPES.IO_REPARSE_TAG_MOUNT_POINT:
+									{
+										return sAbsolute;
+									}
+
+								default: { return ""; };
+							}
+						}
+					}
+
+					public REPARSE_TAG_TYPES TagValue { get; private set; } = REPARSE_TAG_TYPES.IO_REPARSE_TAG_RESERVED_ZERO;
+
+					/// <summary>Умеем ли мы работать с такими штуками ?</summary>
+					public bool IsKnownType { get; private set; } = false;
+
+					#endregion
+
+
+					public override string ToString() => $"{TagValue}: {Path} -> {Target}";
+
+
+					#region Constructor
+					/// <summary>Takes a full path to a reparse point and finds the target.</summary>
+					/// <param name="sPath">Full path of the reparse point</param>
+					public ReparsePoint(string sPath, bool ThrowErrorOnUnknownTagType = true) : base()
+					{
+						Path = sPath;
+						var outBuffer = GetReparseData(sPath);
+						TagValue = outBuffer.ReparseTag;
+						switch (outBuffer.ReparseTag)
+						{
+							case REPARSE_TAG_TYPES.IO_REPARSE_TAG_SYMLINK:
+								{
+									// for some reason symlinks seem to have an extra two characters on the front  (0,0,0,0)
+									if (sPath.EndsWith(@"\")) sPath = sPath.Substring(0, sPath.Length - 1);
+									Target = Encoding.Unicode.GetString(outBuffer.PathBuffer, outBuffer.SubstituteNameOffset + 4, outBuffer.SubstituteNameLength);
+									IsKnownType = true;
+									break;
+								}
+
+							case REPARSE_TAG_TYPES.IO_REPARSE_TAG_MOUNT_POINT:
+								{
+									Target = Encoding.Unicode.GetString(outBuffer.PathBuffer, outBuffer.SubstituteNameOffset, outBuffer.SubstituteNameLength);
+
+									// This could be a junction or a mounted drive - a mounted drive starts with "\??\X:\"
+									// Dim PrintName = System.Text.Encoding.Unicode.GetString(outBuffer.PathBuffer, outBuffer.PrintNameOffset, outBuffer.PrintNameLength)
+									bool bIsMountPt = Target.ToLower().StartsWith(VOLUME_MOUNT_POINT.ToLower());
+									if (bIsMountPt)
+										Target = Target.Substring(VOLUME_MOUNT_POINT.Length);
+									else
+									{
+										// JunctionPoint
+									}
+									IsKnownType = true;
+									break;
+								}
+
+							default:
+								{
+#if DEBUG
+									//var AAA = outBuffer.PathBuffer.eDumpHex()
+									//Dim uiTag = TagTrim(Me.TagValue)
+									//Dim sFlags = Me.TagValue.ExtEnum_SplitToFlagsAsStrings
+
+#endif
+									if (ThrowErrorOnUnknownTagType) throw new IOException($"Unknown REPARSE_TAG: {TagValue}");
+									// Debug.Assert(outBuffer.ReparseTag = REPARSE_GUID_DATA_BUFFER.TAG_TYPES.IO_REPARSE_TAG_SYMLINK OrElse outBuffer.ReparseTag = REPARSE_GUID_DATA_BUFFER.TAG_TYPES.IO_REPARSE_TAG_MOUNT_POINT, "Unrecognised reparse tag")
+
+									break;
+								}
+						}
+
+						if (!IsKnownType) return;
+						//if (!sPath.StartsWith(NonInterpretedPathPrefix))
+						{
+							if (Target!.StartsWith(NON_INTERPRETED_PATH_PREFIX)) Target = Target.Substring(NON_INTERPRETED_PATH_PREFIX.Length);
+						}
+
+
+						// Remove any final slash for consistency
+						while (Target.EndsWith(@"\")) Target = Target.TrimEnd('\\');
+
+						// If (Not String.IsNullOrEmpty(printString)) Then
+						// _NormalisedTarget = printString
+						// Else
+						// if not we can use the substring with a bit of tweaking
+						// _NormalisedTarget = subsString
+						// Debug.Assert(_NormalisedTarget.Length > 2, "Target string too short")
+						// Debug.Assert(
+						// (_NormalisedTarget.StartsWith("\??\") AndAlso (_NormalisedTarget(5) = ":" OrElse _NormalisedTarget.StartsWith("\??\Volume")) OrElse
+						// (Not _NormalisedTarget.StartsWith("\??\") AndAlso _NormalisedTarget(1)<>":")), "Malformed subsString")
+						//  Junction points must be absolute
+						// Debug.Assert(
+						// buffer.ReparseTag = IO_REPARSE_TAG_SYMLINK OrElse
+						// _NormalisedTarget.StartsWith("\??\Volume") OrElse
+						// _NormalisedTarget(1) = ":", "Relative junction point")
+						// If (_NormalisedTarget.StartsWith("\??\")) Then
+						// _NormalisedTarget = _NormalisedTarget.Substring(4)
+						// End If
+						// End If
+						// _ActualTarget = _NormalisedTarget
+
+
+					}
+
+					private static REPARSE_GUID_DATA_BUFFER GetReparseData(string path)
+					{
+						Debug.Assert(path.eIsNotNullOrWhiteSpace() && path.Length > 2 && Convert.ToString(path[1]) == ":" && Convert.ToString(path[2]) == @"\");
+						security.PRIVELEGE_NAMES.SeBackupPrivilege.eAdjustProcessPrivilegeAndCloseToken();
+
+						// Open the file and get its handle
+						using var hFile = CreateFileAsSafeFileHandle(path,
+							NativeFileAccess.GenericRead,
+							FileShare.None,
+							IntPtr.Zero,
+							FileMode.Open,
+							NativeFileFlags.FILE_FLAG_OPEN_REPARSE_POINT | NativeFileFlags.FILE_FLAG_BACKUP_SEMANTICS,
+							IntPtr.Zero);
+						(!hFile.IsInvalid).eThrowLastWin32Exception_AssertFalse("CreateFile");
+						var outBuffer = new REPARSE_GUID_DATA_BUFFER();
+						int outBufferSize = Marshal.SizeOf(typeof(REPARSE_GUID_DATA_BUFFER));
+						var bytesReturned = 0;
+						bool bSuccess = REPARSE_GUID_DATA_BUFFER.DeviceIoControl(
+							hFile.DangerousGetHandle(),
+							REPARSE_GUID_DATA_BUFFER.FSCTL_COMMANDS.FSCTL_GET_REPARSE_POINT,
+							IntPtr.Zero,
+							0,
+							ref outBuffer,
+							outBufferSize,
+							ref bytesReturned,
+							IntPtr.Zero);
+						bSuccess.eThrowLastWin32Exception_AssertFalse("DeviceIoControl");
+						return outBuffer;
+					}
+					#endregion
+
+
+
+
+
+					public enum NewTagType : int
+					{
+						[Description("Неизвестный")]
+						None = 0,
+
+						/// <summary>В файловой системе NTFS (начиная с Windows NT4[1]) поддерживаются жёсткие ссылки. Жёсткая ссылка может создаваться только в пределах одного логического раздела и только для файлов. В операционных системах Windows нет возможности создать жесткую ссылку на директорию. Однако похожего эффекта можно добиться используя NTFS junction point.</summary>
+						[Description("Точка монтирования диска")]
+						MountPoint = 1,
+
+						/// <summary>Символьная ссылка - специальный файл в файловой системе, для которого не формируются никакие данные, кроме одной текстовой строки с указателем. Эта строка трактуется как путь к файлу, который должен быть открыт при попытке обратиться к данной ссылке (файлу). Символьная ссылка занимает ровно столько места в файловой системе, сколько требуется для записи её содержимого (нормальный файл занимает как минимум один блок раздела).
+						/// В отличие от жёстких ссылок, могут указывать на файлы и директории в других томах
+						/// Целью ссылки может быть любой объект — например, другая ссылка, файл, папка, или даже несуществующий файл (в последнем случае при попытке открыть его должно выдаваться сообщение об отсутствии файла). Ссылка, указывающая на несуществующий файл, называется висячей.
+						/// Практически символьные ссылки используются для более удобной организации структуры файлов на компьютере, так как позволяют одному файлу или каталогу иметь несколько имён, различных атрибутов и свободны от некоторых ограничений, присущих жёстким ссылкам (последние действуют только в пределах одного раздела и не могут ссылаться на каталоги).</summary>
+						[Description("Символическая ссылка")]
+						SymbolicLink = 2,
+
+
+						/// <summary>Точка соединения ТОЛЬКО ДЛЯ ПАПОК!. Для файлов надо использовать HardLink (Жёсткая ссылка)</summary>
+						[Description("Точка соединения")]
+						JunctionPoint = 3
+					}
+
+
+					/// <summary>Creates a junction point from the specified directory to the specified target directory.</summary>
+					/// <remarks>Only works on NTFS. (https://msdn.microsoft.com/en-us/library/aa365006%28v=vs.85%29.aspx)</remarks>
+					/// <param name="LocationPath">The junction point path</param>
+					/// <param name="TargetPath">The target file or directory</param>
+					/// <param name="overwrite">If true overwrites an existing reparse point or empty directory</param>
+					/// <exception cref="IOException">Thrown when the junction point could not be created or when an existing directory was found and <paramref name="overwrite" /> if false</exception>
+					public static void Create(string LocationPath, string TargetPath, NewTagType eTagType, bool overwrite)
+					{
+						TargetPath = System.IO.Path.GetFullPath(TargetPath);
+						bool bTargetIsDirectory = shell.PathIsDirectory(TargetPath);
+						switch (eTagType)
+						{
+							case NewTagType.JunctionPoint:
+								{
+									if (!bTargetIsDirectory) throw new Exception("JunctionPoint Valid Only For Directories! For Files use HardLinks instead.");
+									if (!Directory.Exists(TargetPath)) errors.ThrowWin23Error(errors.Win32Errors.ERROR_FILE_NOT_FOUND);
+									if (Directory.Exists(LocationPath))
+									{
+										if (!overwrite) throw new IOException($"Directory '{LocationPath}' already exists and '{nameof(overwrite)}'={overwrite}.");
+									}
+									else Directory.CreateDirectory(LocationPath);
+
+									string S1 = NON_INTERPRETED_PATH_PREFIX + TargetPath;
+									string S2 = TargetPath;
+									string SSS = S1 + '\0' + S2;
+									var aTargetDirBytes = Encoding.Unicode.GetBytes(SSS);
+									using var hReparsePoint = OpenReparsePoint(LocationPath, NativeFileAccess.GenericWrite);
+									try
+									{
+										var InBuffer = new REPARSE_GUID_DATA_BUFFER();
+										{
+											//var withBlock = InBuffer;
+											InBuffer.ReparseTag = REPARSE_TAG_TYPES.IO_REPARSE_TAG_MOUNT_POINT;
+											InBuffer.SubstituteNameOffset = 0;
+											InBuffer.SubstituteNameLength = (ushort)(S1.Length * 2);
+											InBuffer.PrintNameOffset = (ushort)(InBuffer.SubstituteNameOffset + InBuffer.SubstituteNameLength + 2);
+											InBuffer.PrintNameLength = (ushort)(S2.Length * 2);
+											InBuffer.PathBuffer = REPARSE_GUID_DATA_BUFFER.EMPTY_CHAR_BUFFER;
+											Array.Copy(aTargetDirBytes, 0, InBuffer.PathBuffer, 0, aTargetDirBytes.Length);
+											InBuffer.ReparseDataLength = (ushort)(InBuffer.SubstituteNameLength + InBuffer.PrintNameLength + 12);
+										}
+
+										int dwBytesToSet = InBuffer.ReparseDataLength + REPARSE_GUID_DATA_BUFFER.REPARSE_DATA_BUFFER_HEADER_SIZE;
+										int bytesReturned = 0;
+										bool result = REPARSE_GUID_DATA_BUFFER.DeviceIoControl(
+											hReparsePoint.DangerousGetHandle(),
+											REPARSE_GUID_DATA_BUFFER.FSCTL_COMMANDS.FSCTL_SET_REPARSE_POINT,
+											ref InBuffer,
+											dwBytesToSet,
+											IntPtr.Zero,
+											0,
+											ref bytesReturned,
+											IntPtr.Zero);
+
+										result.eThrowLastWin32Exception_AssertFalse("DeviceIoControl");
+									}
+									finally { hReparsePoint.Close(); }
+									break;
+								}
+
+							case NewTagType.SymbolicLink: // Символьная ссылка
+								{
+									var SFF = bTargetIsDirectory ? SYM_LINK_FLAG.SYMBOLIC_LINK_FLAG_DIRECTORY : SYM_LINK_FLAG.SYMBOLIC_LINK_FLAG_FILE;
+									bool bResult = CreateSymbolicLink(LocationPath, TargetPath, SFF);
+									bResult.eThrowLastWin32Exception_AssertFalse("CreateSymbolicLink");
+									break;
+								}
+
+							default:
+								throw new NotImplementedException();
+						}
+					}
+
+					#region Delete
+
+
+					//<summary>
+					// '' Deletes a junction point at the specified source directory along with the directory itself.
+					// '' Does nothing if the junction point does not exist.
+					// '' </summary>
+					// '' <remarks>
+					// '' Only works on NTFS.
+					// '' </remarks>
+					// '' <param name="junctionPoint">The junction point path</param>
+					// public  shared   sub  Delete(string junctionPoint)
+					// {
+					// If (!Directory.Exists(junctionPoint)) Then
+					// {
+					// If (File.Exists(junctionPoint)) Then
+					// Throw New IOException("Path is not a junction point.")
+
+					// Return
+					// }
+
+					// using (SafeFileHandle handle = OpenReparsePoint(junctionPoint, EFileAccess.GenericWrite))
+					// {
+					// REPARSE_DATA_BUFFER(reparseDataBuffer = New REPARSE_DATA_BUFFER())
+
+					// reparseDataBuffer.ReparseTag = IO_REPARSE_TAG_MOUNT_POINT
+					// reparseDataBuffer.ReparseDataLength = 0
+					// reparseDataBuffer.PathBuffer = new byte<0x3ff0> 
+
+					// int(inBufferSize = Marshal.SizeOf(reparseDataBuffer))
+					// IntPtr(inBuffer = Marshal.AllocHGlobal(inBufferSize))
+					// Try
+					// {
+					// Marshal.StructureToPtr(reparseDataBuffer, inBuffer, False)
+
+					// int(bytesReturned)
+					// bool result = DeviceIoControl(handle.DangerousGetHandle(), FSCTL_DELETE_REPARSE_POINT,
+					// inBuffer, 8, IntPtr.Zero, 0, [In,Out]bytesReturned, IntPtr.Zero) 
+
+					// If (!result) Then
+					// ThrowLastWin32Error("Unable to delete junction point.")
+					// }
+					// finally
+					// {
+					// Marshal.FreeHGlobal(inBuffer)
+					// }
+
+					// Try
+					// {
+					// Directory.Delete(junctionPoint)
+					// }
+					// catch (IOException ex)
+					// {
+					// Throw New IOException("Unable to delete junction point.", ex)
+					// }
+					// }
+					// }
+					#endregion
+
+					#region Exists
+
+
+					//<summary>
+					// '' Determines whether the specified path exists and refers to a junction point.
+					// '' </summary>
+					// '' <param name="path">The junction point path</param>
+					// '' <returns>True if the specified path represents a junction point</returns>
+					// '' <exception cref="IOException">Thrown if the specified path is invalid
+					// '' or some other error occurs</exception>
+					// public  shared  bool Exists(string path)
+					// {
+					// If (!Directory.Exists(path)) Then
+					// Return False
+
+					// using (SafeFileHandle handle = OpenReparsePoint(path, EFileAccess.GenericRead))
+					// {
+					// string target = InternalGetTarget(handle) 
+					// return target <> null 
+					// }
+					// }
+					#endregion
+
+				}
+
+				#endregion
+
+
+
+			}
+
+		}
+
+
+		/// <summary>Win32 Security API</summary>
+		internal static partial class security
+		{
+			#region Privilege Names
+			internal enum PRIVELEGE_NAMES
+			{
+				SeAssignPrimaryTokenPrivilege,
+				SeAuditPrivilege,
+				SeBackupPrivilege,
+				SeChangeNotifyPrivilege,
+				SeCreateGlobalPrivilege,
+				SeCreatePagefilePrivilege,
+				SeCreatePermanentPrivilege,
+				SeCreateSymbolicLinkPrivilege,
+				SeCreateTokenPrivilege,
+				SeDebugPrivilege,
+				SeDelegateSessionUserImpersonatePrivilege,
+				SeEnableDelegationPrivilege,
+				SeImpersonatePrivilege,
+				SeIncreaseBasePriorityPrivilege,
+				SeIncreaseQuotaPrivilege,
+				SeIncreaseWorkingSetPrivilege,
+				SeLoadDriverPrivilege,
+				SeLockMemoryPrivilege,
+				SeMachineAccountPrivilege,
+				SeManageVolumePrivilege,
+				SeProfileSingleProcessPrivilege,
+				SeRelabelPrivilege,
+				SeRemoteShutdownPrivilege,
+				SeRestorePrivilege,
+				SeSecurityPrivilege,
+				SeShutdownPrivilege,
+				SeSyncAgentPrivilege,
+				SeSystemEnvironmentPrivilege,
+				SeSystemProfilePrivilege,
+				SeSystemtimePrivilege,
+				SeTakeOwnershipPrivilege,
+				SeTcbPrivilege,
+				SeTimeZonePrivilege,
+				SeTrustedCredManAccessPrivilege,
+				SeUndockPrivilege,
+				SeUnsolicitedInputPrivilege
+			}
+			internal static class Priveleges
+			{
+				internal static readonly string SE_ASSIGNPRIMARYTOKEN_NAME = PRIVELEGE_NAMES.SeAssignPrimaryTokenPrivilege.ToString();
+				internal static readonly string SE_AUDIT_NAME = PRIVELEGE_NAMES.SeAuditPrivilege.ToString();
+				internal static readonly string SE_BACKUP_NAME = PRIVELEGE_NAMES.SeBackupPrivilege.ToString();
+				internal static readonly string SE_CHANGE_NOTIFY_NAME = PRIVELEGE_NAMES.SeChangeNotifyPrivilege.ToString();
+				internal static readonly string SE_CREATE_GLOBAL_NAME = PRIVELEGE_NAMES.SeCreateGlobalPrivilege.ToString();
+				internal static readonly string SE_CREATE_PAGEFILE_NAME = PRIVELEGE_NAMES.SeCreatePagefilePrivilege.ToString();
+				internal static readonly string SE_CREATE_PERMANENT_NAME = PRIVELEGE_NAMES.SeCreatePermanentPrivilege.ToString();
+				internal static readonly string SE_CREATE_SYMBOLIC_LINK_NAME = PRIVELEGE_NAMES.SeCreateSymbolicLinkPrivilege.ToString();
+				internal static readonly string SE_CREATE_TOKEN_NAME = PRIVELEGE_NAMES.SeCreateTokenPrivilege.ToString();
+				internal static readonly string SE_DEBUG_NAME = PRIVELEGE_NAMES.SeDebugPrivilege.ToString();
+				internal static readonly string SE_DELEGATE_SESSION_USER_IMPERSONATE_NAME = PRIVELEGE_NAMES.SeDelegateSessionUserImpersonatePrivilege.ToString();
+				internal static readonly string SE_ENABLE_DELEGATION_NAME = PRIVELEGE_NAMES.SeEnableDelegationPrivilege.ToString();
+				internal static readonly string SE_IMPERSONATE_NAME = PRIVELEGE_NAMES.SeImpersonatePrivilege.ToString();
+				internal static readonly string SE_INC_BASE_PRIORITY_NAME = PRIVELEGE_NAMES.SeIncreaseBasePriorityPrivilege.ToString();
+				internal static readonly string SE_INCREASE_QUOTA_NAME = PRIVELEGE_NAMES.SeIncreaseQuotaPrivilege.ToString();
+				internal static readonly string SE_INC_WORKING_SET_NAME = PRIVELEGE_NAMES.SeIncreaseWorkingSetPrivilege.ToString();
+				internal static readonly string SE_LOAD_DRIVER_NAME = PRIVELEGE_NAMES.SeLoadDriverPrivilege.ToString();
+				internal static readonly string SE_LOCK_MEMORY_NAME = PRIVELEGE_NAMES.SeLockMemoryPrivilege.ToString();
+				internal static readonly string SE_MACHINE_ACCOUNT_NAME = PRIVELEGE_NAMES.SeMachineAccountPrivilege.ToString();
+				internal static readonly string SE_MANAGE_VOLUME_NAME = PRIVELEGE_NAMES.SeManageVolumePrivilege.ToString();
+				internal static readonly string SE_PROF_SINGLE_PROCESS_NAME = PRIVELEGE_NAMES.SeProfileSingleProcessPrivilege.ToString();
+				internal static readonly string SE_RELABEL_NAME = PRIVELEGE_NAMES.SeRelabelPrivilege.ToString();
+				internal static readonly string SE_REMOTE_SHUTDOWN_NAME = PRIVELEGE_NAMES.SeRemoteShutdownPrivilege.ToString();
+				internal static readonly string SE_RESTORE_NAME = PRIVELEGE_NAMES.SeRestorePrivilege.ToString();
+				internal static readonly string SE_SECURITY_NAME = PRIVELEGE_NAMES.SeSecurityPrivilege.ToString();
+				internal static readonly string SE_SHUTDOWN_NAME = PRIVELEGE_NAMES.SeShutdownPrivilege.ToString();
+				internal static readonly string SE_SYNC_AGENT_NAME = PRIVELEGE_NAMES.SeSyncAgentPrivilege.ToString();
+				internal static readonly string SE_SYSTEM_ENVIRONMENT_NAME = PRIVELEGE_NAMES.SeSystemEnvironmentPrivilege.ToString();
+				internal static readonly string SE_SYSTEM_PROFILE_NAME = PRIVELEGE_NAMES.SeSystemProfilePrivilege.ToString();
+				internal static readonly string SE_SYSTEMTIME_NAME = PRIVELEGE_NAMES.SeSystemtimePrivilege.ToString();
+				internal static readonly string SE_TAKE_OWNERSHIP_NAME = PRIVELEGE_NAMES.SeTakeOwnershipPrivilege.ToString();
+				internal static readonly string SE_TCB_NAME = PRIVELEGE_NAMES.SeTcbPrivilege.ToString();
+				internal static readonly string SE_TIME_ZONE_NAME = PRIVELEGE_NAMES.SeTimeZonePrivilege.ToString();
+				internal static readonly string SE_TRUSTED_CREDMAN_ACCESS_NAME = PRIVELEGE_NAMES.SeTrustedCredManAccessPrivilege.ToString();
+				internal static readonly string SE_UNDOCK_NAME = PRIVELEGE_NAMES.SeUndockPrivilege.ToString();
+				internal static readonly string SE_UNSOLICITED_INPUT_NAME = PRIVELEGE_NAMES.SeUnsolicitedInputPrivilege.ToString();
+			}
+			#endregion
+
+			#region TokenPrivileges
+			public const uint SE_PRIVILEGE_ENABLED = 0x2;
+			// Public Const TOKEN_ADJUST_PRIVILEGES As UInteger = 0x20
+
+			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto, Pack = 1)]
+			public partial struct LUID
+			{
+				public uint LowPart;
+				public int HighPart;
+			}
+
+			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto, Pack = 1)]
+			public partial struct LUID_AND_ATTRIBUTES
+			{
+				public LUID Luid;
+				public uint Attributes;
+			}
+
+			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto, Pack = 1)]
+			public partial struct TOKEN_PRIVILEGES
+			{
+				public uint PrivilegeCount;
+				[MarshalAs(UnmanagedType.ByValArray, SizeConst = 1)]
+				public LUID_AND_ATTRIBUTES[] Privileges;
+
+				public TOKEN_PRIVILEGES(LUID_AND_ATTRIBUTES[] ap)
+				{
+					PrivilegeCount = (uint)ap.Length;
+					Privileges = ap;
+				}
+			}
+
+			#region OpenProcessToken
+
+			//  Token Specific Access Rights
+
+			// Public Const STANDARD_RIGHTS_REQUIRED As UInt32 = 0xF0000
+			// Public Const STANDARD_RIGHTS_READ As UInt32 = 0x20000
+			// Public Const TOKEN_ASSIGN_PRIMARY As UInt32 = 1
+			// Public Const TOKEN_DUPLICATE As UInt32 = 2
+			// Public Const TOKEN_IMPERSONATE As UInt32 = 4
+			// Public Const TOKEN_QUERY As UInt32 = 8
+			// Public Const TOKEN_QUERY_SOURCE As UInt32 = 0x10
+			// Public Const TOKEN_ADJUST_PRIVILEGES As UInt32 = 0x20
+			// Public Const TOKEN_ADJUST_GROUPS As UInt32 = 0x40
+			// Public Const TOKEN_ADJUST_DEFAULT As UInt32 = 0x80
+			// Public Const TOKEN_ADJUST_SESSIONID As UInt32 = 0x100
+			// Public Const TOKEN_READ As UInt32 = (STANDARD_RIGHTS_READ Or TOKEN_QUERY)
+			// Public Const TOKEN_ALL_ACCESS As UInt32 = (STANDARD_RIGHTS_REQUIRED Or TOKEN_ASSIGN_PRIMARY Or TOKEN_DUPLICATE Or
+			// TOKEN_IMPERSONATE Or TOKEN_QUERY Or TOKEN_QUERY_SOURCE Or
+			// TOKEN_ADJUST_PRIVILEGES Or TOKEN_ADJUST_GROUPS Or TOKEN_ADJUST_DEFAULT Or
+			// TOKEN_ADJUST_SESSIONID)
+
+
+
+			/// <summary>The OpenProcessToken function opens the access token associated with a process.</summary>
+			/// <param name="ProcessHandle">A handle to the process whose access token is opened. The process must have the PROCESS_QUERY_INFORMATION access permission.</param>
+			/// <param name="DesiredAccess">Specifies an access mask that specifies the requested types of access to the access token. These requested access types are compared with the discretionary access control list (DACL) of the token to determine which accesses are granted or denied.</param>
+			/// <param name="TokenHandle">A pointer to a handle that identifies the newly opened access token when the function returns.</param>
+			/// <returns>If the function succeeds, the return value is nonzero.If the function fails, the return value is zero. To get extended error information, call GetLastError.</returns>
+			/// <remarks>Close the access token handle returned through the TokenHandle parameter by calling CloseHandle.</remarks>
+			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[SecurityCritical]
+			private static extern bool OpenProcessToken(
+				[In] IntPtr ProcessHandle,
+				[In] TokenAccessLevels DesiredAccess,
+				[In, Out] ref IntPtr TokenHandle);
+
+
+			/// <summary>The OpenProcessToken function opens the access token associated with a process.</summary>
+			/// <param name="ProcessHandle">A handle to the process whose access token is opened. The process must have the PROCESS_QUERY_INFORMATION access permission.</param>
+			/// <param name="DesiredAccess">Specifies an access mask that specifies the requested types of access to the access token. These requested access types are compared with the discretionary access control list (DACL) of the token to determine which accesses are granted or denied.</param>
+			[SecurityCritical]
+			public static Microsoft.Win32.SafeHandles.SafeFileHandle OpenProcessToken(IntPtr ProcessHandle, TokenAccessLevels DesiredAccess)
+			{
+				var ProcessToken = IntPtr.Zero;
+				bool bResult = OpenProcessToken(ProcessHandle, DesiredAccess, ref ProcessToken);
+				if (!bResult)
+					errors.ThrowLastWin23Error("OpenProcessToken");
+
+				var rProcessToken = new Microsoft.Win32.SafeHandles.SafeFileHandle(ProcessToken, true);
+				return rProcessToken;
+			}
+
+			/// <summary>Open Token for Current Process</summary>
+			[SecurityCritical]
+			public static Microsoft.Win32.SafeHandles.SafeFileHandle OpenCurrentProcessToken(TokenAccessLevels DesiredAccess)
+			{
+				var hProcess = uom.WinAPI.process.GetCurrentProcess();
+				return OpenProcessToken(hProcess, DesiredAccess);
+			}
+
+			#endregion
+
+
+			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[SecurityCritical]
+			private static extern bool LookupPrivilegeDisplayName(
+				[In, MarshalAs(UnmanagedType.LPTStr)] string? lpSystemName,
+				[In, MarshalAs(UnmanagedType.LPTStr)] string lpName,
+				[In, Out, MarshalAs(UnmanagedType.LPTStr)] StringBuilder? lpDisplayName,
+				[In, Out] ref int cchDisplayName,
+				[In, Out] ref int lpLanguageId);
+
+			[SecurityCritical]
+			public static (string PrivilegeDisplayName, int LanguageId) LookupPrivilegeDisplayName(PRIVELEGE_NAMES pn, string? systemName = null)
+			{
+				//First get the buffer sizes for string
+				int cchDisplayName = 0;
+				int lpLanguageId = 0;
+				string spn = pn.ToString();
+				var bResult = LookupPrivilegeDisplayName(systemName, spn, null, ref cchDisplayName, ref lpLanguageId);
+				if (!bResult) WinAPI.errors.ThrowLastWin23ErrorAssert(errors.Win32Errors.ERROR_INSUFFICIENT_BUFFER);
+
+				//Get the value to buffer
+				StringBuilder sbDisplayName = new(cchDisplayName + 1);
+				bResult = LookupPrivilegeDisplayName(systemName, spn, sbDisplayName, ref cchDisplayName, ref lpLanguageId);
+				if (!bResult) WinAPI.errors.ThrowLastWin23ErrorAssert(errors.Win32Errors.ERROR_INSUFFICIENT_BUFFER);
+
+				return (sbDisplayName.ToString(), lpLanguageId);
+			}
+
+
+			/// <summary>retrieves the locally unique identifier (LUID) used on a specified system to locally represent the specified privilege name.</summary>
+			/// <param name="lpSystemName">A pointer to a null-terminated string that specifies the name of the system on which the privilege name is retrieved. If a null string is specified, the function attempts to find the privilege name on the local system.</param>
+			/// <param name="lpName">A pointer to a null-terminated string that specifies the name of the privilege, as defined in the Winnt.h header file. For example, this parameter could specify the constant, SE_SECURITY_NAME, or its corresponding string, "SeSecurityPrivilege".</param>
+			/// <param name="lpLuid"></param>            
+			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			[SecurityCritical]
+			public static extern bool LookupPrivilegeValue(
+				[In, MarshalAs(UnmanagedType.LPTStr)] string? lpSystemName,
+				[In] string lpName,
+				[In, Out] ref LUID lpLuid);
+
+			[SecurityCritical]
+			public static LUID LookupPrivilegeValue(string pn, string? systemName = null)
+			{
+				LUID Luid = new();
+				LookupPrivilegeValue(systemName, pn, ref Luid).eThrowLastWin32Exception_AssertFalse("LookupPrivilegeValue");
+				return Luid;
+			}
+
+			[SecurityCritical]
+			public static LUID LookupPrivilegeValue(PRIVELEGE_NAMES epn, string? systemName = null)
+				=> LookupPrivilegeValue(epn.ToString(), systemName);
+
+
+
+			[SecurityCritical]
+			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
+			public static extern bool AdjustTokenPrivileges(
+				IntPtr TokenHandle,
+				[MarshalAs(UnmanagedType.Bool)] bool DisableAllPrivileges,
+				ref TOKEN_PRIVILEGES NewState,
+				int BufferLength,
+				IntPtr PreviousState,
+				IntPtr ReturnLength);
+
+
+			/// <returns>processToken</returns>
+			[SecurityCritical]
+			public static SafeFileHandle AdjustProcessPrivilege(PRIVELEGE_NAMES pn)
+				=> AdjustProcessPrivilege(pn.ToString());
+
+			/// <returns>processToken</returns>
+			[SecurityCritical]
+			public static SafeFileHandle AdjustProcessPrivilege(string pn)
+			{
+				//using SafeFileHandle ProcessToken = OpenCurrentProcessToken(TokenAccessLevels.Query | TokenAccessLevels.AdjustPrivileges);
+				SafeFileHandle processToken = OpenCurrentProcessToken(TokenAccessLevels.Query | TokenAccessLevels.AdjustPrivileges);
+				LUID luid = LookupPrivilegeValue(pn);
+				LUID_AND_ATTRIBUTES[] P = new LUID_AND_ATTRIBUTES[1];
+				P[0].Luid = luid;
+				P[0].Attributes = SE_PRIVILEGE_ENABLED;
+				TOKEN_PRIVILEGES tokenPrivileges = new(P);
+				AdjustTokenPrivileges(
+					processToken.DangerousGetHandle(),
+					false,
+					ref tokenPrivileges,
+					Marshal.SizeOf(tokenPrivileges),
+					IntPtr.Zero,
+					IntPtr.Zero)
+					.eThrowLastWin32Exception_AssertFalse("AdjustTokenPrivileges");
+
+				return processToken;
+			}
+
+			[SecurityCritical]
+			public static void AdjustProcessPrivilegeAndCloseToken(PRIVELEGE_NAMES pn)
+			{
+				using SafeFileHandle token = AdjustProcessPrivilege(pn);
+			}
+
+			#endregion
+
+			/// <summary>The TOKEN_INFORMATION_CLASS enumeration type contains values that specify the type of information being assigned to or retrieved from an access token.</summary>
+			internal enum TOKEN_INFORMATION_CLASS : int
+			{
+				TokenUser = 1,
+				TokenGroups,
+				TokenPrivileges,
+				TokenOwner,
+				TokenPrimaryGroup,
+				TokenDefaultDacl,
+				TokenSource,
+				TokenType,
+				TokenImpersonationLevel,
+				TokenStatistics,
+				TokenRestrictedSids,
+				TokenSessionId,
+				TokenGroupsAndPrivileges,
+				TokenSessionReference,
+				TokenSandBoxInert,
+				TokenAuditPolicy,
+				TokenOrigin,
+				TokenElevationType,
+				TokenLinkedToken,
+				TokenElevation,
+				TokenHasRestrictions,
+				TokenAccessInformation,
+				TokenVirtualizationAllowed,
+				TokenVirtualizationEnabled,
+				TokenIntegrityLevel,
+				TokenUIAccess,
+				TokenMandatoryPolicy,
+				TokenLogonSid,
+				TokenIsAppContainer,
+				TokenCapabilities,
+				TokenAppContainerSid,
+				TokenAppContainerNumber,
+				TokenUserClaimAttributes,
+				TokenDeviceClaimAttributes,
+				TokenRestrictedUserClaimAttributes,
+				TokenRestrictedDeviceClaimAttributes,
+				TokenDeviceGroups,
+				TokenRestrictedDeviceGroups,
+				TokenSecurityAttributes,
+				TokenIsRestricted,
+				TokenProcessTrustLevel,
+				TokenPrivateNameSpace,
+				TokenSingletonAttributes,
+				TokenBnoIsolation,
+				TokenChildProcessFlags,
+				TokenIsLessPrivilegedAppContainer,
+				TokenIsSandboxed,
+				MaxTokenInfoClass
+			}
+
+
+			/// <summary>The WELL_KNOWN_SID_TYPE enumeration type is a list of commonly used security identifiers (SIDs). Programs can pass these values to the CreateWellKnownSid function to create a SID from this list.</summary>
+			internal enum WELL_KNOWN_SID_TYPE
+			{
+				WinNullSid = 0,
+				WinWorldSid = 1,
+				WinLocalSid = 2,
+				WinCreatorOwnerSid = 3,
+				WinCreatorGroupSid = 4,
+				WinCreatorOwnerServerSid = 5,
+				WinCreatorGroupServerSid = 6,
+				WinNtAuthoritySid = 7,
+				WinDialupSid = 8,
+				WinNetworkSid = 9,
+				WinBatchSid = 10,
+				WinInteractiveSid = 11,
+				WinServiceSid = 12,
+				WinAnonymousSid = 13,
+				WinProxySid = 14,
+				WinEnterpriseControllersSid = 15,
+				WinSelfSid = 16,
+				WinAuthenticatedUserSid = 17,
+				WinRestrictedCodeSid = 18,
+				WinTerminalServerSid = 19,
+				WinRemoteLogonIdSid = 20,
+				WinLogonIdsSid = 21,
+				WinLocalSystemSid = 22,
+				WinLocalServiceSid = 23,
+				WinNetworkServiceSid = 24,
+				WinBuiltinDomainSid = 25,
+				WinBuiltinAdministratorsSid = 26,
+				WinBuiltinUsersSid = 27,
+				WinBuiltinGuestsSid = 28,
+				WinBuiltinPowerUsersSid = 29,
+				WinBuiltinAccountOperatorsSid = 30,
+				WinBuiltinSystemOperatorsSid = 31,
+				WinBuiltinPrintOperatorsSid = 32,
+				WinBuiltinBackupOperatorsSid = 33,
+				WinBuiltinReplicatorSid = 34,
+				WinBuiltinPreWindows2000CompatibleAccessSid = 35,
+				WinBuiltinRemoteDesktopUsersSid = 36,
+				WinBuiltinNetworkConfigurationOperatorsSid = 37,
+				WinAccountAdministratorSid = 38,
+				WinAccountGuestSid = 39,
+				WinAccountKrbtgtSid = 40,
+				WinAccountDomainAdminsSid = 41,
+				WinAccountDomainUsersSid = 42,
+				WinAccountDomainGuestsSid = 43,
+				WinAccountComputersSid = 44,
+				WinAccountControllersSid = 45,
+				WinAccountCertAdminsSid = 46,
+				WinAccountSchemaAdminsSid = 47,
+				WinAccountEnterpriseAdminsSid = 48,
+				WinAccountPolicyAdminsSid = 49,
+				WinAccountRasAndIasServersSid = 50,
+				WinNTLMAuthenticationSid = 51,
+				WinDigestAuthenticationSid = 52,
+				WinSChannelAuthenticationSid = 53,
+				WinThisOrganizationSid = 54,
+				WinOtherOrganizationSid = 55,
+				WinBuiltinIncomingForestTrustBuildersSid = 56,
+				WinBuiltinPerfMonitoringUsersSid = 57,
+				WinBuiltinPerfLoggingUsersSid = 58,
+				WinBuiltinAuthorizationAccessSid = 59,
+				WinBuiltinTerminalServerLicenseServersSid = 60,
+				WinBuiltinDCOMUsersSid = 61,
+				WinBuiltinIUsersSid = 62,
+				WinIUserSid = 63,
+				WinBuiltinCryptoOperatorsSid = 64,
+				WinUntrustedLabelSid = 65,
+				WinLowLabelSid = 66,
+				WinMediumLabelSid = 67,
+				WinHighLabelSid = 68,
+				WinSystemLabelSid = 69,
+				WinWriteRestrictedCodeSid = 70,
+				WinCreatorOwnerRightsSid = 71,
+				WinCacheablePrincipalsGroupSid = 72,
+				WinNonCacheablePrincipalsGroupSid = 73,
+				WinEnterpriseReadonlyControllersSid = 74,
+				WinAccountReadonlyControllersSid = 75,
+				WinBuiltinEventLogReadersGroup = 76,
+				WinNewEnterpriseReadonlyControllersSid = 77,
+				WinBuiltinCertSvcDComAccessGroup = 78
+			}
+
+
+			/// <summary>The SECURITY_IMPERSONATION_LEVEL enumeration type contains values that specify security impersonation levels. Security impersonation levels govern the degree to which a server process can act on behalf of a client process.</summary>
+			internal enum SECURITY_IMPERSONATION_LEVEL
+			{
+				SecurityAnonymous = 0,
+				SecurityIdentification,
+				SecurityImpersonation,
+				SecurityDelegation
+			}
+
+
+			/// <summary>The TOKEN_ELEVATION_TYPE enumeration indicates the elevation type of token
+			/// when UAC is turned off, elevation type always returns TokenElevationTypeDefault
+			/// </summary>
+			internal enum TOKEN_ELEVATION_TYPE : Int32
+			{
+				/// <summary>Токен не имеет связанного токена (UAC is turned off)</summary>
+				TokenElevationTypeDefault = 1,
+
+				/// <summaryс повышенными правами.</summary>
+				TokenElevationTypeFull,
+
+				/// <summary>ограниченный токен.</summary>
+				TokenElevationTypeLimited
+			}
+
+
+			/// <summary>The structure represents a security identifier (SID) and its attributes.
+			/// SIDs are used to uniquely identify users or groups.</summary>
+			[StructLayout(LayoutKind.Sequential)]
+			internal partial struct SID_AND_ATTRIBUTES
+			{
+				public IntPtr Sid;
+				public int Attributes;
+			}
+
+
+			/// <summary>The structure indicates whether a token has elevated privileges.</summary>
+			[StructLayout(LayoutKind.Sequential)]
+			internal partial struct TOKEN_ELEVATION
+			{
+				public int TokenIsElevated;
+			}
+
+
+			/// <summary>The structure specifies the mandatory integrity level for a token.</summary>
+			[StructLayout(LayoutKind.Sequential)]
+			internal partial struct TOKEN_MANDATORY_LABEL
+			{
+				public SID_AND_ATTRIBUTES Label;
+			}
+
+
+			/// <summary>integrity level of the process. Integrity level is only available on Windows Vista and newer operating systems, thus 
+			/// GetProcessIntegrityLevel throws a C++ exception if it is called on systems prior to Windows Vista.</summary>
+			public enum IntegrityLevels : int
+			{
+				ERROR = -1,
+
+				/// <summary>SECURITY_MANDATORY_UNTRUSTED_RID - means untrusted level. It is used by processes started by the Anonymous group. Blocks most write access. (SID: S-1-16-0x0)</summary>
+				SECURITY_MANDATORY_UNTRUSTED_RID = 0,
+
+				/// <summary>SECURITY_MANDATORY_LOW_RID - means low integrity level. It is used by Protected Mode Internet Explorer. Blocks write acess to most objects (such as files and registry keys) on the system. (SID: S-1-16-0x1000)</summary>
+				SECURITY_MANDATORY_LOW_RID = 0x1000,
+
+				/// <summary>SECURITY_MANDATORY_MEDIUM_RID - means medium integrity level. It is used by normal applications being launched while UAC is enabled. (SID: S-1-16-0x2000)</summary>
+				SECURITY_MANDATORY_MEDIUM_RID = 0x2000,
+
+				/// <summary>SECURITY_MANDATORY_HIGH_RID - means high integrity level. It is used by administrative applications launched through elevation when UAC is enabled, or normal applications if UAC is disabled and the user is an administrator. (SID: S-1-16-0x3000)</summary>
+				SECURITY_MANDATORY_HIGH_RID = 0x3000,
+
+				/// <summary>SECURITY_MANDATORY_SYSTEM_RID - means system integrity level. It is used by services and other system-level applications (such as Wininit, Winlogon, Smss, etc.)  (SID: S-1-16-0x4000)</summary>
+				SECURITY_MANDATORY_SYSTEM_RID = 0x4000
+			}
+
+
+
+
+
+
+			/// <summary>The DuplicateToken function creates an impersonation token, 
+			/// which you can use in functions such as SetThreadToken and ImpersonateLoggedOnUser. 
+			/// The token created by DuplicateToken cannot be used in the CreateProcessAsUser function, which requires a primary token. 
+			/// To create a token that you can pass to CreateProcessAsUser, use the DuplicateTokenEx function.</summary>
+			/// <param name="ExistingTokenHandle">A handle to an access token opened with TOKEN_DUPLICATE access.</param>
+			/// <param name="ImpersonationLevel">Specifies a SECURITY_IMPERSONATION_LEVEL enumerated type that supplies the impersonation level of the new token.</param>
+			/// <param name="DuplicateTokenHandle">Outputs a handle to the duplicate token. </param>
+			[DllImport(core.WINDLL_ADVAPI32, CharSet = CharSet.Auto, SetLastError = true)]
+			[SecurityCritical]
+			internal static extern bool DuplicateToken(
+				Microsoft.Win32.SafeHandles.SafeFileHandle ExistingTokenHandle,
+				SECURITY_IMPERSONATION_LEVEL ImpersonationLevel,
+				[In, Out] ref Microsoft.Win32.SafeHandles.SafeFileHandle DuplicateTokenHandle);
+
+			/// <summary>The DuplicateToken function creates an impersonation token, 
+			/// which you can use in functions such as SetThreadToken and ImpersonateLoggedOnUser. 
+			/// The token created by DuplicateToken cannot be used in the CreateProcessAsUser function, which requires a primary token. 
+			/// To create a token that you can pass to CreateProcessAsUser, use the DuplicateTokenEx function.</summary>
+			/// <param name="ExistingTokenHandle">A handle to an access token opened with TOKEN_DUPLICATE access.</param>
+			/// <param name="ImpersonationLevel">Specifies a SECURITY_IMPERSONATION_LEVEL enumerated type that supplies the impersonation level of the new token.</param>
+			internal static Microsoft.Win32.SafeHandles.SafeFileHandle DuplicateToken(Microsoft.Win32.SafeHandles.SafeFileHandle ExistingTokenHandle, SECURITY_IMPERSONATION_LEVEL ImpersonationLevel)
+			{
+				//var hToken2 = IntPtr.Zero;
+				//WinAPI.security.DuplicateToken(hToken, WinAPI.security.SECURITY_IMPERSONATION_LEVEL.SecurityIdentification, ref hToken2).eThrowLastWin32Exception_AssertFalse();
+				//hTokenToCheck = new(hToken2, true);
+
+				Microsoft.Win32.SafeHandles.SafeFileHandle hToken2 = new(IntPtr.Zero, true);
+				DuplicateToken(ExistingTokenHandle, SECURITY_IMPERSONATION_LEVEL.SecurityIdentification, ref hToken2).eThrowLastWin32Exception_AssertFalse();
+				return hToken2;
+			}
+
+
+			/// <summary>The function retrieves a specified type of information about an access token. The calling process must have appropriate access rightsto obtain the information.</summary>
+			/// <param name="hToken">A handle to an access token from which information is retrieved.</param>
+			/// <param name="tokenInfoClass">Specifies a value from the TOKEN_INFORMATION_CLASS enumerated type to identify the type of information the function retrieves.</param>
+			/// <param name="pTokenInfo">A pointer to a buffer the function fills with the requested information.</param>
+			/// <param name="tokenInfoLength">Specifies the size, in bytes, of the buffer pointed to by the TokenInformation parameter.</param>
+			/// <param name="returnLength">A pointer to a variable that receives the number of bytes needed for the buffer pointed to by the TokenInformation parameter.</param>
+			[DllImport(core.WINDLL_ADVAPI32, CharSet = CharSet.Auto, SetLastError = true), SecurityCritical]
+			public static extern bool GetTokenInformation(
+				Microsoft.Win32.SafeHandles.SafeFileHandle hToken,
+				TOKEN_INFORMATION_CLASS tokenInfoClass,
+				IntPtr pTokenInfo,
+				int tokenInfoLength,
+				[In, Out] ref int returnLength);
+
+
+			[DllImport(core.WINDLL_ADVAPI32, EntryPoint = "GetTokenInformation", CharSet = CharSet.Auto, SetLastError = true), SecurityCritical]
+			public static extern bool GetTokenInformation_Int32(
+				Microsoft.Win32.SafeHandles.SafeFileHandle hToken,
+				TOKEN_INFORMATION_CLASS tokenInfoClass,
+				[In, Out] ref Int32 pTokenInfo,
+				int tokenInfoLength,
+				[In, Out] ref int returnLength);
+
+			/// <summary>Determine token type: limited, elevated, or default. </summary>
+			internal static TOKEN_ELEVATION_TYPE GetTokenInformation_Elevation(Microsoft.Win32.SafeHandles.SafeFileHandle hToken)
+			{
+				Int32 iElevationType = 0; int cbSize = sizeof(Int32);
+				GetTokenInformation_Int32(hToken, TOKEN_INFORMATION_CLASS.TokenElevationType, ref iElevationType, cbSize, ref cbSize).eThrowLastWin32Exception_AssertFalse();
+				var eElevationType = (WinAPI.security.TOKEN_ELEVATION_TYPE)iElevationType;// Marshal the TOKEN_ELEVATION_TYPE enum from native to .NET.
+				return eElevationType;
+			}
+
+			[DllImport(core.WINDLL_ADVAPI32, EntryPoint = "GetTokenInformation", CharSet = CharSet.Auto, SetLastError = true), SecurityCritical]
+			public static extern bool GetTokenInformation_IntPtr(
+			 Microsoft.Win32.SafeHandles.SafeFileHandle hToken,
+			  TOKEN_INFORMATION_CLASS tokenInfoClass,
+			  [In, Out] ref IntPtr pTokenInfo,
+			  int tokenInfoLength,
+			  [In, Out] ref int returnLength);
+
+
+			/// <summary>The function returns a pointer to a specified subauthority in a security identifier (SID). The subauthority value is a relative identifier (RID).</summary>
+			/// <param name="pSid">A pointer to the SID structure from which a pointer to a subauthorityis to be returned.</param>
+			/// <param name="nSubAuthority">Specifies an index value identifying the subauthority array element whose address the function will return.</param>
+			/// <returns>If the function succeeds, the return value is a pointer to the specified SID subauthority. To get extended error information, call
+			/// GetLastError. If the function fails, the return value is undefined.
+			/// The function fails if the specified SID structure is not valid or if 
+			/// the index value specified by the nSubAuthority parameter is [Out ] of
+			/// bounds. 
+			/// </returns>
+			[DllImport(core.WINDLL_ADVAPI32, CharSet = CharSet.Auto, SetLastError = true)]
+			[SecurityCritical]
+			public static extern IntPtr GetSidSubAuthority(IntPtr pSid, uint nSubAuthority);
+		}
+
+
+
+
+		/// <summary>Win32 Windows UI API</summary>
+		internal static partial class windows
 		{
 			public static readonly IntPtr HWND_DESKTOP = new(0);
 
@@ -25650,6 +29936,13 @@ return cItems;
 				[In] int wParam,
 				[In, MarshalAs(UnmanagedType.LPTStr)] string? lParam);
 
+			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern IntPtr SendMessage(
+				[In] IntPtr hwnd,
+				[In, MarshalAs(UnmanagedType.I4)] WindowMessages wMsg,
+				[In] int wParam,
+				[In] int lParam);
+
 
 			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
 			internal static extern IntPtr SendMessage(
@@ -25800,38 +30093,32 @@ return cItems;
 			#endregion
 
 
-
-
-
-
-
-
-
 			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern IntPtr GetDesktopWindow();
+			public static extern IntPtr GetDesktopWindow();
 
 
+			[DllImport(WinAPI.core.WINDLL_USER, CharSet = CharSet.Auto, SetLastError = true, ExactSpelling = true)]
+			public static extern int GetDpiForWindow(
+				[In] IntPtr hWnd);
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+			/// <summary>
+			/// Used when system uses High DPI modes since Windows 8.1 <see href="https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows"/>
+			/// <br/>
+			/// For this to work correctly on Windows 10 anniversary, you need to add dpiAwareness to app.manifest of your project:
+			/// </summary>
+			/// <returns>
+			/// 1.25 = 125%<br/>
+			/// 1.5 = 150%
+			/// </returns>
+			public static float GetHighDPIScaleFactor(IntPtr windowHandle)
+			{
+				try
+				{
+					return GetDpiForWindow(windowHandle) / (float)uom.OS.DEFAULT_SCREEN_DPI;
+				}
+				catch { return 1f; }// Or fallback to GDI solutions above
+			}
 
 
 			internal enum WindowStyles : int
@@ -25866,13 +30153,62 @@ return cItems;
 
 
 			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern bool SetForegroundWindow([In] IntPtr hWnd);
+			internal static extern bool SetForegroundWindow(
+				[In] IntPtr hWnd);
 
 
+			internal enum LockCodes : uint
+			{
+				/// <summary>Disables calls to SetForegroundWindow.</summary>
+				LSFW_LOCK = 1,
+
+				/// <summary>Enables calls to SetForegroundWindow.</summary>
+				LSFW_UNLOCK = 2
+			}
+			/// <summary>The foreground process can call the LockSetForegroundWindow function to disable calls to the SetForegroundWindow function.</summary>
+			/// <param name="uLockCode"></param>
+			/// <returns>
+			/// If the function succeeds, the return value is nonzero.
+			/// If the function fails, the return value is zero.To get extended error information, call GetLastError.
+			/// </returns>
+			/// <remarks>
+			/// The system automatically enables calls to SetForegroundWindow if the user presses the ALT key or takes some action that causes the system itself to change the foreground window (for example, clicking a background window).
+			/// This function is provided so applications can prevent other applications from making a foreground change that can interrupt its interaction with the user.			
+			/// </remarks>
+			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool LockSetForegroundWindow(
+				[In] LockCodes uLockCode);
+
+
+			/// <summary>Enables the specified process to set the foreground window using the SetForegroundWindow function. The calling process must already be able to set the foreground window. For more information, see Remarks later in this topic.</summary>
+			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool AllowSetForegroundWindow(
+				[In] int dwProcessId);
+
+
+
+
+			internal enum ShowWindowCommands : int
+			{
+				SW_HIDE = 0,//	Скрывает окно и активирует другое окно.
+				SW_SHOWNORMAL = 1,
+				SW_NORMAL = 1,//	Активирует и отображает окно. Если окно свернуто, развернуто или упорядочено, система восстанавливает его исходный размер и положение. Приложение должно указать этот флаг при первом отображении окна.
+				SW_SHOWMINIMIZED = 2,   //Активирует окно и отображает его как свернутое окно.
+				SW_SHOWMAXIMIZED = 3,
+				SW_MAXIMIZE = 3,//	Активирует окно и отображает его в виде развернутого окна.
+				SW_SHOWNOACTIVATE = 4, //Отображает окно с последним размером и положением. Это значение похоже на SW_SHOWNORMAL, за исключением того, что окно не активировано.
+				SW_SHOW = 5,//Активирует окно и отображает его в текущем размере и положении.
+				SW_MINIMIZE = 6,//Свертывание указанного окна и активация следующего окна верхнего уровня в порядке Z.
+				SW_SHOWMINNOACTIVE = 7,//Отображает окно в виде свернутого окна. Это значение похоже на SW_SHOWMINIMIZED, за исключением того, что окно не активировано.
+				SW_SHOWNA = 8,//Отображает окно в его текущем размере и положении. Это значение похоже на SW_SHOW, за исключением того, что окно не активировано.
+				SW_RESTORE = 9,//Активирует и отображает окно. Если окно свернуто, развернуто или упорядочено, система восстанавливает его исходный размер и положение. Приложение должно указать этот флаг при восстановлении свернутого окна.
+				SW_SHOWDEFAULT = 10,//Задает состояние отображения на основе значения SW_, указанного в структуре STARTUPINFO, переданной в функцию CreateProcess программой, которая запустила приложение.
+				SW_FORCEMINIMIZE = 11//Свертывание окна, даже если поток, которому принадлежит окно, не отвечает. Этот флаг следует использовать только при минимизации окон из другого потока.
+			}
 			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
 			internal static extern bool ShowWindow(
 				[In] IntPtr handle,
-				[In] int nCmdShow);
+				[In] ShowWindowCommands nCmdShow);
 
 
 			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
@@ -25887,8 +30223,6 @@ return cItems;
 				[In] int id);
 
 
-
-			//protected static extern int ScreenToClient(IntPtr hwnd, ref POINT pt);
 			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
 			internal static extern int ScreenToClient(
 				[In] IntPtr hwnd,
@@ -25896,34 +30230,412 @@ return cItems;
 
 
 			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			private static extern int GetClientRect(
+			private static extern bool GetClientRect(
 				[In] IntPtr hwnd,
-				[In, Out] ref System.Drawing.Rectangle rc);
+				[Out] out System.Drawing.Rectangle rc);
 
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static Rectangle GetClientRect(IntPtr hwnd)
 			{
-				Rectangle rcClient = new();
-				_ = GetClientRect(hwnd, ref rcClient);
+				if (!GetClientRect(hwnd, out Rectangle rcClient)) throw new Win32Exception();
 				return rcClient;
 			}
 
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static Rectangle GetClientRect(IWin32Window wind) => GetClientRect(wind.Handle);
 
+			[Flags]
+			internal enum SetWindowPosFlags : uint
+			{
+				/// <summary>If the calling thread and the thread that owns the window are attached to different input queues, the system posts the request to the thread that owns the window. This prevents the calling thread from blocking its execution while other threads process the request.</summary>
+				SWP_ASYNCWINDOWPOS = 0x4000,
+
+				/// <summary>Prevents generation of the WM_SYNCPAINT message.</summary>
+				SWP_DEFERERASE = 0x2000,
+
+				/// <summary>Draws a frame (defined in the window's class description) around the window.</summary>
+				SWP_DRAWFRAME = 0x0020,
+
+				/// <summary>Applies new frame styles set using the SetWindowLong function.Sends a WM_NCCALCSIZE message to the window, even if the window's size is not being changed. If this flag is not specified, WM_NCCALCSIZE is sent only when the window's size is being changed.</summary>
+				SWP_FRAMECHANGED = 0x0020,
+
+				/// <summary>Hides the window.</summary>
+				SWP_HIDEWINDOW = 0x0080,
+
+				/// <summary>Does not activate the window.If this flag is not set, the window is activated and moved to the top of either the topmost or non-topmost group (depending on the setting of the hWndInsertAfter parameter).</summary>
+				SWP_NOACTIVATE = 0x0010,
+
+				/// <summary>Discards the entire contents of the client area.If this flag is not specified, the valid contents of the client area are saved and copied back into the client area after the window is sized or repositioned.</summary>
+				SWP_NOCOPYBITS = 0x0100,
+
+				/// <summary>Retains the current position (ignores X and Y parameters).</summary>
+				SWP_NOMOVE = 0x0002,
+
+				/// <summary>Does not change the owner window's position in the Z order.</summary>
+				SWP_NOOWNERZORDER = 0x0200,
+
+				/// <summary>Does not redraw changes.If this flag is set, no repainting of any kind occurs. This applies to the client area, the nonclient area (including the title bar and scroll bars), and any part of the parent window uncovered as a result of the window being moved.When this flag is set, the application must explicitly invalidate or redraw any parts of the window and parent window that need redrawing.</summary>
+				SWP_NOREDRAW = 0x0008,
+
+				/// <summary>Same as the SWP_NOOWNERZORDER flag.</summary>
+				SWP_NOREPOSITION = 0x0200,
+
+				/// <summary>Prevents the window from receiving the WM_WINDOWPOSCHANGING message.</summary>
+				SWP_NOSENDCHANGING = 0x0400,
+
+				/// <summary>Retains the current size (ignores the cx and cy parameters).</summary>
+				SWP_NOSIZE = 0x0001,
+
+				/// <summary>Retains the current Z order (ignores the hWndInsertAfter parameter).</summary>
+				SWP_NOZORDER = 0x0004,
+
+				/// <summary>Displays the window.</summary>
+				SWP_SHOWWINDOW = 0x0040,
+			}
+
+			/// <summary></summary>
+			/// <param name="hWndInsertAfter">
+			/// HWND_BOTTOM	(HWND)1		Places the window at the bottom of the Z order.If the hWnd parameter identifies a topmost window, the window loses its topmost status and is placed at the bottom of all other windows.
+			/// HWND_NOTOPMOST(HWND)-2	Places the window above all non-topmost windows (that is, behind all topmost windows). This flag has no effect if the window is already a non-topmost window.
+			/// HWND_TOP(HWND)0			Places the window at the top of the Z order.
+			/// HWND_TOPMOST(HWND)-1	Places the window above all non-topmost windows.The window maintains its topmost position even when it is deactivated.
+			/// </param>
+			/// <param name="X"></param>
+			/// <param name="Y"></param>
+			/// <param name="cx"></param>
+			/// <param name="cy"></param>
+			/// <param name="uFlags"></param>
+			/// <returns></returns>
+			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool SetWindowPos(
+				[In] IntPtr hwnd,
+				[In, Optional] IntPtr hWndInsertAfter,
+				[In] int X,
+				[In] int Y,
+				[In] int cx,
+				[In] int cy,
+				[In] SetWindowPosFlags uFlags
+				);
 
 
+
+			/// <summary>
+			/// In conformance with conventions for the RECT structure, the bottom-right coordinates of the returned rectangle are exclusive. In other words, the pixel at (right, bottom) lies immediately outside the rectangle.
+			/// GetWindowRect is virtualized for DPI.
+			/// In Windows Vista and later, the Window Rect now includes the area occupied by the drop shadow.
+			/// Calling GetWindowRect will have different behavior depending on whether the window has ever been shown or not. If the window has not been shown before, GetWindowRect will not include the area of the drop shadow.
+			/// To get the window bounds excluding the drop shadow, use DwmGetWindowAttribute, specifying DWMWA_EXTENDED_FRAME_BOUNDS. Note that unlike the Window Rect, the DWM Extended Frame Bounds are not adjusted for DPI.Getting the extended frame bounds can only be done after the window has been shown at least once.
+			/// </summary>
+			/// <returns></returns>
+			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			private static extern bool GetWindowRect(
+				[In] IntPtr hwnd,
+				[Out] out RECT rc);
+
+			/// <inheritdoc cref="GetWindowRect" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Rectangle GetWindowRect(IntPtr hwnd)
+			{
+				if (!GetWindowRect(hwnd, out RECT rc)) throw new Win32Exception();
+				return rc.ToRectangle();
+			}
+
+
+
+
+
+
+
+			#region DwmGetWindowAttribute / DwmSetWindowAttribute
+
+
+			/// <summary>https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute</summary>
+			/// <summary>
+			///     Flags used by the <see cref="Dwmapi.DwmGetWindowAttribute" /> and <see cref="Dwmapi.DwmSetWindowAttribute" /> functions to specify window
+			///     attributes for non-client rendering.
+			/// </summary>
+			internal enum DWMWINDOWATTRIBUTE : int
+			{
+				/// <summary>
+				///     Use with<see cref="DwmGetWindowAttribute" />. Discovers whether non-client rendering is enabled. The retrieved value is of type BOOL. TRUE
+				///     if non-client rendering is enabled; otherwise, FALSE.
+				/// </summary>
+				DWMWA_NCRENDERING_ENABLED = 1,
+
+				/// <summary>
+				///     Use with <see cref="DwmSetWindowAttribute" />\. Sets the non-client rendering policy. The pvAttribute parameter points to a value from the
+				///     <see cref="DWMNCRENDERINGPOLICY" /> enumeration.
+				/// </summary>
+				DWMWA_NCRENDERING_POLICY,
+
+				/// <summary>
+				///     Use with <see cref="DwmSetWindowAttribute" />. Enables or forcibly disables DWM transitions. The pvAttribute parameter points to a value
+				///     of TRUE to disable transitions or FALSE to enable transitions.
+				/// </summary>
+				DWMWA_TRANSITIONS_FORCEDISABLED,
+
+				/// <summary>
+				///     Use with <see cref="DwmSetWindowAttribute" />. Enables content rendered in the non-client area to be visible on the frame drawn by DWM.
+				///     The pvAttribute parameter points to a value of TRUE to enable content rendered in the non-client area to be visible on the frame; otherwise, it
+				///     points to FALSE.
+				/// </summary>
+				DWMWA_ALLOW_NCPAINT,
+
+				/// <summary>
+				///     Use with <see cref="DwmGetWindowAttribute" />. Retrieves the bounds of the caption button area in the window-relative space. The retrieved
+				///     value is of type RECT.
+				/// </summary>
+				DWMWA_CAPTION_BUTTON_BOUNDS,
+
+				/// <summary>
+				///     Use with <see cref="DwmSetWindowAttribute" />. Specifies whether non-client content is right-to-left (RTL) mirrored. The pvAttribute
+				///     parameter points to a value of TRUE if the non-client content is right-to-left (RTL) mirrored; otherwise, it points to FALSE.
+				/// </summary>
+				DWMWA_NONCLIENT_RTL_LAYOUT,
+
+				/// <summary>
+				///     Use with <see cref="DwmSetWindowAttribute" /> . Forces the window to display an iconic thumbnail or peek representation (a static bitmap),
+				///     even if a live or snapshot representation of the window is available. This value normally is set during a window's creation and not changed
+				///     throughout the window's lifetime. Some scenarios, however, might require the value to change over time. The pvAttribute parameter points to a
+				///     value of TRUE to require a iconic thumbnail or peek representation; otherwise, it points to FALSE.
+				/// </summary>
+				DWMWA_FORCE_ICONIC_REPRESENTATION,
+
+				/// <summary>
+				///     Use with <see cref="DwmSetWindowAttribute" />. Sets how Flip3D treats the window. The pvAttribute parameter points to a value from the
+				///     <see cref="DWMFLIP3DWINDOWPOLICY" /> enumeration.
+				/// </summary>
+				DWMWA_FLIP3D_POLICY,
+
+				/// <summary>
+				///     Use with <see cref="DwmGetWindowAttribute" />. Retrieves the extended frame bounds rectangle in screen space. The retrieved value is of
+				///     type <see cref="RECT" />.
+				/// </summary>
+				DWMWA_EXTENDED_FRAME_BOUNDS,
+
+				/// <summary>
+				///     Use with<see cref="DwmSetWindowAttribute" />. The window will provide a bitmap for use by DWM as an iconic thumbnail or peek
+				///     representation (a static bitmap) for the window. <see cref="DWMWA_HAS_ICONIC_BITMAP" /> can be specified with
+				///     <see cref="DWMWA_FORCE_ICONIC_REPRESENTATION" />. <see cref="DWMWA_HAS_ICONIC_BITMAP" /> normally is set during a window's creation and not
+				///     changed throughout the window's lifetime. Some scenarios, however, might require the value to change over time. The pvAttribute parameter points
+				///     to a value of TRUE to inform DWM that the window will provide an iconic thumbnail or peek representation; otherwise, it points to FALSE.
+				/// </summary>
+				DWMWA_HAS_ICONIC_BITMAP,
+
+				/// <summary>
+				///     Use with <see cref="DwmSetWindowAttribute" />. Do not show peek preview for the window. The peek view shows a full-sized preview of the
+				///     window when the mouse hovers over the window's thumbnail in the taskbar. If this attribute is set, hovering the mouse pointer over the window's
+				///     thumbnail dismisses peek (in case another window in the group has a peek preview showing). The pvAttribute parameter points to a value of TRUE to
+				///     prevent peek functionality or FALSE to allow it.
+				/// </summary>
+				DWMWA_DISALLOW_PEEK,
+
+				/// <summary>
+				///     Use with <see cref="DwmSetWindowAttribute" />. Prevents a window from fading to a glass sheet when peek is invoked. The pvAttribute
+				///     parameter points to a value of TRUE to prevent the window from fading during another window's peek or FALSE for normal behavior.
+				/// </summary>
+				DWMWA_EXCLUDED_FROM_PEEK,
+
+
+				DWMWA_CLOAK,
+
+				DWMWA_CLOAKED,
+
+				DWMWA_FREEZE_REPRESENTATION,
+
+				DWMWA_PASSIVE_UPDATE_MODE,
+
+				DWMWA_USE_HOSTBACKDROPBRUSH,
+
+				DWMWA_USE_IMMERSIVE_DARK_MODE = 20,
+
+				DWMWA_WINDOW_CORNER_PREFERENCE = 33,
+
+				DWMWA_BORDER_COLOR,
+
+				DWMWA_CAPTION_COLOR,
+
+				DWMWA_TEXT_COLOR,
+
+				DWMWA_VISIBLE_FRAME_BORDER_THICKNESS,
+
+				DWMWA_SYSTEMBACKDROP_TYPE,
+
+				/// <summary>
+				///     The maximum recognized <see cref="DWMWINDOWATTRIBUTE" /> value, used for validation purposes.
+				/// </summary>
+				DWMWA_LAST
+			};
+
+
+			#region DwmGetWindowAttribute 
+
+
+			[DllImport(core.WINDLL_DWMAPI, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern int DwmGetWindowAttribute(
+				[In] IntPtr hwnd,
+				[In] DWMWINDOWATTRIBUTE dwAttribute,
+				[In, Out] IntPtr pvAttribute,
+				[In] int cbAttribute);
+
+			[DllImport(core.WINDLL_DWMAPI, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			private static extern int DwmGetWindowAttribute(
+				[In] IntPtr hwnd,
+				[In] DWMWINDOWATTRIBUTE dwAttribute,
+				[Out] out uom.WinAPI.RECT pvAttribute,
+				[In] int cbAttribute);
+
+
+
+			/// <summary>Gets window rect without shadow</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Rectangle DwmGetWindowAttribute_DWMWA_EXTENDED_FRAME_BOUNDS(IntPtr hwnd)
+			{
+				int r = DwmGetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE.DWMWA_EXTENDED_FRAME_BOUNDS, out uom.WinAPI.RECT rect, Marshal.SizeOf(typeof(uom.WinAPI.RECT)));
+				if (r != 0) Marshal.ThrowExceptionForHR(r);
+				return rect;
+			}
+
+			#endregion
+
+
+			#region DwmGetWindowAttribute 
+
+
+			[DllImport(core.WINDLL_DWMAPI, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern int DwmSetWindowAttribute(
+				[In] IntPtr hwnd,
+				[In] DWMWINDOWATTRIBUTE dwAttribute,
+				[In] IntPtr pvAttribute,
+				[In] int cbAttribute);
+
+			[DllImport(core.WINDLL_DWMAPI, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern int DwmSetWindowAttribute(
+				[In] IntPtr hwnd,
+				[In] DWMWINDOWATTRIBUTE dwAttribute,
+				[In] ref bool value,
+				[In] int cbAttribute);
+
+			[DllImport(core.WINDLL_DWMAPI, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern int DwmSetWindowAttribute(
+				[In] IntPtr hwnd,
+				[In] DWMWINDOWATTRIBUTE dwAttribute,
+				[In] ref int value,
+				[In] int cbAttribute);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void DwmSetWindowAttribute(IntPtr hwnd, DWMWINDOWATTRIBUTE dwAttribute, bool value)
+			{
+				int r = DwmSetWindowAttribute(hwnd, dwAttribute, ref value, Marshal.SizeOf(typeof(bool)));
+				if (r != 0) Marshal.ThrowExceptionForHR(r);
+			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static void DwmSetWindowAttribute_DWMWA_USE_IMMERSIVE_DARK_MODE(IntPtr hwnd, bool value)
+				=> DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE.DWMWA_USE_IMMERSIVE_DARK_MODE, value);
+
+
+
+
+
+			#endregion
+
+
+
+			#endregion
+
+
+			/// <summary>Gets window rect without shadow</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Rectangle GetWindowRectWithoutShadow(IntPtr hwnd) => DwmGetWindowAttribute_DWMWA_EXTENDED_FRAME_BOUNDS(hwnd);
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static void SetWindowRectWithoutShadow(IntPtr handle, Rectangle window)
+			{
+				Rectangle excludeshadow = GetWindowRectWithoutShadow(handle);
+				Rectangle includeshadow = GetWindowRect(handle);
+				RECT shadow = new()
+				{
+					Left = includeshadow.X - excludeshadow.X,
+					Right = includeshadow.Right - excludeshadow.Right,
+					Top = includeshadow.Top - excludeshadow.Top,
+					Bottom = includeshadow.Bottom - excludeshadow.Bottom
+				};
+
+				int width = (window.Right + shadow.Right) - (window.Left + shadow.Left);
+				int height = (window.Bottom + shadow.Bottom) - (window.Top - shadow.Top);
+
+				SetWindowPos(handle, IntPtr.Zero,
+					  window.Left + shadow.Left,
+					  window.Top + shadow.Top,
+					  width,
+					  height,
+					  0);
+			}
+
+
+
+			#region GetWindowPlacement / SetWindowPlacement
+
+			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+			internal struct WINDOWPLACEMENT
+			{
+
+				//Флаги, управляющие положением свернутого окна и методом восстановления окна.Этот элемент может быть одним или несколькими из следующих значений.
+				[Flags]
+				public enum FLAGS : uint
+				{
+					//Если вызывающий поток и поток, которому принадлежит окно, присоединены к разным входным очередям, система отправляет запрос потоку, которому принадлежит окно.Это предотвращает блокировку выполнения вызывающего потока, пока другие потоки обрабатывают запрос.
+					WPF_ASYNCWINDOWPLACEMENT = 0x0004,
+
+					//Восстановленное окно будет развернуто независимо от того, было ли развернуто до его свертывание. Этот параметр действителен только при следующем восстановлении окна. Он не изменяет поведение восстановления по умолчанию.
+					WPF_RESTORETOMAXIMIZED = 0x0002,
+
+					//Этот флаг действителен, только если для элемента showCmd указано значение SW_SHOWMINIMIZED.
+					WPF_SETMINPOSITION = 0x0001
+				}
+
+				public uint length;
+				public FLAGS flags = 0;
+				public ShowWindowCommands showCmd = 0;
+				public System.Drawing.Point ptMinPosition = new();
+				public System.Drawing.Point ptMaxPosition = new();
+				public uom.WinAPI.RECT rcNormalPosition = new();
+				public uom.WinAPI.RECT rcDevice = new();
+
+				public WINDOWPLACEMENT()
+				{
+					length = (uint)Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+				}
+			}
+
+			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
+			internal static extern bool GetWindowPlacement(
+				[In] IntPtr hWnd,
+				[Out] out WINDOWPLACEMENT lpwndpl);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static WINDOWPLACEMENT GetWindowPlacement([In] IntPtr hWnd)
+			{
+				bool r = GetWindowPlacement(hWnd, out WINDOWPLACEMENT wp);
+				if (!r) throw new Win32Exception();
+				return wp;
+			}
 
 
 			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			private static extern int GetWindowRect(
-				[In] IntPtr hwnd,
-				[In, Out] ref RECT rc);
+			internal static extern bool SetWindowPlacement(
+				[In] IntPtr hWnd,
+				[In] ref WINDOWPLACEMENT lpwndpl);
 
-			internal static Rectangle GetWindowRect(IntPtr hwnd)
-			{
-				RECT rc = new();
-				_ = GetWindowRect(hwnd, ref rc);
-				return rc.ToRectangle();
-			}
+
+			#endregion
+
+
+
+
+
 
 
 			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
@@ -25931,6 +30643,9 @@ return cItems;
 				[In] IntPtr hwnd,
 				[In] int x, [In] int y, [In] int nWidth, [In] int nHeight,
 				[In] bool bRepaint);
+
+
+			#region WindowText Get/Set, GetClassName 
 
 
 			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
@@ -25943,6 +30658,8 @@ return cItems;
 				[In, Out, MarshalAs(UnmanagedType.LPTStr)] StringBuilder lpString,
 				[In, Out] int nMaxCount);
 
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string GetWindowText(IntPtr hwnd)
 			{
 				int lenght = GetWindowTextLength(hwnd);
@@ -25955,6 +30672,7 @@ return cItems;
 					: string.Empty;
 			}
 
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string GetWindowText(IWin32Window wnd) => GetWindowText(wnd.Handle);
 
 			[DllImport(core.WINDLL_USER, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
@@ -25969,25 +30687,21 @@ return cItems;
 				[In, Out, MarshalAs(UnmanagedType.LPTStr)] StringBuilder lpString,
 				[In, Out] int nMaxCount);
 
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string GetClassName(IntPtr hwnd)
 			{
 				StringBuilder sb = new(1024);
-				int lenght = GetClassName(hwnd, sb, sb.Capacity);
-				return (lenght > 0)
+				int len = GetClassName(hwnd, sb, sb.Capacity);
+				return (len > 0)
 					? sb.ToString()
 					: string.Empty;
 			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string GetClassName(IWin32Window wnd) => GetClassName(wnd.Handle);
 
 
-
-
-
-
-
-
-
-
+			#endregion
 
 
 
@@ -26000,2889 +30714,9 @@ return cItems;
 		}
 
 
-		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-		internal static partial class GDI
-		{
 
-			internal class DC : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid
-			{
-				[DllImport(core.WINDLL_USER)]
-				private static extern IntPtr GetDC([In] IntPtr hwnd);
-
-				[DllImport(core.WINDLL_USER)]
-				private static extern bool ReleaseDC([In] IntPtr hwnd, [In] IntPtr hdc);
-
-				internal IntPtr hWnd = IntPtr.Zero;
-
-				public DC(IntPtr WindowHandle) : base(true)
-				{
-					var hdc = GetDC(WindowHandle);
-					if (hdc == IntPtr.Zero) throw new Win32Exception();
-					hWnd = WindowHandle;
-					SetHandle(hdc);
-				}
-
-				public DC(IWin32Window Window) : this(Window.Handle) { }
-
-				protected override bool ReleaseHandle()
-				{
-					if (IsInvalid) return true;
-					bool bResult = ReleaseDC(hWnd, handle);
-					SetHandle(IntPtr.Zero);
-					return bResult;
-				}
-
-				public Graphics CreateGraphics() => Graphics.FromHdc(DangerousGetHandle());
-			}
-
-
-
-
-
-
-
-		}
-
-
-		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-		internal static partial class IO
-		{
-
-			internal const int MAX_PATH = 260;
-
-			/// <summary>This prefix indicates to NTFS that the path is to be treated as a non-interpretedpath in the virtual file system.</summary>
-			internal const string UNC_PATH_PREFIX = @"\\?\";
-			// Public Const LONG_PATH_PREFIX As String = "\??\"
-
-
-			/// <summary>Use System.Runtime.InteropServices.ComTypes.FILETIME instead</summary>
-			[Obsolete("Use System.Runtime.InteropServices.ComTypes.FILETIME instead")]
-			[StructLayout(LayoutKind.Sequential)]
-			internal partial struct FILETIME
-			{
-				public int dwLowDateTime;
-				public int dwHighDateTime;
-			}
-
-			[StructLayout(LayoutKind.Sequential)]
-			internal partial struct SYSTEMTIME
-			{
-				public short wYear;
-				public short wMonth;
-				public short wDayOfWeek;
-				public short wDay;
-				public short wHour;
-				public short wMinute;
-				public short wSecond;
-				public short wMilliseconds;
-			}
-
-
-			/// <summary>Переполнится, когда они код отработает 585 миллиардов лет.
-			/// При гибернации не сбрасывается!</summary>
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			internal static extern ulong GetTickCount64();
-
-
-			public static DateTime SystemTimeToDate(ref SYSTEMTIME stx, bool Localize = false)
-			{
-				var st = default(SYSTEMTIME);
-				var ft = default(System.Runtime.InteropServices.ComTypes.FILETIME);
-				// Windows NT/2000 *ONLY* Shortcut:
-				// Using NULL for lpTimeZoneInformation converts SYSTEMTIME structure from UTC to currently active time zone with call
-				// to SystemTimeToTzSpecificLocalTime
-				// If Localize Then
-				// Call SystemTimeToTzSpecificLocalTime(ByVal 0&, stx, st)
-
-				if (Localize)
-				{
-					// Convert to FILETIME, localize, then convert back to SYSTEMTIME.
-					_ = SystemTimeToFileTime(ref stx, ref ft);
-					_ = FileTimeToLocalFileTime(ref ft, ref ft);
-					_ = FileTimeToSystemTime(ref ft, ref st);
-				}
-				else
-				{
-					// Structures can't be passed byval; make copy.  :-(
-					st = stx;
-				}
-				// Convert to VB-style date (double).
-				return new DateTime(st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-			}
-
-
-
-
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			public static extern int FileTimeToLocalFileTime(
-				[In] ref System.Runtime.InteropServices.ComTypes.FILETIME lpFileTime,
-				[In, Out] ref System.Runtime.InteropServices.ComTypes.FILETIME lpLocalFileTime);
-
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			public static extern int FileTimeToSystemTime(
-				[In] ref System.Runtime.InteropServices.ComTypes.FILETIME lpFileTime,
-				[In, Out] ref SYSTEMTIME lpSystemTime);
-
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			public static extern int SystemTimeToFileTime(
-				[In] ref SYSTEMTIME lpSystemTime,
-				[In, Out] ref System.Runtime.InteropServices.ComTypes.FILETIME lpFileTime);
-
-			#region Files
-
-			#region GetFileType
-			[Flags()]
-			public enum FileTypes : int
-			{
-				/// <summary>The specified file is a character file, typically an LPT device or a console.</summary>
-				ILE_TYPE_CHAR = 0x2,
-				/// <summary>The specified file is a disk file.</summary>
-				FILE_TYPE_DISK = 0x1,
-				/// <summary>The specified file is a socket, a named pipe, or an anonymous pipe.</summary>
-				FILE_TYPE_PIPE = 0x3,
-				/// <summary>Unused.</summary>
-				FILE_TYPE_REMOTE = 0x8000,
-				/// <summary>Either the type of the specified file is unknown, or the function failed.</summary>
-				FILE_TYPE_UNKNOWN = 0x0
-			}
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			public static extern FileTypes GetFileType(Microsoft.Win32.SafeHandles.SafeFileHandle handle);
-			#endregion
-
-			#region CreateFile
-			[Flags()]
-			public enum NativeFileFlags : uint
-			{
-				OPEN_EXISTING = 3,
-				FILE_SHARE_READ = 0x1,
-				FILE_SHARE_WRITE = 0x2,
-				FILE_ATTRIBUTE_NORMAL = 0x80,
-				OpenNoRecall = 0x100000,
-				PosixSemantics = 0x1000000,
-				DeleteOnClose = 0x4000000,
-				SequentialScan = 0x8000000,
-				RandomAccess = 0x10000000,
-				NoBuffering = 0x20000000,
-				Overlapped = 0x40000000,
-				WriteThrough = 0x80000000,
-				FILE_FLAG_BACKUP_SEMANTICS = 0x2000000,
-				FILE_FLAG_OPEN_REPARSE_POINT = 0x200000
-			}
-
-			[Flags()]
-			public enum NativeFileAccess : uint
-			{
-				GenericRead = 0x80000000,
-				GenericWrite = 0x40000000,
-				GenericExecute = 0x20000000,
-				GenericAll = 0x10000000
-			}
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			public static extern IntPtr CreateFile([In, MarshalAs(UnmanagedType.LPTStr)] string name, [In, MarshalAs(UnmanagedType.I4)] NativeFileAccess access, [In, MarshalAs(UnmanagedType.I4)] FileShare share, [In, MarshalAs(UnmanagedType.SysInt)] IntPtr security, [In, MarshalAs(UnmanagedType.I4)] FileMode mode, [In, MarshalAs(UnmanagedType.I4)] NativeFileFlags flags, [In, MarshalAs(UnmanagedType.SysInt)] IntPtr template);
-
-
-			[DllImport(core.WINDLL_KERNEL, EntryPoint = "CreateFile", SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileAsSafeFileHandle([In, MarshalAs(UnmanagedType.LPTStr)] string name, [In, MarshalAs(UnmanagedType.I4)] NativeFileAccess access, [In, MarshalAs(UnmanagedType.I4)] FileShare share, [In, MarshalAs(UnmanagedType.SysInt)] IntPtr security, [In, MarshalAs(UnmanagedType.I4)] FileMode mode, [In, MarshalAs(UnmanagedType.I4)] NativeFileFlags flags, [In, MarshalAs(UnmanagedType.SysInt)] IntPtr template);
-			#endregion
-
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			internal static extern bool DeleteFile(string name);
-
-
-			[Flags()]
-			public enum EFileAttributes : uint
-			{
-				FILE_ATTRIBUTE_READONLY = 0x1,    // A file that is read-only. Applications can read the file, but cannot write to it or delete it. This attribute is not honored on directories. For more information, see Online  "You cannot view or change the Read-only or the System attributes of folders in Windows Server 2003, in Windows XP, or in Windows Vista".
-				FILE_ATTRIBUTE_HIDDEN = 0x2,    // The file or directory is hidden. It is not included in an ordinary directory listing.
-				FILE_ATTRIBUTE_SYSTEM = 0x4,    // A file or directory that the operating system uses a part of, or uses exclusively.
-				FILE_ATTRIBUTE_DIRECTORY = 0x10,    // The handle that identifies a directory.
-				FILE_ATTRIBUTE_ARCHIVE = 0x20,    // A file or directory that is an archive file or directory. Applications typically use this attribute to mark files for backup or removal.
-				FILE_ATTRIBUTE_DEVICE = 0x40,    // This value is reserved for system use.
-				FILE_ATTRIBUTE_NORMAL = 0x80,    // A file that does not have other attributes set. This attribute is valid only when used alone.
-				FILE_ATTRIBUTE_TEMPORARY = 0x100,    // A file that is being used for temporary storage. File systems avoid writing data back to mass storage if sufficient cache memory is available, because typically, an application deletes a temporary file after the handle is closed. In that scenario, the system can entirely avoid writing the data. Otherwise, the data is written after the handle is closed.
-				FILE_ATTRIBUTE_SPARSE_FILE = 0x200,    // A file that is a sparse file.
-				FILE_ATTRIBUTE_REPARSE_POINT = 0x400,    // A file or directory that has an associated reparse point, or a file that is a symbolic link.
-				FILE_ATTRIBUTE_COMPRESSED = 0x800,    // A file or directory that is compressed. For a file, all of the data in the file is compressed. For a directory, compression is the default for newly created files and subdirectories.
-				FILE_ATTRIBUTE_ENCRYPTED = 0x4000,    // Afile or directory that is encrypted. For a file, all data streams in the file are encrypted. For a directory, encryption is the default for newly created files and subdirectories.
-				FILE_ATTRIBUTE_NOT_CONTENT_INDEXED = 0x2000,    // The file or directory is not to be indexed by the content indexing service.
-				FILE_ATTRIBUTE_OFFLINE = 0x1000,    // The data of a file is not available immediately. This attribute indicates that the file data is physically moved to offline storage. This attribute is used by Remote Storage, which is the hierarchical storage management software. Applications should not arbitrarily change this attribute.
-				FILE_ATTRIBUTE_VIRTUAL = 0x10000,  // This value is reserved for system use.
-
-				Write_Through = 0x80000000,
-				Overlapped = 0x40000000,
-				NoBuffering = 0x20000000,
-				RandomAccess = 0x10000000,
-				SequentialScan = 0x8000000,
-				DeleteOnClose = 0x4000000,
-				BackupSemantics = 0x2000000,
-				PosixSemantics = 0x1000000,
-				OpenReparsePoint = 0x200000,
-				OpenNoRecall = 0x100000,
-				FirstPipeInstance = 0x80000
-			}
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			internal static extern EFileAttributes GetFileAttributes(string fileName);
-
-
-			#region GetFileInformationByHandle
-			[StructLayout(LayoutKind.Sequential)]
-			internal partial struct BY_HANDLE_FILE_INFORMATION
-			{
-				public int dwFileAttributes;
-				public System.Runtime.InteropServices.ComTypes.FILETIME ftCreationTime;
-				public System.Runtime.InteropServices.ComTypes.FILETIME ftLastAccessTime;
-				public System.Runtime.InteropServices.ComTypes.FILETIME ftLastWriteTime;
-				public int dwVolumeSerialNumber;
-				public int nFileSizeHigh;
-				public int nFileSizeLow;
-				public int nNumberOfLinks;
-				public int nFileIndexHigh;
-				public int nFileIndexLow;
-			}
-
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			private static extern bool GetFileInformationByHandle(
-				IntPtr hFile,
-			   [In, Out] ref BY_HANDLE_FILE_INFORMATION lpFileInformation);
-
-
-			internal static BY_HANDLE_FILE_INFORMATION GetFileInformationByHandle(IntPtr hFile)
-			{
-				BY_HANDLE_FILE_INFORMATION BHFI = new();
-				bool bResult = GetFileInformationByHandle(hFile, ref BHFI);
-				if (!bResult) "GetFileInformationByHandle".e_ThrowLastWin32Exception();
-				return BHFI;
-			}
-
-
-			#endregion
-
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			internal static extern int GetFinalPathNameByHandle(
-				[In] IntPtr hFile,
-				[In, Out, MarshalAs(UnmanagedType.LPTStr)] StringBuilder lpszFilePath,
-				[In, Out] ref Int32 cchFilePath,
-				[In] Int32 dwFlags);
-
-
-			// < DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)> 
-			// < return: MarshalAs(UnmanagedType. bool  )> 
-			// private static extern  bool   GetFileSizeEx(SafeFileHandle handle, [Out ] LargeInteger size) 
-
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern bool ReadFile(IntPtr hFile, byte[] lpBuffer, int nNumberOfBytesToRead, ref int lpNumberOfBytesRead, IntPtr lpOverlapped);
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern bool ReadFile(IntPtr hFile, IntPtr lpBuffer, int nNumberOfBytesToRead, ref int lpNumberOfBytesRead, ref NativeOverlapped lpOverlapped);
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern bool WriteFile(IntPtr hFile, byte[] lpBuffer, int nNumberOfBytesToWrite, ref int lpNumberOfBytesWritten, IntPtr lpOverlapped);
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern bool WriteFile(IntPtr hFile, IntPtr lpBuffer, int nNumberOfBytesToWrite, ref int lpNumberOfBytesWritten, ref NativeOverlapped lpOverlapped);
-
-
-			/// <summary>Flushes the buffers of a specified file and causes all buffered data to be written to a file.</summary>
-			/// <param name="hFile">A handle to the open file.
-			/// The file handle must have the GENERIC_WRITE access right. For more information, see File Security And Access Rights.
-			/// If hFile Is a handle To a communications device, the Function only flushes the transmit buffer.
-			/// If hFile Is a handle To the server End Of a named pipe, the Function does Not Return until the client has read all buffered data from the pipe.</param>
-			/// <returns></returns>
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern bool FlushFileBuffers(IntPtr hFile);
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern bool GetOverlappedResult([In] IntPtr hFile,
-				[In] NativeOverlapped lpOverlapped,
-				[In, Out] ref int lpNumberOfBytesTransferred,
-				[In] bool bWait);
-
-			[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, CallingConvention = CallingConvention.Winapi)]
-			internal static extern bool CancelIo([In] IntPtr hFile);
-
-			#endregion
-
-
-
-			//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-			internal static class NTFS
-			{
-
-
-				#region NTFSStreamInfo
-				/// <summary>Represents the details of an alternative data stream.</summary>
-				[DebuggerDisplay("{FullPath}")]
-				internal partial class NTFSStreamInfo
-				{
-					// Implements  IEquatable(of  <NTFSStreamInfo>
-
-					public const char STREAM_SEPARATOR = ':';
-					internal const int DEFAULT_BUFFER_SIZE = 1024 * 1024;
-					public const int PATH_LIMIT = MAX_PATH - 4; // 256I
-					public const int DefaultBufferSize = 0x1000;
-					public const string FULL_STREAM_PATH_SUFFIX = @":$DATA";
-					#region Enum
-
-					/// <summary>Represents the type of data in a stream.</summary>
-					public enum FileStreamType : int
-					{
-						/// <summary>Unknown stream type.</summary>
-						Unknown = 0,
-						/// <summary>Standard data.</summary>
-						BACKUP_DATA = 0x1,
-						/// <summary>Extended attribute data.</summary>
-						BACKUP_EA_DATA = 0x2,
-						/// <summary>Security data.</summary>
-						BACKUP_SECURITY_DATA = 0x3,
-						/// <summary>Alternate data stream.</summary>
-						BACKUP_ALTERNATE_DATA = 0x4,
-						/// <summary>Hard link information.</summary>
-						BACKUP_LINK = 0x5,
-						/// <summary>Property data.</summary>
-						BACKUP_PROPERTY_DATA = 0x6,
-						/// <summary>Object identifiers.</summary>
-						BACKUP_OBJECT_ID = 0x7,
-						/// <summary>Reparse points.</summary>
-						BACKUP_REPARSE_DATA = 0x8,
-						/// <summary>Sparse file.</summary>
-						BACKUP_SPARSE_BLOCK = 0x9,
-						/// <summary>Transactional NTFS (TxF) data stream
-						/// Windows Server 2003 and Windows XP/2000:  This value is not supported.</summary>
-						BACKUP_TXFS_DATA = 0xA
-					}
-
-					/// <summary>Represents the attributes of a file stream.</summary>
-					[Flags()]
-					public enum FileStreamAttributes : int
-					{
-						/// <summary>No attributes.</summary>
-						None = 0,
-						/// <summary>Attribute set if the stream contains data that is modified when read. Allows the backup application to know that verification of data will fail.</summary>
-						STREAM_MODIFIED_WHEN_READ = 1,
-						/// <summary>Stream contains security data (general attributes). Allows the stream to be ignored on cross-operations restore.</summary>
-						STREAM_CONTAINS_SECURITY = 2,
-						/// <summary>Set if the stream contains properties.</summary>
-						ContainsProperties = 4,
-						/// <summary>Set if the stream is sparse.</summary>
-						Sparse = 8
-					}
-					#endregion
-
-					/// <summary>http:'msdn.microsoft.com/en-us/library/aa365247(v=VS.85).aspx</summary></summary>					
-					public static readonly char[] InvalidStreamNameChars = Path.GetInvalidFileNameChars().ToArray();
-
-
-
-					#region Properties
-					/// <summary>Returns the full path of this stream.</summary>
-					public string FullPath { get; private set; }
-					/// <summary>Returns the full path of the file which contains the stream.</summary>
-					public string FilePath { get; private set; }
-					/// <summary>Returns the name of the stream.</summary>
-					public string Name { get; private set; }
-					/// <summary>Returns the size of the stream, in bytes.</summary>
-					public long Size { get; private set; }
-
-					/// <summary>Returns the type of data.</summary>
-					[EditorBrowsable(EditorBrowsableState.Advanced)]
-					public FileStreamType StreamType { get; private set; }
-
-					/// <summary>Returns attributes of the data stream.</summary>
-					[EditorBrowsable(EditorBrowsableState.Advanced)]
-					public FileStreamAttributes Attributes { get; private set; }
-
-					#endregion
-
-
-					#region Constructor
-					private NTFSStreamInfo(string filePath, WIN32_STREAM_ID info, string sStreamName)
-					{
-						FilePath = filePath;
-						StreamType = info.StreamId;
-						Attributes = info.StreamAttributes;
-						Size = info.Size;
-						Name = sStreamName;
-						FullPath = BuildStreamPath(FilePath, Name);
-					}
-
-					/// <summary>
-					/// Initializes a new instance of the <see cref="NTFSStreamInfo"/> class.
-					/// </summary>
-					/// <param name="filePath">
-					/// The full path of the file.
-					/// This argument must not be <see langword=" nothing "/>.
-					/// </param>
-					/// <param name="streamName">
-					/// The name of the stream
-					/// This argument must not be <see langword=" nothing "/>.
-					/// </param>
-					/// <param name="fullPath">
-					/// The full path of the stream.
-					/// If this argument is <see langword=" nothing "/>, it will be generated from the 
-					/// <paramref name="filePath"/> and <paramref name="streamName"/> arguments.
-					/// </param>
-					/// <param name="exists">
-					/// <see langword="true"/> if the stream exists 
-					/// otherwise, <see langword="false"/>.
-					/// </param>
-					private NTFSStreamInfo(string filePath, string streamName, string fullPath)
-					{
-						if (string.IsNullOrEmpty(fullPath)) fullPath = BuildStreamPath(filePath, streamName);
-						StreamType = FileStreamType.BACKUP_ALTERNATE_DATA;
-						FilePath = filePath;
-						Name = streamName;
-						FullPath = fullPath;
-					}
-					#endregion
-
-
-
-					#region Methods
-
-					#region -IEquatable
-
-					// ''<summary>
-					// ''Returns a <see cref="String"/> that represents the current instance.
-					// ''</summary>
-					// ''<returns>
-					// ''A <see cref="String"/> that represents the current instance.
-					// ''</returns>
-					// public override string ToString()
-					// {
-					// return  me.FullPath 
-					// }
-
-					// ''<summary>
-					// ''Serves as a hash function for a particular type.
-					// ''</summary>
-					// ''<returns>
-					// ''A hash code for the current <see cref="Object"/>.
-					// ''</returns>
-					// public override integer GetHashCode()
-					// {
-					// var comparer = StringComparer.OrdinalIgnoreCase 
-					// return comparer.GetHashCode(_filePath ?? string.Empty)
-					// ^ comparer.GetHashCode(_streamName ?? string.Empty) 
-					// }
-
-					// ''<summary>
-					// ''Indicates whether the current object is equal to another object of the same type.
-					// ''</summary>
-					// ''<param name="obj">
-					// ''An object to compare with this object.
-					// ''</param>
-					// ''<returns>
-					// ''<see langword="true"/> if the current object is equal to the <paramref name="obj"/> parameter 
-					// ''otherwise, <see langword="false"/>.
-					// ''</returns>
-					// public override  bool   Equals(object obj)
-					// {
-					// if (object.ReferenceEquals( nothing , obj)) return false 
-					// if (object.ReferenceEquals(this, obj)) return true 
-
-					// NTFSStreamInfo other = obj as NTFSStreamInfo 
-					// if ( not object.ReferenceEquals( nothing , other)) return  me.Equals(other) 
-
-					// return false 
-					// }
-
-					// ''<summary>
-					// ''Returns a value indicating whether
-					// ''this instance is equal to another instance.
-					// ''</summary>
-					// ''<param name="other">
-					// ''The instance to compare to.
-					// ''</param>
-					// ''<returns>
-					// ''<see langword="true"/> if the current object is equal to the <paramref name="other"/> parameter 
-					// ''otherwise, <see langword="false"/>.
-					// ''</returns>
-					// public  bool   Equals(NTFSStreamInfo other)
-					// {
-					// if (object.ReferenceEquals( nothing , other)) return false 
-					// if (object.ReferenceEquals(this, other)) return true 
-
-					// var comparer = StringComparer.OrdinalIgnoreCase 
-					// return comparer.Equals( me._filePath ?? string.Empty, other._filePath ?? string.Empty)
-					// && comparer.Equals( me._streamName ?? string.Empty, other._streamName ?? string.Empty) 
-					// }
-
-					// ''<summary>
-					// ''The equality operator.
-					// ''</summary>
-					// ''<param name="first">
-					// ''The first object.
-					// ''</param>
-					// ''<param name="second">
-					// ''The second object.
-					// ''</param>
-					// ''<returns>
-					// ''<see langword="true"/> if the two objects are equal 
-					// ''otherwise, <see langword="false"/>.
-					// ''</returns>
-					// public shared  bool   operator ==(NTFSStreamInfo first, NTFSStreamInfo second)
-					// {
-					// if (object.ReferenceEquals(first, second)) return true 
-					// if (object.ReferenceEquals( nothing , first)) return false 
-					// if (object.ReferenceEquals( nothing , second)) return false 
-					// return first.Equals(second) 
-					// }
-
-					// ''<summary>
-					// ''The inequality operator.
-					// ''</summary>
-					// ''<param name="first">
-					// ''The first object.
-					// ''</param>
-					// ''<param name="second">
-					// ''The second object.
-					// ''</param>
-					// ''<returns>
-					// ''<see langword="true"/> if the two objects are not equal 
-					// ''otherwise, <see langword="false"/>.
-					// ''</returns>
-					// public shared  bool   Operator <>(NTFSStreamInfo first, NTFSStreamInfo second)
-					// {
-					// if (object.ReferenceEquals(first, second)) return false 
-					// if (object.ReferenceEquals( nothing , first)) return true 
-					// if (object.ReferenceEquals( nothing , second)) return true 
-					// return !first.Equals(second) 
-					// }
-
-					#endregion
-
-					#region -Delete
-					/// <summary>Deletes this stream from the parent file.</summary>
-					/// <returns><see langword="true"/> if the stream was deleted otherwise, <see langword="false"/>.</returns>
-					/// <exception cref="SecurityException"> The caller does not have the required permission.</exception>
-					/// <exception cref="UnauthorizedAccessException">The caller does not have the required permission, or the file is read-only.</exception>
-					/// <exception cref="IOException">The specified file is in use.</exception>
-					/// <exception cref="ArgumentException">The path of the stream is invalid.</exception>
-					public bool Delete()
-					{
-#pragma warning disable SYSLIB0003 // Type or member is obsolete
-						(new FileIOPermission(FileIOPermissionAccess.Write, FilePath)).Demand();
-#pragma warning restore SYSLIB0003 // Type or member is obsolete
-						return SafeDeleteFile(FullPath);
-					}
-
-					#endregion
-
-					#region -Open
-
-#pragma warning disable SYSLIB0003 // Type or member is obsolete
-
-					/// <summary>Calculates the access to demand.</summary>
-					/// <param name="mode">The <see cref="FileMode"/>.</param>
-					/// <param name="access">The <see cref="FileAccess"/>.</param>
-					/// <returns>The <see cref="FileIOPermissionAccess"/>.</returns>
-					private static FileIOPermissionAccess CalculateAccess(FileMode mode, FileAccess access)
-					{
-						var permAccess = FileIOPermissionAccess.NoAccess;
-						switch (mode)
-						{
-							case FileMode.Append: permAccess = FileIOPermissionAccess.Append; break;
-							case FileMode.Create: break;
-							case FileMode.CreateNew: break;
-							case FileMode.OpenOrCreate: break;
-							case FileMode.Truncate: permAccess = FileIOPermissionAccess.Write; break;
-							case FileMode.Open: permAccess = FileIOPermissionAccess.Read; break;
-						}
-
-						switch (access)
-						{
-							case FileAccess.ReadWrite:
-								permAccess |= FileIOPermissionAccess.Write | FileIOPermissionAccess.Read; break;
-
-							case FileAccess.Write:
-								permAccess |= FileIOPermissionAccess.Write; break;
-
-							case FileAccess.Read:
-								permAccess |= FileIOPermissionAccess.Read; break;
-						}
-						return permAccess;
-					}
-#pragma warning restore SYSLIB0003 // Type or member is obsolete
-
-					/// <summary>
-					/// Opens this alternate data stream.
-					/// </summary>
-					/// <param name="mode">
-					/// A <see cref="FileMode"/> value that specifies whether a stream is created if one does not exist, 
-					/// and determines whether the contents of existing streams are retained or overwritten.
-					/// </param>
-					/// <param name="access">
-					/// A <see cref="FileAccess"/> value that specifies the operations that can be performed on the stream. 
-					/// </param>
-					/// <param name="share">
-					/// A <see cref="FileShare"/> value specifying the type of access other threads have to the file. 
-					/// </param>
-					/// <param name="bufferSize">
-					/// The size of the buffer to use.
-					/// </param>
-					/// <param name="useAsync">
-					/// <see langword="true"/> to enable async-IO 
-					/// otherwise, <see langword="false"/>.
-					/// </param>
-					/// <returns>
-					/// A <see cref="FileStream"/> for this alternate data stream.
-					/// </returns>
-					/// <exception cref="ArgumentOutOfRangeException">
-					/// <paramref name="bufferSize"/> is less than or equal to zero.
-					/// </exception>
-					/// <exception cref="SecurityException">
-					/// The caller does not have the required permission. 
-					/// </exception>
-					/// <exception cref="UnauthorizedAccessException">
-					/// The caller does not have the required permission, or the file is read-only.
-					/// </exception>
-					/// <exception cref="IOException">
-					/// The specified file is in use. 
-					/// </exception>
-					/// <exception cref="ArgumentException">
-					/// The path of the stream is invalid.
-					/// </exception>
-					/// <exception cref="Win32Exception">
-					/// There was an error opening the stream.
-					/// </exception>
-					public FileStream Open(FileMode mode, FileAccess access, FileShare share, int bufferSize, bool useAsync)
-					{
-						if (0 >= bufferSize) throw new ArgumentOutOfRangeException(nameof(bufferSize), bufferSize, null);
-
-#pragma warning disable SYSLIB0003 // Type or member is obsolete
-						(new FileIOPermission(CalculateAccess(mode, access), FilePath))
-							.Demand();
-#pragma warning restore SYSLIB0003 // Type or member is obsolete
-
-						var flags = useAsync ? IO.NativeFileFlags.Overlapped : (IO.NativeFileFlags)0;
-						var handle = CreateFileHandle(FullPath, ToNative(access), share, IntPtr.Zero, mode, flags, IntPtr.Zero);
-						handle.e_IsValid().e_ThrowLastWin32Exception_AssertFalse("CreateFileHandle");
-						return new FileStream(handle, access, bufferSize, useAsync);
-					}
-
-
-					/// <summary>Opens this alternate data stream.</summary>
-					/// <param name="mode">A <see cref="FileMode"/> value that specifies whether a stream is created if one does not exist, and determines whether the contents of existing streams are retained or overwritten.</param>
-					/// <param name="access">A <see cref="FileAccess"/> value that specifies the operations that can be performed on the stream. </param>
-					/// <param name="share">A <see cref="FileShare"/> value specifying the type of access other threads have to the file. </param>
-					/// <param name="bufferSize">The size of the buffer to use.</param>
-					/// <returns>A <see cref="FileStream"/> for this alternate data stream.</returns>
-					/// <exception cref="ArgumentOutOfRangeException"><paramref name="bufferSize"/> is less than or equal to zero.</exception>
-					/// <exception cref="SecurityException">The caller does not have the required permission. </exception>
-					/// <exception cref="UnauthorizedAccessException">The caller does not have the required permission, or the file is read-only.</exception>
-					/// <exception cref="IOException">The specified file is in use. </exception>
-					/// <exception cref="ArgumentException">The path of the stream is invalid.</exception>
-					/// <exception cref="Win32Exception">There was an error opening the stream.</exception>
-					public FileStream Open(FileMode mode, FileAccess access, FileShare share, int bufferSize)
-						=> Open(mode, access, share, bufferSize, false);
-
-
-					/// <summary>Opens this alternate data stream.</summary>
-					/// <param name="mode">A <see cref="FileMode"/> value that specifies whether a stream is created if one does not exist, and determines whether the contents of existing streams are retained or overwritten.</param>
-					/// <param name="access">A <see cref="FileAccess"/> value that specifies the operations that can be performed on the stream. </param>
-					/// <param name="share">A <see cref="FileShare"/> value specifying the type of access other threads have to the file. </param>
-					/// <returns>A <see cref="FileStream"/> for this alternate data stream.</returns>
-					/// <exception cref="SecurityException">The caller does not have the required permission. </exception>
-					/// <exception cref="UnauthorizedAccessException">The caller does not have the required permission, or the file is read-only.</exception>
-					/// <exception cref="IOException">The specified file is in use. </exception>
-					/// <exception cref="ArgumentException">The path of the stream is invalid.</exception>
-					/// <exception cref="Win32Exception">There was an error opening the stream.</exception>
-					public FileStream Open(FileMode mode, FileAccess access, FileShare share)
-						=> Open(mode, access, share, DefaultBufferSize, false);
-
-
-					/// <summary>Opens this alternate data stream.</summary>
-					/// <param name="mode">A <see cref="FileMode"/> value that specifies whether a stream is created if one does not exist, and determines whether the contents of existing streams are retained or overwritten.</param>
-					/// <param name="access">A <see cref="FileAccess"/> value that specifies the operations that can be performed on the stream.</param>
-					/// <returns>A <see cref="FileStream"/> for this alternate data stream.</returns>
-					/// <exception cref="SecurityException">The caller does not have the required permission. </exception>
-					/// <exception cref="UnauthorizedAccessException">The caller does not have the required permission, or the file is read-only.</exception>
-					/// <exception cref="IOException">The specified file is in use. </exception>
-					/// <exception cref="ArgumentException">The path of the stream is invalid.</exception>
-					/// <exception cref="Win32Exception">There was an error opening the stream.</exception>
-					public FileStream Open(FileMode mode, FileAccess access)
-						=> Open(mode, access, FileShare.None, DefaultBufferSize, false);
-
-
-					/// <summary>Opens this alternate data stream.</summary>
-					/// <param name="mode"> A <see cref="FileMode"/> value that specifies whether a stream is created if one does not exist, and determines whether the contents of existing streams are retained or overwritten.</param>
-					/// <returns>A <see cref="FileStream"/> for this alternate data stream.</returns>
-					/// <exception cref="SecurityException"> The caller does not have the required permission.  </exception>
-					/// <exception cref="UnauthorizedAccessException"> The caller does not have the required permission, or the file is read-only.</exception>
-					/// <exception cref="IOException"> The specified file is in use.  </exception>
-					/// <exception cref="ArgumentException"> The path of the stream is invalid. </exception>
-					/// <exception cref="Win32Exception"> There was an error opening the stream. </exception>
-					public FileStream Open(FileMode mode)
-						=> Open(mode, (FileMode.Append == mode)
-							? FileAccess.Write
-							: FileAccess.ReadWrite,
-							FileShare.None,
-							DefaultBufferSize,
-							false);
-
-					#endregion
-
-					#region -OpenRead / OpenWrite / OpenText
-
-					/// <summary>
-					/// Opens this stream for reading.
-					/// </summary>
-					/// <returns>
-					/// A read-only <see cref="FileStream"/> for this stream.
-					/// </returns>
-					/// <exception cref="SecurityException">
-					/// The caller does not have the required permission. 
-					/// </exception>
-					/// <exception cref="UnauthorizedAccessException">
-					/// The caller does not have the required permission, or the file is read-only.
-					/// </exception>
-					/// <exception cref="IOException">
-					/// The specified file is in use. 
-					/// </exception>
-					/// <exception cref="ArgumentException">
-					/// The path of the stream is invalid.
-					/// </exception>
-					/// <exception cref="Win32Exception">
-					/// There was an error opening the stream.
-					/// </exception>
-					public FileStream OpenRead() => Open(FileMode.Open, FileAccess.Read, FileShare.Read);
-
-					/// <summary>
-					/// Opens this stream for writing.
-					/// </summary>
-					/// <returns>
-					/// A write-only <see cref="FileStream"/> for this stream.
-					/// </returns>
-					/// <exception cref="SecurityException">
-					/// The caller does not have the required permission. 
-					/// </exception>
-					/// <exception cref="UnauthorizedAccessException">
-					/// The caller does not have the required permission, or the file is read-only.
-					/// </exception>
-					/// <exception cref="IOException">
-					/// The specified file is in use. 
-					/// </exception>
-					/// <exception cref="ArgumentException">
-					/// The path of the stream is invalid.
-					/// </exception>
-					/// <exception cref="Win32Exception">
-					/// There was an error opening the stream.
-					/// </exception>
-					public FileStream OpenWrite() => Open(FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
-
-					/// <summary>
-					/// Opens this stream as a text file.
-					/// </summary>
-					/// <returns>
-					/// A <see cref="StreamReader"/> which can be used to read the contents of this stream.
-					/// </returns>
-					/// <exception cref="SecurityException">
-					/// The caller does not have the required permission. 
-					/// </exception>
-					/// <exception cref="UnauthorizedAccessException">
-					/// The caller does not have the required permission, or the file is read-only.
-					/// </exception>
-					/// <exception cref="IOException">
-					/// The specified file is in use. 
-					/// </exception>
-					/// <exception cref="ArgumentException">
-					/// The path of the stream is invalid.
-					/// </exception>
-					/// <exception cref="Win32Exception">
-					/// There was an error opening the stream.
-					/// </exception>
-					public StreamReader OpenText()
-					{
-						Stream FileStream = Open(FileMode.Open, FileAccess.Read, FileShare.Read);
-						return new StreamReader(FileStream);
-					}
-
-					#endregion
-
-					#endregion
-
-					#region Stream Exists
-
-					/// <summary>
-					/// <span style="font-weight:bold color:#a00 ">(Extension Method)</span><br />
-					/// Returns a flag indicating whether the specified alternate data stream exists.
-					/// </summary>
-					/// <param name="file">
-					/// The <see cref="FileInfo"/> to inspect.
-					/// </param>
-					/// <param name="streamName">
-					/// The name of the stream to find.
-					/// </param>
-					/// <returns>
-					/// <see langword="true"/> if the specified stream exists 
-					/// otherwise, <see langword="false"/>.
-					/// </returns>
-					/// <exception cref="ArgumentNullException">
-					/// <paramref name="file"/> is <see langword=" nothing "/>.
-					/// </exception>
-					/// <exception cref="ArgumentException">
-					/// <paramref name="streamName"/> contains invalid characters.
-					/// </exception>
-					public static bool StreamExists(string File, string streamName)
-					{
-						if (File.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(File));
-						ValidateStreamName(streamName);
-						string path = BuildStreamPath(File, streamName);
-						return -1 != SafeGetFileAttributes(path);
-					}
-
-					#endregion
-
-					#region Open Stream
-					/// <summary>
-					/// <span style="font-weight:bold color:#a00 ">(Extension Method)</span><br />
-					/// Opens an alternate data stream.
-					/// </summary>
-					/// <param name="file">
-					/// The <see cref="FileInfo"/> which contains the stream.
-					/// </param>
-					/// <param name="streamName">
-					/// The name of the stream to open.
-					/// </param>
-					/// <param name="mode">
-					/// One of the <see cref="FileMode"/> values, indicating how the stream is to be opened.
-					/// </param>
-					/// <returns>
-					/// An <see cref="NTFSStreamInfo"/> representing the stream.
-					/// </returns>
-					/// <exception cref="ArgumentNullException">
-					/// <paramref name="file"/> is <see langword="null"/>.
-					/// </exception>
-					/// <exception cref="FileNotFoundException">The specified <paramref name="file"/> was not found.</exception>
-					/// <exception cref="ArgumentException">
-					/// <paramref name="streamName"/> contains invalid characters.
-					/// </exception>
-					/// <exception cref="NotSupportedException">
-					/// <paramref name="mode"/> is either <see cref="FileMode.Truncate"/> or <see cref="FileMode.Append"/>.
-					/// </exception>
-					/// <exception cref="IOException">
-					/// <para><paramref name="mode"/> is <see cref="FileMode.Open"/>, and the stream doesn't exist.</para>
-					/// <para>-or-</para>
-					/// <para><paramref name="mode"/> is <see cref="FileMode.CreateNew"/>, and the stream already exists.</para>
-					/// </exception>
-					/// <exception cref="SecurityException">
-					/// The caller does not have the required permission. 
-					/// </exception>
-					/// <exception cref="UnauthorizedAccessException">
-					/// The caller does not have the required permission, or the file is read-only.
-					/// </exception>
-					public static NTFSStreamInfo GetAlternateDataStream(FileSystemInfo file, string streamName, FileMode mode)
-					{
-						if (null == file) throw new ArgumentNullException(nameof(file));
-						if (!file.Exists) throw new FileNotFoundException(null, file.FullName);
-
-						ValidateStreamName(streamName);
-						if (FileMode.Truncate == mode || FileMode.Append == mode)
-							throw new NotSupportedException("Error_InvalidMode");
-
-#pragma warning disable SYSLIB0003 // Type or member is obsolete
-						FileIOPermissionAccess permAccess =
-							(FileMode.Open == mode)
-							? FileIOPermissionAccess.Read
-							: (FileIOPermissionAccess.Read | FileIOPermissionAccess.Write);
-
-						(new FileIOPermission(permAccess, file.FullName)).Demand();
-
-#pragma warning restore SYSLIB0003 // Type or member is obsolete
-
-						string path = BuildStreamPath(file.FullName, streamName);
-						bool exists = -1 != SafeGetFileAttributes(path);
-						if (!exists && FileMode.Open == mode)
-							throw new IOException("Error_StreamNotFound");
-
-						if (exists && FileMode.CreateNew == mode)
-							throw new IOException("Error_StreamExists");
-
-						return new NTFSStreamInfo(file.FullName, streamName, path);
-					}
-
-					// ''<summary>
-					// ''<span style="font-weight:bold color:#a00 ">(Extension Method)</span><br />
-					// ''Opens an alternate data stream.
-					// ''</summary>
-					// ''<param name="file">
-					// ''The <see cref="FileInfo"/> which contains the stream.
-					// ''</param>
-					// ''<param name="streamName">
-					// ''The name of the stream to open.
-					// ''</param>
-					// ''<returns>
-					// ''An <see cref="NTFSStreamInfo"/> representing the stream.
-					// ''</returns>
-					// ''<exception cref="ArgumentNullException">
-					// ''<paramref name="file"/> is <see langword=" nothing "/>.
-					// ''</exception>
-					// ''<exception cref="FileNotFoundException">
-					// ''The specified <paramref name="file"/> was not found.
-					// ''</exception>
-					// ''<exception cref="ArgumentException">
-					// ''<paramref name="streamName"/> contains invalid characters.
-					// ''</exception>
-					// ''<exception cref="SecurityException">
-					// ''The caller does not have the required permission. 
-					// ''</exception>
-					// ''<exception cref="UnauthorizedAccessException">
-					// ''The caller does not have the required permission, or the file is read-only.
-					// ''</exception>
-					// public shared NTFSStreamInfo GetAlternateDataStream(this FileSystemInfo file, string streamName)
-					// {
-					// return file.GetAlternateDataStream(streamName, FileMode.OpenOrCreate) 
-					// }
-
-					// ''<summary>
-					// ''Opens an alternate data stream.
-					// ''</summary>
-					// ''<param name="filePath">
-					// ''The path of the file which contains the stream.
-					// ''</param>
-					// ''<param name="streamName">
-					// ''The name of the stream to open.
-					// ''</param>
-					// ''<param name="mode">
-					// ''One of the <see cref="FileMode"/> values, indicating how the stream is to be opened.
-					// ''</param>
-					// ''<returns>
-					// ''An <see cref="NTFSStreamInfo"/> representing the stream.
-					// ''</returns>
-					// ''<exception cref="ArgumentNullException">
-					// ''<paramref name="filePath"/> is <see langword=" nothing "/> or an empty string.
-					// ''</exception>
-					// ''<exception cref="FileNotFoundException">
-					// ''The specified <paramref name="filePath"/> was not found.
-					// ''</exception>
-					// ''<exception cref="ArgumentException">
-					// ''<para><paramref name="filePath"/> is not a valid file path.</para>
-					// ''<para>-or-</para>
-					// ''<para><paramref name="streamName"/> contains invalid characters.</para>
-					// ''</exception>
-					// ''<exception cref="NotSupportedException">
-					// ''<paramref name="mode"/> is either <see cref="FileMode.Truncate"/> or <see cref="FileMode.Append"/>.
-					// ''</exception>
-					// ''<exception cref="IOException">
-					// ''<para><paramref name="mode"/> is <see cref="FileMode.Open"/>, and the stream doesn't exist.</para>
-					// ''<para>-or-</para>
-					// ''<para><paramref name="mode"/> is <see cref="FileMode.CreateNew"/>, and the stream already exists.</para>
-					// ''</exception>
-					// ''<exception cref="SecurityException">
-					// ''The caller does not have the required permission. 
-					// ''</exception>
-					// ''<exception cref="UnauthorizedAccessException">
-					// ''The caller does not have the required permission, or the file is read-only.
-					// ''</exception>
-					// public shared NTFSStreamInfo GetAlternateDataStream(string filePath, string streamName, FileMode mode)
-					// {
-					// if (string.IsNullOrEmpty(filePath)) then throw  new ArgumentNullException("filePath") 
-					// return CreateInfo(filePath).GetAlternateDataStream(streamName, mode) 
-					// }
-
-					// ''<summary>
-					// ''Opens an alternate data stream.
-					// ''</summary>
-					// ''<param name="filePath">
-					// ''The path of the file which contains the stream.
-					// ''</param>
-					// ''<param name="streamName">
-					// ''The name of the stream to open.
-					// ''</param>
-					// ''<returns>
-					// ''An <see cref="NTFSStreamInfo"/> representing the stream.
-					// ''</returns>
-					// ''<exception cref="ArgumentNullException">
-					// ''<paramref name="filePath"/> is <see langword=" nothing "/> or an empty string.
-					// ''</exception>
-					// ''<exception cref="FileNotFoundException">
-					// ''The specified <paramref name="filePath"/> was not found.
-					// ''</exception>
-					// ''<exception cref="ArgumentException">
-					// ''<para><paramref name="filePath"/> is not a valid file path.</para>
-					// ''<para>-or-</para>
-					// ''<para><paramref name="streamName"/> contains invalid characters.</para>
-					// ''</exception>
-					// ''<exception cref="SecurityException">
-					// ''The caller does not have the required permission. 
-					// ''</exception>
-					// ''<exception cref="UnauthorizedAccessException">
-					// ''The caller does not have the required permission, or the file is read-only.
-					// ''</exception>
-					// public shared NTFSStreamInfo GetAlternateDataStream(string filePath, string streamName)
-					// {
-					// return GetAlternateDataStream(filePath, streamName, FileMode.OpenOrCreate) 
-					// }
-
-					#endregion
-
-					#region Delete Stream
-					/// <summary>
-					/// <span style="font-weight:bold color:#a00 ">(Extension Method)</span><br />
-					/// Deletes the specified alternate data stream if it exists.
-					/// </summary>
-					/// <param name="file">
-					/// The <see cref="FileInfo"/> to inspect.
-					/// </param>
-					/// <param name="streamName">
-					/// The name of the stream to delete.
-					/// </param>
-					/// <returns>
-					/// <see langword="true"/> if the specified stream is deleted 
-					/// otherwise, <see langword="false"/>.
-					/// </returns>
-					/// <exception cref="ArgumentNullException">
-					/// <paramref name="file"/> is <see langword=" nothing "/>.
-					/// </exception>
-					/// <exception cref="ArgumentException">
-					/// <paramref name="streamName"/> contains invalid characters.
-					/// </exception>
-					/// <exception cref="SecurityException">
-					/// The caller does not have the required permission. 
-					/// </exception>
-					/// <exception cref="UnauthorizedAccessException">
-					/// The caller does not have the required permission, or the file is read-only.
-					/// </exception>
-					/// <exception cref="IOException">
-					/// The specified file is in use. 
-					/// </exception>
-					public static bool DeleteStream(FileSystemInfo file, string streamName)
-					{
-						_ = file ?? throw new ArgumentNullException(nameof(file));
-
-						ValidateStreamName(streamName);
-
-#pragma warning disable SYSLIB0003 // Type or member is obsolete
-						(new FileIOPermission(FileIOPermissionAccess.Write, file.FullName))
-							.Demand();
-
-#pragma warning restore SYSLIB0003 // Type or member is obsolete
-
-						bool result = false;
-						if (file.Exists)
-						{
-							string path = BuildStreamPath(file.FullName, streamName);
-							if (-1 != SafeGetFileAttributes(path)) result = SafeDeleteFile(path);
-						}
-						return result;
-					}
-					#endregion
-
-					#region API
-
-					[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 1)]
-					private partial struct WIN32_STREAM_ID
-					{
-						public FileStreamType StreamId;
-						public FileStreamAttributes StreamAttributes;
-						public long Size;
-						public int StreamNameSize;
-
-
-						// DWORD         dwStreamId;
-						// DWORD         dwStreamAttributes;
-						// LARGE_INTEGER Size;
-						// DWORD         dwStreamNameSize;
-						// WCHAR         cStreamName[ANYSIZE_ARRAY];
-
-						public string? ReadStreamName(Microsoft.Win32.SafeHandles.SafeFileHandle hFile, ref IntPtr lpContext, ref bool bFinished)
-						{
-							if (StreamNameSize < 10) return null;
-
-							using Memory.WinApiMemory hMem = new(StreamNameSize);
-							hMem.ZeroMemory();
-							int BytesRead = 0;
-							bool bNameRead = NTFSStreamInfo.BackupRead(hFile, hMem, StreamNameSize, ref BytesRead, false, false, ref lpContext);
-							if (!bNameRead)
-							{
-								bFinished = true;
-								return null;
-							}
-
-							// Unicode chars are 2 bytes:
-							int iChars = (int)Math.Round(StreamNameSize / 2d);
-							var sTempName = hMem.DangerousGetHandle().e_PtrToString(iChars);
-							if (sTempName.e_IsNullOrWhiteSpace()) return null;
-
-							// Name is of the format ":NAME:$DATA\0"
-							int separatorIndex = sTempName!.IndexOf(STREAM_SEPARATOR, 1);
-							if (separatorIndex != -1)
-							{
-								sTempName = sTempName.Substring(1, separatorIndex - 1);
-							}
-							else
-							{
-								// Should never happen!
-								separatorIndex = sTempName.IndexOf('\0');
-								if (1 < separatorIndex)
-								{
-									sTempName = sTempName.Substring(1, separatorIndex - 1);
-								}
-								else
-								{
-									sTempName = null;
-								}
-							}
-
-							return sTempName;
-						}
-
-						public static readonly int STRUCT_SIZE = Marshal.SizeOf(typeof(WIN32_STREAM_ID));
-					}
-
-					[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-					private static extern bool BackupRead(Microsoft.Win32.SafeHandles.SafeFileHandle hFile,
-						ref WIN32_STREAM_ID pBuffer,
-						int numberOfBytesToRead,
-						[In, Out] ref int numberOfBytesRead,
-						[MarshalAs(UnmanagedType.Bool)] bool abort,
-						[MarshalAs(UnmanagedType.Bool)] bool processSecurity,
-						ref IntPtr context);
-
-
-					[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-					private static extern bool BackupRead(Microsoft.Win32.SafeHandles.SafeFileHandle hFile,
-						IntPtr pBuffer,
-						int numberOfBytesToRead,
-						[In, Out] ref int numberOfBytesRead,
-						[MarshalAs(UnmanagedType.Bool)] bool abort,
-						[MarshalAs(UnmanagedType.Bool)] bool processSecurity,
-						ref IntPtr context);
-
-
-					[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-					private static extern bool BackupSeek(Microsoft.Win32.SafeHandles.SafeFileHandle hFile,
-						int bytesToSeekLow,
-						int bytesToSeekHigh,
-						[In, Out] ref int bytesSeekedLow,
-						[In, Out] ref int bytesSeekedHigh,
-						ref IntPtr context);
-
-					// /*
-					// < StructLayout(LayoutKind.Sequential)> 
-					// private struct FileInformationByHandle
-					// {
-					// public integer dwFileAttributes 
-					// public LargeInteger ftCreationTime 
-					// public LargeInteger ftLastAccessTime 
-					// public LargeInteger ftLastWriteTime 
-					// public integer dwVolumeSerialNumber 
-					// public LargeInteger FileSize 
-					// public integer nNumberOfLinks 
-					// public LargeInteger FileIndex 
-					// }
-					// */
-
-
-
-					private static Microsoft.Win32.SafeHandles.SafeFileHandle CreateFileHandle(string path, IO.NativeFileAccess access, FileShare share, IntPtr security, FileMode mode, IO.NativeFileFlags flags, IntPtr template)
-					{
-						var Result = CreateFileAsSafeFileHandle(path, access, share, security, mode, flags, template);
-						if (!Result.IsInvalid && GetFileType(Result) != FileTypes.FILE_TYPE_DISK)
-						{
-							Result.Dispose();
-							throw new NotSupportedException();
-						}
-
-						return Result;
-					}
-
-					private static int SafeGetFileAttributes(string name)
-					{
-						if (name.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(name));
-						var result = GetFileAttributes(name);
-						if (-1 == (int)result)
-						{
-							var WEX = new Errors.Win32ExceptionEx("GetFileAttributes");
-							WEX.e_ThrowIfNot(Errors.Win32Errors.ERROR_FILE_NOT_FOUND);
-						}
-
-						return (int)result;
-					}
-
-					private static bool SafeDeleteFile(string name)
-					{
-						if (name.e_IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(name));
-						bool result = DeleteFile(name);
-						if (!result)
-						{
-							var WEX = new Errors.Win32ExceptionEx("DeleteFile");
-							WEX.e_ThrowIfNot(Errors.Win32Errors.ERROR_FILE_NOT_FOUND);
-						}
-						return result;
-					}
-
-					private static NativeFileAccess ToNative(FileAccess access)
-					{
-						NativeFileAccess result = 0;
-						if (FileAccess.Read == (FileAccess.Read & access)) result |= NativeFileAccess.GenericRead;
-						if (FileAccess.Write == (FileAccess.Write & access)) result |= NativeFileAccess.GenericWrite;
-						return result;
-					}
-
-
-
-					// private shared long GetFileSize(string path, SafeFileHandle handle)
-					// {
-					// long result = 0L 
-					// if ( nothing <>handle && !handle.IsInvalid)
-					// {
-					// LargeInteger value 
-					// if (GetFileSizeEx(handle, [In,Out]value))
-					// {
-					// result = value.ToInt64() 
-					// }
-					// else
-					// {
-					// ThrowLastIOError(path) 
-					// }
-					// }
-
-					// return result 
-					// }
-
-					// public shared long GetFileSize(string path)
-					// {
-					// long result = 0L 
-					// if ( not string.IsNullOrEmpty(path))
-					// {
-					// using (SafeFileHandle handle = SafeCreateFile(path, NativeFileAccess.GenericRead, FileShare.Read, IntPtr.Zero, FileMode.Open, 0, IntPtr.Zero))
-					// {
-					// result = GetFileSize(path, handle) 
-					// }
-					// }
-
-					// return result 
-					// }
-
-					#region MakeHRFromErrorCode
-
-
-
-					// private shared integer MakeHRFromErrorCode( integer  errorCode)
-					// {
-					// return (-2147024896 | errorCode) 
-					// }
-
-					// private shared string GetErrorMessage( integer  errorCode)
-					// {
-					// var lpBuffer = new StringBuilder(0x200) 
-					// if (0<>FormatMessage(0x3200, IntPtr.Zero, errorCode, 0, lpBuffer, lpBuffer.Capacity, IntPtr.Zero))
-					// {
-					// return lpBuffer.ToString() 
-					// }
-
-					// return string.Format(Resources.Culture, Resources.Error_UnknownError, errorCode) 
-					// }
-
-					// private shared void ThrowIOError( integer  errorCode, string path)
-					// {
-					// switch (errorCode)
-					// {
-					// case 0:
-					// {
-					// break 
-					// }
-					// case 2: ' File not found
-					// {
-					// if (string.IsNullOrEmpty(path)) then throw  new FileNotFoundException() 
-					// throw new FileNotFoundException( nothing , path) 
-					// }
-					// case 3: ' Directory not found
-					// {
-					// if (string.IsNullOrEmpty(path)) then throw  new DirectoryNotFoundException() 
-					// throw new DirectoryNotFoundException(string.Format(Resources.Culture, Resources.Error_DirectoryNotFound, path)) 
-					// }
-					// case 5: ' Access denied
-					// {
-					// if (string.IsNullOrEmpty(path)) then throw  new UnauthorizedAccessException() 
-					// throw new UnauthorizedAccessException(string.Format(Resources.Culture, Resources.Error_AccessDenied_Path, path)) 
-					// }
-					// case 15: ' Drive not found
-					// {
-					// if (string.IsNullOrEmpty(path)) then throw  new DriveNotFoundException() 
-					// throw new DriveNotFoundException(string.Format(Resources.Culture, Resources.Error_DriveNotFound, path)) 
-					// }
-					// case 32: ' Sharing violation
-					// {
-					// if (string.IsNullOrEmpty(path)) then throw  new IOException(GetErrorMessage(errorCode), MakeHRFromErrorCode(errorCode)) 
-					// throw new IOException(string.Format(Resources.Culture, Resources.Error_SharingViolation, path), MakeHRFromErrorCode(errorCode)) 
-					// }
-					// case 80: ' File already exists
-					// {
-					// if ( not string.IsNullOrEmpty(path))
-					// {
-					// throw new IOException(string.Format(Resources.Culture, Resources.Error_FileAlreadyExists, path), MakeHRFromErrorCode(errorCode)) 
-					// }
-					// break 
-					// }
-					// case 87: ' Invalid parameter
-					// {
-					// throw new IOException(GetErrorMessage(errorCode), MakeHRFromErrorCode(errorCode)) 
-					// }
-					// case 183: ' File or directory already exists
-					// {
-					// if ( not string.IsNullOrEmpty(path))
-					// {
-					// throw new IOException(string.Format(Resources.Culture, Resources.Error_AlreadyExists, path), MakeHRFromErrorCode(errorCode)) 
-					// }
-					// break 
-					// }
-					// case 206: ' Path too long
-					// {
-					// throw new PathTooLongException() 
-					// }
-					// case 995: ' Operation cancelled
-					// {
-					// throw new OperationCanceledException() 
-					// }
-					// default:
-					// {
-					// Marshal.ThrowExceptionForHR(MakeHRFromErrorCode(errorCode)) 
-					// break 
-					// }
-					// }
-					// }
-
-					// public shared void ThrowLastIOError(string path)
-					// {
-					// integer  errorCode = Marshal.GetLastWin32Error() 
-					// if (0<>errorCode)
-					// {
-					// integer  hr = Marshal.GetHRForLastWin32Error() 
-					// if (0 <= hr) then throw  new Win32Exception(errorCode) 
-					// ThrowIOError(errorCode, path) 
-					// }
-					// }
-					#endregion
-					#endregion
-
-					public static string BuildStreamPath(string filePath, string streamName)
-					{
-						string Result = filePath;
-						if (filePath.e_IsNOTNullOrWhiteSpace())
-						{
-							if (Result.Length == 1) Result = @".\\" + Result;
-							Result += STREAM_SEPARATOR + streamName + FULL_STREAM_PATH_SUFFIX;
-							if (Result.Length >= PATH_LIMIT) Result = uom.WinAPI.IO.UNC_PATH_PREFIX + Result;
-						}
-
-						return Result;
-					}
-
-					public string ReadablePath
-					{
-						get
-						{
-							string sPath = FullPath;
-							if (sPath.EndsWith(FULL_STREAM_PATH_SUFFIX))
-							{
-								sPath = sPath.Replace(FULL_STREAM_PATH_SUFFIX, "");
-							}
-
-							return sPath;
-						}
-					}
-
-					private static void ValidateStreamName(string streamName)
-					{
-						// Return tru
-						// if ( not string.IsNullOrEmpty(streamName) && -1<>streamName.IndexOfAny(InvalidStreamNameChars))
-						// {
-						// Throw New ArgumentException(Resources.Error_InvalidFileChars)
-						// }
-					}
-
-					#region GetStreams
-
-					public static NTFSStreamInfo[] GetStreams(FileSystemInfo rPath)
-					{
-						if (!rPath.Exists) throw new FileNotFoundException(null, rPath.FullName);
-						return GetStreams(rPath.FullName);
-					}
-
-					public static NTFSStreamInfo[] GetStreams(string sFullPath)
-					{
-						if (sFullPath.e_IsNullOrWhiteSpace()) throw new ArgumentNullException("sFullPath");
-						var lResult = new List<NTFSStreamInfo>();
-
-#pragma warning disable SYSLIB0003 // Type or member is obsolete
-						sFullPath.DemandFileIOPermission(FileIOPermissionAccess.Read); // Запрос на доступ к файлу
-#pragma warning restore SYSLIB0003 // Type or member is obsolete
-
-						// NativeFileFlags.FILE_FLAG_OPEN_REPARSE_POINT Or NativeFileFlags.FILE_FLAG_BACKUP_SEMANTICS
-						using (var hFile = CreateFileHandle(sFullPath,
-							NativeFileAccess.GenericRead,
-							FileShare.Read,
-							IntPtr.Zero,
-							FileMode.Open,
-							NativeFileFlags.FILE_FLAG_BACKUP_SEMANTICS,
-							IntPtr.Zero))
-						{
-							if (!hFile.IsInvalid)
-							{
-								using Memory.WinApiMemory hMem = new(DEFAULT_BUFFER_SIZE);
-								var lpContext = IntPtr.Zero;
-								int BytesRead = 0;
-								try
-								{
-									bool bFinished = false;
-									do
-									{
-										// Read the next stream header:
-										WIN32_STREAM_ID STREAM_ID = new();
-										bool bRead = NTFSStreamInfo.BackupRead(hFile, ref STREAM_ID, WIN32_STREAM_ID.STRUCT_SIZE, ref BytesRead, false, false, ref lpContext);
-										if (!bRead || BytesRead != WIN32_STREAM_ID.STRUCT_SIZE)
-										{
-											// Чтение не удалось, или прочитано менее размера заголовка
-											bFinished = true;
-										}
-										else // Заголовок потока прочитан нормально
-										{
-											string sStreamName = STREAM_ID.ReadStreamName(hFile, ref lpContext, ref bFinished)!;
-											// Add the stream info to the result:
-											if (sStreamName.e_IsNOTNullOrWhiteSpace())
-											{
-												var R = new NTFSStreamInfo(sFullPath, STREAM_ID, sStreamName);
-												lResult.Add(R);
-											}
-
-											// Skip the contents of the stream:
-											if (!bFinished) // Надо пропустить кусок содержимого потока
-											{
-												int bytesSeekedLow = 0; int bytesSeekedHigh = 0;
-												var V64 = STREAM_ID.Size.e_ToInt64();
-												bRead = NTFSStreamInfo.BackupSeek(hFile, V64.LoDWord, V64.HiDWord, ref bytesSeekedLow, ref bytesSeekedHigh, ref lpContext);
-												if (!bRead)
-													bFinished = true;
-											}
-										}
-									}
-									while (!bFinished);
-								}
-								finally
-								{
-									// Abort the backup:
-									NTFSStreamInfo.BackupRead(hFile, hMem, 0, ref BytesRead, true, false, ref lpContext);
-								}
-							}
-						}
-
-						return lResult.ToArray();
-					}
-					#endregion
-
-				}
-				#endregion
-
-				/// <summary>Жёсткая ссылка ТОЛЬКО ДЛЯ ФАЙЛОВ. </summary>
-				internal partial class HardLinks
-				{
-
-
-					#region CreateHardLink
-					/// <summary>Establishes a hard link between an existing file and a new file. This function is only supported on the NTFS file system, and only for files, not directories.</summary>
-					/// <param name="lpFileName">The name of the new file.This parameter cannot specify the name of a directory.</param>
-					/// <param name="lpExistingFileName">The name of the existing file.This parameter cannot specify the name of a directory.</param>
-					/// <param name="lpSecurityAttributes">Reserved; must be NULL.</param>
-					[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-					private static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
-
-
-					/// <summary>Жёсткая ссылка ТОЛЬКО ДЛЯ ФАЙЛОВ. 
-					/// This function is only supported on the NTFS file system, and only for files, not directories.
-					/// Жёсткая ссылка может создаваться только в пределах одного логического раздела и только для файлов. 
-					/// В операционных системах Windows нет возможности создать жесткую ссылку на директорию. Однако похожего эффекта можно добиться используя NTFS junction point.</summary>
-					/// <param name="lpFileName">The name of the new file.This parameter cannot specify the name of a directory.</param>
-					/// <param name="lpExistingFileName">The name of the existing file.This parameter cannot specify the name of a directory.</param>
-					/// <remarks>Этот hardlink-файл не имеет атрибута REPARSE_POINT и потом никак не обнаруживается!!!
-					/// To retrieve the number of hard links of a file, use the GetFileInformationByHandle function: (http://msdn2.microsoft.com/en-us/library/aa364952(VS.85).aspx)</remarks>
-					public static void CreateHardLink(string lpFileName, string lpExistingFileName)
-					{
-						bool bResult = CreateHardLink(lpFileName, lpExistingFileName, IntPtr.Zero);
-						if (!bResult)
-							Errors.ThrowLastWin23Error("CreateHardLink");
-					}
-					#endregion
-
-					/// <summary>Creates an enumeration of all the hard links to the specified file. The</summary>
-					internal partial class HardLinksEnumeration : Microsoft.Win32.SafeHandles.SafeHandleZeroOrMinusOneIsInvalid
-					{
-						//[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-						//private static extern IntPtr FindFirstFileName___OLD([MarshalAs(UnmanagedType.LPWStr)] string lpFileName, int dwFlags, [In,Out] int StringLength, [In,MarshalAs(UnmanagedType.LPWStr),In,Out] string LinkName);
-
-						[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-						private static extern IntPtr FindFirstFileName(
-							[In, MarshalAs(UnmanagedType.LPWStr)] string lpFileName,
-							int dwFlags,
-							[In, Out] ref int StringLength,
-							[In, Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder? LinkName);
-
-						[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-						private static extern bool FindNextFileName(
-							[In] IntPtr hFindStream,
-							[In, Out] ref int StringLength,
-							[In, Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder? LinkName);
-
-						[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-						public static extern bool FindClose(IntPtr hFindFile);
-
-						public static (HardLinksEnumeration hFind, string FirstFile) FindFirstFile(string sFilePath)
-						{
-							// Узнаём размер буфера
-							int cbBuffer = 0;
-							var hFind = HardLinksEnumeration.FindFirstFileName(sFilePath, 0, ref cbBuffer, null);
-							if (hFind.e_IsValid()) throw new Exception("Unexpected Error!"); // ЭТО НЕ должно окончиться удачно, т.к. передали нулевой буфер
-							Errors.ThrowLastWin23ErrorAssert(Errors.Win32Errors.ERROR_MORE_DATA);
-							StringBuilder sbBuffer = new(cbBuffer + 10);
-							hFind = HardLinksEnumeration.FindFirstFileName(sFilePath, 0, ref cbBuffer, sbBuffer); // А щас всё должно было получиться.
-							if (hFind.e_IsNotValid()) Errors.ThrowLastWin23Error();
-							var HLE = new HardLinksEnumeration(hFind);
-							return (HLE, sbBuffer.ToString());
-						}
-
-						private HardLinksEnumeration(IntPtr hFind) : base(true)
-						{
-							SetHandle(hFind);
-						}
-
-						public string? FindNextFileName()
-						{
-							int cbBuffer = 0;
-							bool bResult = HardLinksEnumeration.FindNextFileName(DangerousGetHandle(), ref cbBuffer, null); // Узнаём размер буфера для следующего элемента
-							if (bResult) throw new Exception("Unexpected Error!"); // ЭТО НЕ должно окончиться удачно, т.к. м передали нулевой буфер
-							string? sResult = null;
-							var iError = Errors.GetLastError();
-							switch (iError)
-							{
-								case Errors.Win32Errors.ERROR_HANDLE_EOF: // Нет больше данных
-									{
-										break;
-									}
-
-								case Errors.Win32Errors.ERROR_MORE_DATA: // Получили размер буфера
-									{
-										var sbBuffer = new StringBuilder(cbBuffer + 10);
-										bResult = HardLinksEnumeration.FindNextFileName(DangerousGetHandle(), ref cbBuffer, sbBuffer);
-										if (!bResult)
-											Errors.ThrowLastWin23Error(); // А щас всё должно было получиться.
-										sResult = sbBuffer.ToString();
-										break;
-									}
-
-								default:
-									{
-										Errors.ThrowWin23Error(iError);
-										break;
-									}
-							}
-							return sResult;
-						}
-
-						protected override bool ReleaseHandle()
-						{
-							bool bResult = false;
-							if (handle.e_IsValid())
-								bResult = FindClose(handle);
-							if (bResult)
-								SetHandle(IntPtr.Zero);
-							return bResult;
-						}
-					}
-
-
-
-
-
-
-
-					/// <summary>Получить количество всех жёстких ссылок, связанных с данным файлом
-					/// Технически, в NTFS, любой файл - это жёсткая ссылка с одной ссылкой.
-					/// Поэтому, отличить "обычный" файл от "жёсткой ссылки", можно ТОЛЬКо по количеству ссылок > 1</summary>
-					/// <param name="hFile"></param>
-					/// <returns></returns>
-					public static int GetFileHardLinksCount(IntPtr hFile) => GetFileInformationByHandle(hFile).nNumberOfLinks;
-
-
-					/// <summary>Получить имена всех жёстких ссылок, связанных с данным файлом
-					/// Технически, в NTFS, любой файл - это жёсткая ссылка с одной ссылкой.
-					/// Поэтому, отличить "обычный" файл от "жёсткой ссылки", можно ТОЛЬКо по количеству ссылок > 1</summary>
-					public static string[] GetFileHardLinksNames(string sFile)
-					{
-						using var hFile = CreateFile(sFile,
-							NativeFileAccess.GenericRead,
-							FileShare.Delete | FileShare.Read | FileShare.Write,
-							IntPtr.Zero,
-							FileMode.Open,
-							NativeFileFlags.FILE_FLAG_BACKUP_SEMANTICS,
-							IntPtr.Zero).e_ToSafeFileHandle();
-
-						var lResult = new List<string>();
-						int iLinks = GetFileHardLinksCount(hFile.DangerousGetHandle());
-						if (iLinks > 0)
-						{
-							var (hFind, FirstFile) = HardLinksEnumeration.FindFirstFile(sFile);
-							string sFoundName = FirstFile;
-							using var HLE = hFind;
-							while (sFoundName.e_IsNOTNullOrWhiteSpace())
-							{
-								lResult.Add(sFoundName);
-								sFoundName = HLE.FindNextFileName()!;
-							}
-						}
-
-						var aFiles = lResult.ToArray();
-						return aFiles;
-					}
-				}
-
-
-				#region ReparsePoint
-
-				/// <summary>The reparse tags are a DWORD. The 32 bits are laid [In,Out]as follows:
-				/// The reparse tags are a DWORD. The 32 bits are laid [In,Out]as follows:
-				///   3 3 2 2 2 2 2 2 2 2 2 2 1 1 1 1 1 1 1 1 1 1
-				///   1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
-				/// +-+-+-+-+-----------------------+-------------------------------+
-				/// |M|R|N|R|     Reserved bits     |       Reparse Tag Value       |
-				/// +-+-+-+-+-----------------------+-------------------------------+
-				/// M Is the Microsoft bit. When set to 1, it denotes a tag owned by Microsoft.
-				///   All ISVs must use a tag with a 0 in this position.
-				///   Note: If a Microsoft tag Is used by non-Microsoft software, the behavior Is Not defined.
-				/// R Is reserved.  Must be zero for non-Microsoft tags.
-				/// N Is name surrogate. When set to 1, the file represents another named entity in the system.
-				/// The M And N bits are Or-able.
-				/// The following macros check for the M And N bit values:
-				/// Macro to determine whether a reparse point tag corresponds to a tag owned by Microsoft.
-				/// #define IsReparseTagMicrosoft(_tag) (              \
-				///                           ((_tag) AND 0x80000000)   \
-				///                           )
-				/// 
-				/// Macro to determine whether a reparse point tag Is a name surrogate
-				/// #define IsReparseTagNameSurrogate(_tag) (          \
-				///                           ((_tag) AND 0x20000000)   \
-				///                           )
-				/// </summary>
-				[Flags()]
-				public enum REPARSE_TAG_TYPES : uint
-				{
-					// The following are Microsoft's predefined reparse tag values; they are defined in WinNT.h:
-					// IO_REPARSE_TAG_DEDUP
-					// IO_REPARSE_TAG_RESERVED_RANGE
-
-
-					/// <summary>Reserved reparse tag value.</summary>
-					[Description("Неизвестный")]
-					IO_REPARSE_TAG_RESERVED_ZERO = 0x0U,
-					/// <summary>Reserved reparse tag value.</summary>
-					IO_REPARSE_TAG_RESERVED_ONE = 0x1U,
-
-					/// <summary>Точки подключения дисковых томов и символьные связи каталогов. Технология доступна, начиная с Windows 2000.
-					/// Used for mount point support, specified in section 2.1.2.5.
-					/// Moiunt point or junction, see winnt.h
-					/// В файловой системе NTFS (начиная с Windows NT4[1]) поддерживаются жёсткие ссылки.
-					/// Жёсткая ссылка может создаваться только в пределах одного логического раздела и только для файлов.
-					/// В операционных системах Windows нет возможности создать жесткую ссылку на директорию. Однако похожего эффекта можно добиться используя NTFS junction point.</summary>
-					[Description("Точка монтирования")]
-					IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003u,
-
-					/// <summary>Hierarchical Storage Management - технология хранения данных, автоматически распределяющая данные между дорогими и дешёвыми накопителями.
-					/// Obsolete. Used by legacy Hierarchical Storage Manager Product.</summary>
-					[Description("Hierarchical Storage Manager")]
-					IO_REPARSE_TAG_HSM = 0xC0000004u,
-					/// <summary>Метаданные технологии Windows Home Server Drive Extender, используются для создания ссылок на файлы, продублированные на нескольких физических носителях.</summary>
-					[Description("Метаданные технологии Windows Home Server Drive Extender")]
-					IO_REPARSE_TAG_DRIVER_EXTENDER = 0x80000005u,
-					/// <summary>Obsolete. Used by legacy Hierarchical Storage Manager Product.</summary>
-					IO_REPARSE_TAG_HSM2 = 0x80000006U,
-					/// <summary>Single Instance Storage (SIS) в Windows Storage Server 2008 R2 технология, увеличивающая размер дискового пространства за счёт размещения дублирующих файлов в общем хранилище.</summary>
-					[Description("Single Instance Storage (SIS) в Windows Storage Server")]
-					IO_REPARSE_TAG_SIS = 0x80000007U,
-
-					/// <summary>Метаданные формата образа диска Windows Imaging Format, используемого в последних релизах ОС Windows.</summary>
-					[Description("Метаданные формата образа диска Windows Imaging Format")]
-					IO_REPARSE_TAG_WIM = 0x80000008U,
-					/// <summary>Cluster Shared Volumes Windows Server 2008 R2 технология, позволяющая иметь диск, доступный на чтение и запись всем нодам, входящим в кластер системы виртуализации Hyper-V.</summary>
-					[Description("Cluster Shared Volumes")]
-					IO_REPARSE_TAG_CSV = 0x80000009U,
-					/// <summary>Distributed File System (DFS) компонент Microsoft Windows, использующийся для упрощения доступа и управления файлами, физически распределёнными по сети.
-					/// Used by the DFS filter. The DFS is described in the Distributed File System (DFS): Referral Protocol Specification [MS-DFSC]. Server-side interpretation only, not meaningful over the wire.</summary>
-					[Description("Distributed File System (DFS)")]
-					IO_REPARSE_TAG_DFS = 0x8000000AU,
-					/// <summary>Used by filter manager test harness.</summary>
-					IO_REPARSE_TAG_FILTER_MANAGER = 0x8000000BU,
-					/// <summary>Точки повторной обработки, использующиеся в Internet Information Services(?)</summary>
-					[Description("Точки повторной обработки Internet Information Services")]
-					IO_REPARSE_TAG_IIS_CACHE = 0xA0000010U,
-					/// <summary>Used by the DFS filter. The DFS is described in [MS-DFSC]. Server-side interpretation only, not meaningful over the wire.</summary>
-					IO_REPARSE_TAG_DFSR = 0x80000012U,
-
-					/// <summary>Used for symbolic link support. See section 2.1.2.4.
-					/// Символьная ссылка - специальный файл в файловой системе, для которого не формируются никакие данные, кроме одной текстовой строки с указателем.
-					/// Эта строка трактуется как путь к файлу, который должен быть открыт при попытке обратиться к данной ссылке (файлу).
-					/// Символьная ссылка занимает ровно столько места в файловой системе, сколько требуется для записи её содержимого (нормальный файл занимает как минимум один блок раздела).
-					/// В отличие от жёстких ссылок, могут указывать на файлы и директории в других томах.
-					/// Целью ссылки может быть любой объект — например, другая ссылка, файл, папка, или даже несуществующий файл (в последнем случае при попытке открыть его должно выдаваться сообщение об отсутствии файла).
-					/// Ссылка, указывающая на несуществующий файл, называется висячей.
-					/// Практически символьные ссылки используются для более удобной организации структуры файлов на компьютере, так как позволяют одному файлу или каталогу иметь несколько имён, различных атрибутов и свободны от некоторых ограничений, присущих жёстким ссылкам (последние действуют только в пределах одного раздела и не могут ссылаться на каталоги).</summary>
-					[Description("Символьная ссылка")]
-					IO_REPARSE_TAG_SYMLINK = 0xA000000CU,
-
-					// Used by the Network File System (NFS) component. Server-side interpretation only, not meaningful over the wire.
-					[Description("Network File System (NFS)")]
-					IO_REPARSE_TAG_NFS = 0x80000014U,
-					IO_REPARSE_TAG_APPXSTRM = 0xC0000014U,
-					IO_REPARSE_TAG_DFM = 0x80000016U,
-					[Description("Linux symlink)")]
-					IO_REPARSE_TAG_LX_SYMLINK = 0xA000001DU,
-					IO_REPARSE_TAG_HFS = 0x8000001EU,
-					/// <summary>deduplicated</summary>
-					IO_REPARSE_TAG_DEDUP = 0x80000013U,
-					IO_REPARSE_TAG_FILE_PLACEHOLDER = 0x80000015U,
-					IO_REPARSE_TAG_WOF = 0x80000017U,
-					/// <summary>Windows container</summary>
-					[Description("Windows container")]
-					IO_REPARSE_TAG_WCI = 0x80000018U,
-					IO_REPARSE_TAG_GLOBAL_REPARSE = 0x80000019U,
-					// IO_REPARSE_TAG_FILE_PLACEHOLDER),
-					// IO_REPARSE_TAG_APPEXECLINK),
-					// IO_REPARSE_TAG_WCI_TOMBSTONE),
-					// IO_REPARSE_TAG_UNHANDLED),
-					// IO_REPARSE_TAG_ONEDRIVE),
-					// IO_REPARSE_TAG_GVFS_TOMBSTONE),
-					IO_REPARSE_TAG_GVFS = 0x9000001CU,
-					IO_REPARSE_TAG_CLOUD = 0x9000001AU,
-					IO_REPARSE_TAG_CLOUD_1 = 0x9000101AU,
-					// { =&h9000201A, "IO_REPARSE_TAG_CLOUD_2" },
-					// { =&h9000301A, "IO_REPARSE_TAG_CLOUD_3" },
-					// { =&h9000401A, "IO_REPARSE_TAG_CLOUD_4" },
-					// { =&h9000501A, "IO_REPARSE_TAG_CLOUD_5" },
-					// { =&h9000601A, "IO_REPARSE_TAG_CLOUD_6" },
-					// { =&h9000701A, "IO_REPARSE_TAG_CLOUD_7" },
-					// { =&h9000801A, "IO_REPARSE_TAG_CLOUD_8" },
-					// { =&h9000901A, "IO_REPARSE_TAG_CLOUD_9" },
-					// { =&h9000A01A, "IO_REPARSE_TAG_CLOUD_A" },
-					// { =&h9000B01A, "IO_REPARSE_TAG_CLOUD_B" },
-					// { =&h9000C01A, "IO_REPARSE_TAG_CLOUD_C" },
-					// { =&h9000D01A, "IO_REPARSE_TAG_CLOUD_D" },
-					// { =&h9000E01A, "IO_REPARSE_TAG_CLOUD_E" },
-					// { =&h9000F01A, "IO_REPARSE_TAG_CLOUD_F" },
-
-
-					IsReparseTagMicrosoft = 0x80000000U,
-					TagIsReparseTagNameSurrogate = 0x20000000U
-					// IO_REPARSE_TAG_VALID_VALUES = 0xF000FFFFui
-				}
-
-
-				/// <summary>Provides access to NTFS Symlinks or Junction Points in .Net.</summary>
-				internal partial class ReparsePoint
-				{
-
-					#region The reparse tags
-					/// <summary>The reparse tags are a DWORD. The 32 bits are laid [In,Out]as follows:
-					/// The reparse tags are a DWORD. The 32 bits are laid [In,Out]as follows:
-					///   3 3 2 2 2 2 2 2 2 2 2 2 1 1 1 1 1 1 1 1 1 1
-					///   1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
-					/// +-+-+-+-+-----------------------+-------------------------------+
-					/// |M|R|N|R|     Reserved bits     |       Reparse Tag Value       |
-					/// +-+-+-+-+-----------------------+-------------------------------+
-					/// M Is the Microsoft bit. When set to 1, it denotes a tag owned by Microsoft.
-					///   All ISVs must use a tag with a 0 in this position.
-					///   Note: If a Microsoft tag Is used by non-Microsoft software, the behavior Is Not defined.
-					/// R Is reserved.  Must be zero for non-Microsoft tags.
-					/// N Is name surrogate. When set to 1, the file represents another named entity in the system.
-					/// The M And N bits are Or-able.
-					/// </summary>
-					/// <returns></returns>
-					public static REPARSE_TAG_TYPES TagTrim(REPARSE_TAG_TYPES RTT)
-					{
-						const uint SIMPLY_TAG_MASK = 0x5FFFFFFFu;
-						uint B = (uint)RTT & SIMPLY_TAG_MASK;
-						return (REPARSE_TAG_TYPES)B;
-					}
-
-					#region The following macros check for the M And N bit values:
-					//<summary>Macro to determine whether a reparse point tag corresponds to a tag owned by Microsoft.
-					// ''#define IsReparseTagMicrosoft(_tag) (_tag) & 0x80000000)</summary>
-					// Public Shared Function TagIsReparseTagMicrosoft(_Tag As REPARSE_TAG_TYPES) As Boolean
-					// Dim bResult = (_Tag And 0x80000000UL) <> 0
-					// Return bResult
-					// End Function
-					//<summary>Macro to determine whether a reparse point tag Is a name surrogate
-					// ''#define IsReparseTagNameSurrogate(_tag) (((_tag) & 0x20000000)   \
-					// '' </summary>
-					// Public Shared Function TagIsReparseTagNameSurrogate(_Tag As REPARSE_TAG_TYPES) As Boolean
-					// Dim bResult = (_Tag And 0x20000000UL) <> 0
-					// Return bResult
-					// End Function
-					#endregion
-
-					#endregion
-
-					#region API
-
-					// '' I/O Completion Specific Access Rights.
-					// ''
-					// ''#define IO_COMPLETION_MODIFY_STATE  0x0002  
-					// ''#define IO_COMPLETION_ALL_ACCESS (STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE|0x3) 
-					// ''
-					// '' Object Manager Symbolic Link Specific Access Rights.
-					// ''
-					// ''#define DUPLICATE_CLOSE_SOURCE      0x00000001  
-					// ''#define DUPLICATE_SAME_ACCESS       0x00000002  
-
-
-
-					//<summary>The file or directory is not a reparse point.</summary>
-					// Private Const ERROR_NOT_A_REPARSE_POINT = 4390I
-					//<summary>The reparse point attribute cannot be set because it conflicts with an existing attribute.</summary>
-					// Private Const ERROR_REPARSE_ATTRIBUTE_CONFLICT = 4391I
-					//<summary>The data present in the reparse point buffer is invalid.</summary>
-					// Private Const ERROR_INVALID_REPARSE_DATA = 4392I
-					//<summary>The tag present in the reparse point buffer is invalid.</summary>
-					// Private Const ERROR_REPARSE_TAG_INVALID = 4393I
-					//<summary>There is a mismatch between the tag specified in the request and the tag present in the reparse point.</summary>
-					// Private Const ERROR_REPARSE_TAG_MISMATCH = 4394I
-
-					/// <summary>Maximum allowed size of the reparse data.</summary>
-					public const uint MAXIMUM_REPARSE_DATA_BUFFER_SIZE = 16 * 1024;
-					private const string NON_INTERPRETED_PATH_PREFIX = @"\??\";
-					private const string VOLUME_MOUNT_POINT = NON_INTERPRETED_PATH_PREFIX + "Volume";
-
-					[StructLayout(LayoutKind.Sequential)]
-					private partial struct REPARSE_GUID_DATA_BUFFER
-					{
-						public REPARSE_TAG_TYPES ReparseTag;
-						public ushort ReparseDataLength;
-						public ushort Reserved;
-						public ushort SubstituteNameOffset;
-						public ushort SubstituteNameLength;
-						public ushort PrintNameOffset;
-						public ushort PrintNameLength;
-
-						/// <summary>Contains the SubstituteName and the PrintName. The SubstituteName is the path of the target directory.</summary>
-						[MarshalAs(UnmanagedType.ByValArray, SizeConst = CHAR_BUFFER_SIZE)]
-						public byte[] PathBuffer;
-						internal const int CHAR_BUFFER_SIZE = 0x3FF0;
-
-						internal static byte[] EMPTY_CHAR_BUFFER
-						{
-							get
-							{
-								var BBB = Memory.WinApiMemory.CreateEmptyArray(CHAR_BUFFER_SIZE);
-								return BBB;
-							}
-						}
-
-						public static int REPARSE_DATA_BUFFER_HEADER_SIZE = (int)Marshal.OffsetOf(typeof(REPARSE_GUID_DATA_BUFFER), "SubstituteNameOffset");
-
-						public enum FSCTL_COMMANDS : uint
-						{
-							//<summary>Command to get the reparse point data block.</summary>
-							FSCTL_GET_REPARSE_POINT = 0x900A8U,
-							/// <summary>Command to set the reparse point data block.</summary>
-							FSCTL_SET_REPARSE_POINT = 0x900A4U,
-							/// <summary>Command to delete the reparse point data base.</summary>
-							FSCTL_DELETE_REPARSE_POINT = 0x900ACU
-						}
-
-						[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-						public static extern bool DeviceIoControl(IntPtr hDevice, FSCTL_COMMANDS dwIoControlCode, ref REPARSE_GUID_DATA_BUFFER InBuffer, int nInBufferSize, IntPtr OutBuffer, int nOutBufferSize, ref int pBytesReturned, IntPtr lpOverlapped);
-
-						[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-						public static extern bool DeviceIoControl(IntPtr hDevice, FSCTL_COMMANDS dwIoControlCode, IntPtr InBuffer, int nInBufferSize, ref REPARSE_GUID_DATA_BUFFER OutBuffer, int nOutBufferSize, ref int pBytesReturned, IntPtr lpOverlapped);
-					}
-
-					private static Microsoft.Win32.SafeHandles.SafeFileHandle OpenReparsePoint(string reparsePoint, NativeFileAccess accessMode)
-					{
-						var reparsePointHandle = CreateFileAsSafeFileHandle(reparsePoint,
-							accessMode,
-							FileShare.Read | FileShare.Write | FileShare.Delete,
-							IntPtr.Zero,
-							FileMode.Open,
-							NativeFileFlags.FILE_FLAG_BACKUP_SEMANTICS | NativeFileFlags.FILE_FLAG_OPEN_REPARSE_POINT,
-							IntPtr.Zero);
-						var WEX = new Errors.Win32ExceptionEx();
-						WEX.e_ThrowIfNot(0);
-						return reparsePointHandle;
-					}
-
-					public enum SYM_LINK_FLAG : int
-					{
-						/// <summary>The link target is a file.</summary>
-						SYMBOLIC_LINK_FLAG_FILE = 0,
-						/// <summary>The link target is a directory.</summary>
-						SYMBOLIC_LINK_FLAG_DIRECTORY = 0x1
-					}
-					/// <summary>Creates a symbolic link.</summary>
-					/// <param name="lpSymlinkFileName">The symbolic link to be created.</param>
-					/// <param name="lpTargetFileName">The name of the target for the symbolic link to be created. If lpTargetFileName has a device name associated with it, the link is treated as an absolute link; otherwise, the link is treated as a relative link.</param>
-					/// <remarks>Symbolic links can either be absolute or relative links. Absolute links are links that specify each portion of the path name; relative links are determined relative to where relative–link specifiers are in a specified path. Relative links are specified using the following conventions:</remarks>
-					[DllImport(core.WINDLL_KERNEL, SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-					private static extern bool CreateSymbolicLink(string lpSymlinkFileName, string lpTargetFileName, SYM_LINK_FLAG dwFlags);
-
-
-
-					#endregion
-
-					#region Properties
-					public readonly string Path = String.Empty;
-					public readonly string Target = String.Empty;
-
-					/// <summary>Note that if the symlink target path contains any ..s these are not normalised but returned as is.</summary>
-					public string TargetAbsolute
-					{
-						get
-						{
-							if (Target.e_IsNullOrWhiteSpace()) return "";
-
-							var sAbsolute = Target;
-
-							switch (TagValue)
-							{
-								case REPARSE_TAG_TYPES.IO_REPARSE_TAG_SYMLINK:
-									{
-										if (sAbsolute.StartsWith(NON_INTERPRETED_PATH_PREFIX)) sAbsolute = Target.Substring(NON_INTERPRETED_PATH_PREFIX.Length);
-										// Symlinks can be relative.
-										if (sAbsolute.Length < 2 || sAbsolute[1] != ':')
-										{
-											// it's relative, we need to tack it onto the path
-											if (sAbsolute[0] == '\\') sAbsolute = sAbsolute.Substring(1);
-											//Need to take the symlink name off the path
-											sAbsolute = Path.Substring(0, Path.LastIndexOf(@"\")) + @"\" + TargetAbsolute;
-											// Note that if the symlink target path contains any ..s these are not normalised but returned as is.
-										}
-										return sAbsolute;
-									}
-
-								case REPARSE_TAG_TYPES.IO_REPARSE_TAG_MOUNT_POINT:
-									{
-										return sAbsolute;
-									}
-
-								default: { return ""; };
-							}
-						}
-					}
-
-					public REPARSE_TAG_TYPES TagValue { get; private set; } = REPARSE_TAG_TYPES.IO_REPARSE_TAG_RESERVED_ZERO;
-
-					/// <summary>Умеем ли мы работать с такими штуками ?</summary>
-					public bool IsKnownType { get; private set; } = false;
-
-					#endregion
-
-
-					public override string ToString() => $"{TagValue}: {Path} -> {Target}";
-
-
-					#region Constructor
-					/// <summary>Takes a full path to a reparse point and finds the target.</summary>
-					/// <param name="sPath">Full path of the reparse point</param>
-					public ReparsePoint(string sPath, bool ThrowErrorOnUnknownTagType = true) : base()
-					{
-						Path = sPath;
-						var outBuffer = GetReparseData(sPath);
-						TagValue = outBuffer.ReparseTag;
-						switch (outBuffer.ReparseTag)
-						{
-							case REPARSE_TAG_TYPES.IO_REPARSE_TAG_SYMLINK:
-								{
-									// for some reason symlinks seem to have an extra two characters on the front  (0,0,0,0)
-									if (sPath.EndsWith(@"\")) sPath = sPath.Substring(0, sPath.Length - 1);
-									Target = Encoding.Unicode.GetString(outBuffer.PathBuffer, outBuffer.SubstituteNameOffset + 4, outBuffer.SubstituteNameLength);
-									IsKnownType = true;
-									break;
-								}
-
-							case REPARSE_TAG_TYPES.IO_REPARSE_TAG_MOUNT_POINT:
-								{
-									Target = Encoding.Unicode.GetString(outBuffer.PathBuffer, outBuffer.SubstituteNameOffset, outBuffer.SubstituteNameLength);
-
-									// This could be a junction or a mounted drive - a mounted drive starts with "\??\X:\"
-									// Dim PrintName = System.Text.Encoding.Unicode.GetString(outBuffer.PathBuffer, outBuffer.PrintNameOffset, outBuffer.PrintNameLength)
-									bool bIsMountPt = Target.ToLower().StartsWith(VOLUME_MOUNT_POINT.ToLower());
-									if (bIsMountPt)
-										Target = Target.Substring(VOLUME_MOUNT_POINT.Length);
-									else
-									{
-										// JunctionPoint
-									}
-									IsKnownType = true;
-									break;
-								}
-
-							default:
-								{
-#if DEBUG
-									//var AAA = outBuffer.PathBuffer.e_DumpHex()
-									//Dim uiTag = TagTrim(Me.TagValue)
-									//Dim sFlags = Me.TagValue.ExtEnum_SplitToFlagsAsStrings
-
-#endif
-									if (ThrowErrorOnUnknownTagType) throw new IOException($"Unknown REPARSE_TAG: {TagValue}");
-									// Debug.Assert(outBuffer.ReparseTag = REPARSE_GUID_DATA_BUFFER.TAG_TYPES.IO_REPARSE_TAG_SYMLINK OrElse outBuffer.ReparseTag = REPARSE_GUID_DATA_BUFFER.TAG_TYPES.IO_REPARSE_TAG_MOUNT_POINT, "Unrecognised reparse tag")
-
-									break;
-								}
-						}
-
-						if (!IsKnownType) return;
-						//if (!sPath.StartsWith(NonInterpretedPathPrefix))
-						{
-							if (Target!.StartsWith(NON_INTERPRETED_PATH_PREFIX)) Target = Target.Substring(NON_INTERPRETED_PATH_PREFIX.Length);
-						}
-
-
-						// Remove any final slash for consistency
-						while (Target.EndsWith(@"\")) Target = Target.TrimEnd('\\');
-
-						// If (Not String.IsNullOrEmpty(printString)) Then
-						// _NormalisedTarget = printString
-						// Else
-						// if not we can use the substring with a bit of tweaking
-						// _NormalisedTarget = subsString
-						// Debug.Assert(_NormalisedTarget.Length > 2, "Target string too short")
-						// Debug.Assert(
-						// (_NormalisedTarget.StartsWith("\??\") AndAlso (_NormalisedTarget(5) = ":" OrElse _NormalisedTarget.StartsWith("\??\Volume")) OrElse
-						// (Not _NormalisedTarget.StartsWith("\??\") AndAlso _NormalisedTarget(1)<>":")), "Malformed subsString")
-						//  Junction points must be absolute
-						// Debug.Assert(
-						// buffer.ReparseTag = IO_REPARSE_TAG_SYMLINK OrElse
-						// _NormalisedTarget.StartsWith("\??\Volume") OrElse
-						// _NormalisedTarget(1) = ":", "Relative junction point")
-						// If (_NormalisedTarget.StartsWith("\??\")) Then
-						// _NormalisedTarget = _NormalisedTarget.Substring(4)
-						// End If
-						// End If
-						// _ActualTarget = _NormalisedTarget
-
-
-					}
-
-					private static REPARSE_GUID_DATA_BUFFER GetReparseData(string path)
-					{
-						Debug.Assert(path.e_IsNOTNullOrWhiteSpace() && path.Length > 2 && Convert.ToString(path[1]) == ":" && Convert.ToString(path[2]) == @"\");
-						Security.PRIVELEGE_NAMES.SeBackupPrivilege.e_AdjustProcessPrivilegeAndCloseToken();
-
-						// Open the file and get its handle
-						using var hFile = CreateFileAsSafeFileHandle(path,
-							NativeFileAccess.GenericRead,
-							FileShare.None,
-							IntPtr.Zero,
-							FileMode.Open,
-							NativeFileFlags.FILE_FLAG_OPEN_REPARSE_POINT | NativeFileFlags.FILE_FLAG_BACKUP_SEMANTICS,
-							IntPtr.Zero);
-						(!hFile.IsInvalid).e_ThrowLastWin32Exception_AssertFalse("CreateFile");
-						var outBuffer = new REPARSE_GUID_DATA_BUFFER();
-						int outBufferSize = Marshal.SizeOf(typeof(REPARSE_GUID_DATA_BUFFER));
-						var bytesReturned = 0;
-						bool bSuccess = REPARSE_GUID_DATA_BUFFER.DeviceIoControl(
-							hFile.DangerousGetHandle(),
-							REPARSE_GUID_DATA_BUFFER.FSCTL_COMMANDS.FSCTL_GET_REPARSE_POINT,
-							IntPtr.Zero,
-							0,
-							ref outBuffer,
-							outBufferSize,
-							ref bytesReturned,
-							IntPtr.Zero);
-						bSuccess.e_ThrowLastWin32Exception_AssertFalse("DeviceIoControl");
-						return outBuffer;
-					}
-					#endregion
-
-
-
-
-
-					public enum NewTagType : int
-					{
-						[Description("Неизвестный")]
-						None = 0,
-
-						/// <summary>В файловой системе NTFS (начиная с Windows NT4[1]) поддерживаются жёсткие ссылки. Жёсткая ссылка может создаваться только в пределах одного логического раздела и только для файлов. В операционных системах Windows нет возможности создать жесткую ссылку на директорию. Однако похожего эффекта можно добиться используя NTFS junction point.</summary>
-						[Description("Точка монтирования диска")]
-						MountPoint = 1,
-
-						/// <summary>Символьная ссылка - специальный файл в файловой системе, для которого не формируются никакие данные, кроме одной текстовой строки с указателем. Эта строка трактуется как путь к файлу, который должен быть открыт при попытке обратиться к данной ссылке (файлу). Символьная ссылка занимает ровно столько места в файловой системе, сколько требуется для записи её содержимого (нормальный файл занимает как минимум один блок раздела).
-						/// В отличие от жёстких ссылок, могут указывать на файлы и директории в других томах
-						/// Целью ссылки может быть любой объект — например, другая ссылка, файл, папка, или даже несуществующий файл (в последнем случае при попытке открыть его должно выдаваться сообщение об отсутствии файла). Ссылка, указывающая на несуществующий файл, называется висячей.
-						/// Практически символьные ссылки используются для более удобной организации структуры файлов на компьютере, так как позволяют одному файлу или каталогу иметь несколько имён, различных атрибутов и свободны от некоторых ограничений, присущих жёстким ссылкам (последние действуют только в пределах одного раздела и не могут ссылаться на каталоги).</summary>
-						[Description("Символическая ссылка")]
-						SymbolicLink = 2,
-
-
-						/// <summary>Точка соединения ТОЛЬКО ДЛЯ ПАПОК!. Для файлов надо использовать HardLink (Жёсткая ссылка)</summary>
-						[Description("Точка соединения")]
-						JunctionPoint = 3
-					}
-
-
-					/// <summary>Creates a junction point from the specified directory to the specified target directory.</summary>
-					/// <remarks>Only works on NTFS. (https://msdn.microsoft.com/en-us/library/aa365006%28v=vs.85%29.aspx)</remarks>
-					/// <param name="LocationPath">The junction point path</param>
-					/// <param name="TargetPath">The target file or directory</param>
-					/// <param name="overwrite">If true overwrites an existing reparse point or empty directory</param>
-					/// <exception cref="IOException">Thrown when the junction point could not be created or when an existing directory was found and <paramref name="overwrite" /> if false</exception>
-					public static void Create(string LocationPath, string TargetPath, NewTagType eTagType, bool overwrite)
-					{
-						TargetPath = System.IO.Path.GetFullPath(TargetPath);
-						bool bTargetIsDirectory = Shell.PathIsDirectory(TargetPath);
-						switch (eTagType)
-						{
-							case NewTagType.JunctionPoint:
-								{
-									if (!bTargetIsDirectory) throw new Exception("JunctionPoint Valid Only For Directories! For Files use HardLinks instead.");
-									if (!Directory.Exists(TargetPath)) Errors.ThrowWin23Error(Errors.Win32Errors.ERROR_FILE_NOT_FOUND);
-									if (Directory.Exists(LocationPath))
-									{
-										if (!overwrite) throw new IOException($"Directory '{LocationPath}' already exists and '{nameof(overwrite)}'={overwrite}.");
-									}
-									else Directory.CreateDirectory(LocationPath);
-
-									string S1 = NON_INTERPRETED_PATH_PREFIX + TargetPath;
-									string S2 = TargetPath;
-									string SSS = S1 + '\0' + S2;
-									var aTargetDirBytes = Encoding.Unicode.GetBytes(SSS);
-									using var hReparsePoint = OpenReparsePoint(LocationPath, NativeFileAccess.GenericWrite);
-									try
-									{
-										var InBuffer = new REPARSE_GUID_DATA_BUFFER();
-										{
-											//var withBlock = InBuffer;
-											InBuffer.ReparseTag = REPARSE_TAG_TYPES.IO_REPARSE_TAG_MOUNT_POINT;
-											InBuffer.SubstituteNameOffset = 0;
-											InBuffer.SubstituteNameLength = (ushort)(S1.Length * 2);
-											InBuffer.PrintNameOffset = (ushort)(InBuffer.SubstituteNameOffset + InBuffer.SubstituteNameLength + 2);
-											InBuffer.PrintNameLength = (ushort)(S2.Length * 2);
-											InBuffer.PathBuffer = REPARSE_GUID_DATA_BUFFER.EMPTY_CHAR_BUFFER;
-											Array.Copy(aTargetDirBytes, 0, InBuffer.PathBuffer, 0, aTargetDirBytes.Length);
-											InBuffer.ReparseDataLength = (ushort)(InBuffer.SubstituteNameLength + InBuffer.PrintNameLength + 12);
-										}
-
-										int dwBytesToSet = InBuffer.ReparseDataLength + REPARSE_GUID_DATA_BUFFER.REPARSE_DATA_BUFFER_HEADER_SIZE;
-										int bytesReturned = 0;
-										bool result = REPARSE_GUID_DATA_BUFFER.DeviceIoControl(
-											hReparsePoint.DangerousGetHandle(),
-											REPARSE_GUID_DATA_BUFFER.FSCTL_COMMANDS.FSCTL_SET_REPARSE_POINT,
-											ref InBuffer,
-											dwBytesToSet,
-											IntPtr.Zero,
-											0,
-											ref bytesReturned,
-											IntPtr.Zero);
-
-										result.e_ThrowLastWin32Exception_AssertFalse("DeviceIoControl");
-									}
-									finally { hReparsePoint.Close(); }
-									break;
-								}
-
-							case NewTagType.SymbolicLink: // Символьная ссылка
-								{
-									var SFF = bTargetIsDirectory ? SYM_LINK_FLAG.SYMBOLIC_LINK_FLAG_DIRECTORY : SYM_LINK_FLAG.SYMBOLIC_LINK_FLAG_FILE;
-									bool bResult = CreateSymbolicLink(LocationPath, TargetPath, SFF);
-									bResult.e_ThrowLastWin32Exception_AssertFalse("CreateSymbolicLink");
-									break;
-								}
-
-							default:
-								throw new NotImplementedException();
-						}
-					}
-
-					#region Delete
-
-
-					//<summary>
-					// '' Deletes a junction point at the specified source directory along with the directory itself.
-					// '' Does nothing if the junction point does not exist.
-					// '' </summary>
-					// '' <remarks>
-					// '' Only works on NTFS.
-					// '' </remarks>
-					// '' <param name="junctionPoint">The junction point path</param>
-					// public  shared   sub  Delete(string junctionPoint)
-					// {
-					// If (!Directory.Exists(junctionPoint)) Then
-					// {
-					// If (File.Exists(junctionPoint)) Then
-					// Throw New IOException("Path is not a junction point.")
-
-					// Return
-					// }
-
-					// using (SafeFileHandle handle = OpenReparsePoint(junctionPoint, EFileAccess.GenericWrite))
-					// {
-					// REPARSE_DATA_BUFFER(reparseDataBuffer = New REPARSE_DATA_BUFFER())
-
-					// reparseDataBuffer.ReparseTag = IO_REPARSE_TAG_MOUNT_POINT
-					// reparseDataBuffer.ReparseDataLength = 0
-					// reparseDataBuffer.PathBuffer = new byte<0x3ff0> 
-
-					// int(inBufferSize = Marshal.SizeOf(reparseDataBuffer))
-					// IntPtr(inBuffer = Marshal.AllocHGlobal(inBufferSize))
-					// Try
-					// {
-					// Marshal.StructureToPtr(reparseDataBuffer, inBuffer, False)
-
-					// int(bytesReturned)
-					// bool result = DeviceIoControl(handle.DangerousGetHandle(), FSCTL_DELETE_REPARSE_POINT,
-					// inBuffer, 8, IntPtr.Zero, 0, [In,Out]bytesReturned, IntPtr.Zero) 
-
-					// If (!result) Then
-					// ThrowLastWin32Error("Unable to delete junction point.")
-					// }
-					// finally
-					// {
-					// Marshal.FreeHGlobal(inBuffer)
-					// }
-
-					// Try
-					// {
-					// Directory.Delete(junctionPoint)
-					// }
-					// catch (IOException ex)
-					// {
-					// Throw New IOException("Unable to delete junction point.", ex)
-					// }
-					// }
-					// }
-					#endregion
-
-					#region Exists
-
-
-					//<summary>
-					// '' Determines whether the specified path exists and refers to a junction point.
-					// '' </summary>
-					// '' <param name="path">The junction point path</param>
-					// '' <returns>True if the specified path represents a junction point</returns>
-					// '' <exception cref="IOException">Thrown if the specified path is invalid
-					// '' or some other error occurs</exception>
-					// public  shared  bool Exists(string path)
-					// {
-					// If (!Directory.Exists(path)) Then
-					// Return False
-
-					// using (SafeFileHandle handle = OpenReparsePoint(path, EFileAccess.GenericRead))
-					// {
-					// string target = InternalGetTarget(handle) 
-					// return target <> null 
-					// }
-					// }
-					#endregion
-
-				}
-
-				#endregion
-
-
-
-			}
-
-		}
-
-
-		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-		internal static partial class Security
-		{
-			#region Privilege Names
-			internal enum PRIVELEGE_NAMES
-			{
-				SeAssignPrimaryTokenPrivilege,
-				SeAuditPrivilege,
-				SeBackupPrivilege,
-				SeChangeNotifyPrivilege,
-				SeCreateGlobalPrivilege,
-				SeCreatePagefilePrivilege,
-				SeCreatePermanentPrivilege,
-				SeCreateSymbolicLinkPrivilege,
-				SeCreateTokenPrivilege,
-				SeDebugPrivilege,
-				SeDelegateSessionUserImpersonatePrivilege,
-				SeEnableDelegationPrivilege,
-				SeImpersonatePrivilege,
-				SeIncreaseBasePriorityPrivilege,
-				SeIncreaseQuotaPrivilege,
-				SeIncreaseWorkingSetPrivilege,
-				SeLoadDriverPrivilege,
-				SeLockMemoryPrivilege,
-				SeMachineAccountPrivilege,
-				SeManageVolumePrivilege,
-				SeProfileSingleProcessPrivilege,
-				SeRelabelPrivilege,
-				SeRemoteShutdownPrivilege,
-				SeRestorePrivilege,
-				SeSecurityPrivilege,
-				SeShutdownPrivilege,
-				SeSyncAgentPrivilege,
-				SeSystemEnvironmentPrivilege,
-				SeSystemProfilePrivilege,
-				SeSystemtimePrivilege,
-				SeTakeOwnershipPrivilege,
-				SeTcbPrivilege,
-				SeTimeZonePrivilege,
-				SeTrustedCredManAccessPrivilege,
-				SeUndockPrivilege,
-				SeUnsolicitedInputPrivilege
-			}
-			internal static class Priveleges
-			{
-				internal static readonly string SE_ASSIGNPRIMARYTOKEN_NAME = PRIVELEGE_NAMES.SeAssignPrimaryTokenPrivilege.ToString();
-				internal static readonly string SE_AUDIT_NAME = PRIVELEGE_NAMES.SeAuditPrivilege.ToString();
-				internal static readonly string SE_BACKUP_NAME = PRIVELEGE_NAMES.SeBackupPrivilege.ToString();
-				internal static readonly string SE_CHANGE_NOTIFY_NAME = PRIVELEGE_NAMES.SeChangeNotifyPrivilege.ToString();
-				internal static readonly string SE_CREATE_GLOBAL_NAME = PRIVELEGE_NAMES.SeCreateGlobalPrivilege.ToString();
-				internal static readonly string SE_CREATE_PAGEFILE_NAME = PRIVELEGE_NAMES.SeCreatePagefilePrivilege.ToString();
-				internal static readonly string SE_CREATE_PERMANENT_NAME = PRIVELEGE_NAMES.SeCreatePermanentPrivilege.ToString();
-				internal static readonly string SE_CREATE_SYMBOLIC_LINK_NAME = PRIVELEGE_NAMES.SeCreateSymbolicLinkPrivilege.ToString();
-				internal static readonly string SE_CREATE_TOKEN_NAME = PRIVELEGE_NAMES.SeCreateTokenPrivilege.ToString();
-				internal static readonly string SE_DEBUG_NAME = PRIVELEGE_NAMES.SeDebugPrivilege.ToString();
-				internal static readonly string SE_DELEGATE_SESSION_USER_IMPERSONATE_NAME = PRIVELEGE_NAMES.SeDelegateSessionUserImpersonatePrivilege.ToString();
-				internal static readonly string SE_ENABLE_DELEGATION_NAME = PRIVELEGE_NAMES.SeEnableDelegationPrivilege.ToString();
-				internal static readonly string SE_IMPERSONATE_NAME = PRIVELEGE_NAMES.SeImpersonatePrivilege.ToString();
-				internal static readonly string SE_INC_BASE_PRIORITY_NAME = PRIVELEGE_NAMES.SeIncreaseBasePriorityPrivilege.ToString();
-				internal static readonly string SE_INCREASE_QUOTA_NAME = PRIVELEGE_NAMES.SeIncreaseQuotaPrivilege.ToString();
-				internal static readonly string SE_INC_WORKING_SET_NAME = PRIVELEGE_NAMES.SeIncreaseWorkingSetPrivilege.ToString();
-				internal static readonly string SE_LOAD_DRIVER_NAME = PRIVELEGE_NAMES.SeLoadDriverPrivilege.ToString();
-				internal static readonly string SE_LOCK_MEMORY_NAME = PRIVELEGE_NAMES.SeLockMemoryPrivilege.ToString();
-				internal static readonly string SE_MACHINE_ACCOUNT_NAME = PRIVELEGE_NAMES.SeMachineAccountPrivilege.ToString();
-				internal static readonly string SE_MANAGE_VOLUME_NAME = PRIVELEGE_NAMES.SeManageVolumePrivilege.ToString();
-				internal static readonly string SE_PROF_SINGLE_PROCESS_NAME = PRIVELEGE_NAMES.SeProfileSingleProcessPrivilege.ToString();
-				internal static readonly string SE_RELABEL_NAME = PRIVELEGE_NAMES.SeRelabelPrivilege.ToString();
-				internal static readonly string SE_REMOTE_SHUTDOWN_NAME = PRIVELEGE_NAMES.SeRemoteShutdownPrivilege.ToString();
-				internal static readonly string SE_RESTORE_NAME = PRIVELEGE_NAMES.SeRestorePrivilege.ToString();
-				internal static readonly string SE_SECURITY_NAME = PRIVELEGE_NAMES.SeSecurityPrivilege.ToString();
-				internal static readonly string SE_SHUTDOWN_NAME = PRIVELEGE_NAMES.SeShutdownPrivilege.ToString();
-				internal static readonly string SE_SYNC_AGENT_NAME = PRIVELEGE_NAMES.SeSyncAgentPrivilege.ToString();
-				internal static readonly string SE_SYSTEM_ENVIRONMENT_NAME = PRIVELEGE_NAMES.SeSystemEnvironmentPrivilege.ToString();
-				internal static readonly string SE_SYSTEM_PROFILE_NAME = PRIVELEGE_NAMES.SeSystemProfilePrivilege.ToString();
-				internal static readonly string SE_SYSTEMTIME_NAME = PRIVELEGE_NAMES.SeSystemtimePrivilege.ToString();
-				internal static readonly string SE_TAKE_OWNERSHIP_NAME = PRIVELEGE_NAMES.SeTakeOwnershipPrivilege.ToString();
-				internal static readonly string SE_TCB_NAME = PRIVELEGE_NAMES.SeTcbPrivilege.ToString();
-				internal static readonly string SE_TIME_ZONE_NAME = PRIVELEGE_NAMES.SeTimeZonePrivilege.ToString();
-				internal static readonly string SE_TRUSTED_CREDMAN_ACCESS_NAME = PRIVELEGE_NAMES.SeTrustedCredManAccessPrivilege.ToString();
-				internal static readonly string SE_UNDOCK_NAME = PRIVELEGE_NAMES.SeUndockPrivilege.ToString();
-				internal static readonly string SE_UNSOLICITED_INPUT_NAME = PRIVELEGE_NAMES.SeUnsolicitedInputPrivilege.ToString();
-			}
-			#endregion
-
-			#region TokenPrivileges
-			public const uint SE_PRIVILEGE_ENABLED = 0x2;
-			// Public Const TOKEN_ADJUST_PRIVILEGES As UInteger = 0x20
-
-			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto, Pack = 1)]
-			public partial struct LUID
-			{
-				public uint LowPart;
-				public int HighPart;
-			}
-
-			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto, Pack = 1)]
-			public partial struct LUID_AND_ATTRIBUTES
-			{
-				public LUID Luid;
-				public uint Attributes;
-			}
-
-			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto, Pack = 1)]
-			public partial struct TOKEN_PRIVILEGES
-			{
-				public uint PrivilegeCount;
-				[MarshalAs(UnmanagedType.ByValArray, SizeConst = 1)]
-				public LUID_AND_ATTRIBUTES[] Privileges;
-
-				public TOKEN_PRIVILEGES(LUID_AND_ATTRIBUTES[] ap)
-				{
-					PrivilegeCount = (uint)ap.Length;
-					Privileges = ap;
-				}
-			}
-
-			#region OpenProcessToken
-
-			//  Token Specific Access Rights
-
-			// Public Const STANDARD_RIGHTS_REQUIRED As UInt32 = 0xF0000
-			// Public Const STANDARD_RIGHTS_READ As UInt32 = 0x20000
-			// Public Const TOKEN_ASSIGN_PRIMARY As UInt32 = 1
-			// Public Const TOKEN_DUPLICATE As UInt32 = 2
-			// Public Const TOKEN_IMPERSONATE As UInt32 = 4
-			// Public Const TOKEN_QUERY As UInt32 = 8
-			// Public Const TOKEN_QUERY_SOURCE As UInt32 = 0x10
-			// Public Const TOKEN_ADJUST_PRIVILEGES As UInt32 = 0x20
-			// Public Const TOKEN_ADJUST_GROUPS As UInt32 = 0x40
-			// Public Const TOKEN_ADJUST_DEFAULT As UInt32 = 0x80
-			// Public Const TOKEN_ADJUST_SESSIONID As UInt32 = 0x100
-			// Public Const TOKEN_READ As UInt32 = (STANDARD_RIGHTS_READ Or TOKEN_QUERY)
-			// Public Const TOKEN_ALL_ACCESS As UInt32 = (STANDARD_RIGHTS_REQUIRED Or TOKEN_ASSIGN_PRIMARY Or TOKEN_DUPLICATE Or
-			// TOKEN_IMPERSONATE Or TOKEN_QUERY Or TOKEN_QUERY_SOURCE Or
-			// TOKEN_ADJUST_PRIVILEGES Or TOKEN_ADJUST_GROUPS Or TOKEN_ADJUST_DEFAULT Or
-			// TOKEN_ADJUST_SESSIONID)
-
-
-
-			/// <summary>The OpenProcessToken function opens the access token associated with a process.</summary>
-			/// <param name="ProcessHandle">A handle to the process whose access token is opened. The process must have the PROCESS_QUERY_INFORMATION access permission.</param>
-			/// <param name="DesiredAccess">Specifies an access mask that specifies the requested types of access to the access token. These requested access types are compared with the discretionary access control list (DACL) of the token to determine which accesses are granted or denied.</param>
-			/// <param name="TokenHandle">A pointer to a handle that identifies the newly opened access token when the function returns.</param>
-			/// <returns>If the function succeeds, the return value is nonzero.If the function fails, the return value is zero. To get extended error information, call GetLastError.</returns>
-			/// <remarks>Close the access token handle returned through the TokenHandle parameter by calling CloseHandle.</remarks>
-			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			[SecurityCritical]
-			private static extern bool OpenProcessToken(
-				[In] IntPtr ProcessHandle,
-				[In] TokenAccessLevels DesiredAccess,
-				[In, Out] ref IntPtr TokenHandle);
-
-
-			/// <summary>The OpenProcessToken function opens the access token associated with a process.</summary>
-			/// <param name="ProcessHandle">A handle to the process whose access token is opened. The process must have the PROCESS_QUERY_INFORMATION access permission.</param>
-			/// <param name="DesiredAccess">Specifies an access mask that specifies the requested types of access to the access token. These requested access types are compared with the discretionary access control list (DACL) of the token to determine which accesses are granted or denied.</param>
-			[SecurityCritical]
-			public static Microsoft.Win32.SafeHandles.SafeFileHandle OpenProcessToken(IntPtr ProcessHandle, TokenAccessLevels DesiredAccess)
-			{
-				var ProcessToken = IntPtr.Zero;
-				bool bResult = OpenProcessToken(ProcessHandle, DesiredAccess, ref ProcessToken);
-				if (!bResult)
-					Errors.ThrowLastWin23Error("OpenProcessToken");
-
-				var rProcessToken = new Microsoft.Win32.SafeHandles.SafeFileHandle(ProcessToken, true);
-				return rProcessToken;
-			}
-
-			/// <summary>Open Token for Current Process</summary>
-			[SecurityCritical]
-			public static Microsoft.Win32.SafeHandles.SafeFileHandle OpenCurrentProcessToken(TokenAccessLevels DesiredAccess)
-			{
-				var hProcess = uom.WinAPI.ProcessAPI.GetCurrentProcess();
-				return OpenProcessToken(hProcess, DesiredAccess);
-			}
-
-			#endregion
-
-
-			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			[SecurityCritical]
-			private static extern bool LookupPrivilegeDisplayName(
-				[In, MarshalAs(UnmanagedType.LPTStr)] string? lpSystemName,
-				[In, MarshalAs(UnmanagedType.LPTStr)] string lpName,
-				[In, Out, MarshalAs(UnmanagedType.LPTStr)] StringBuilder? lpDisplayName,
-				[In, Out] ref int cchDisplayName,
-				[In, Out] ref int lpLanguageId);
-
-			[SecurityCritical]
-			public static (string PrivilegeDisplayName, int LanguageId) LookupPrivilegeDisplayName(PRIVELEGE_NAMES pn, string? systemName = null)
-			{
-				//First get the buffer sizes for string
-				int cchDisplayName = 0;
-				int lpLanguageId = 0;
-				string spn = pn.ToString();
-				var bResult = LookupPrivilegeDisplayName(systemName, spn, null, ref cchDisplayName, ref lpLanguageId);
-				if (!bResult) WinAPI.Errors.ThrowLastWin23ErrorAssert(Errors.Win32Errors.ERROR_INSUFFICIENT_BUFFER);
-
-				//Get the value to buffer
-				StringBuilder sbDisplayName = new(cchDisplayName + 1);
-				bResult = LookupPrivilegeDisplayName(systemName, spn, sbDisplayName, ref cchDisplayName, ref lpLanguageId);
-				if (!bResult) WinAPI.Errors.ThrowLastWin23ErrorAssert(Errors.Win32Errors.ERROR_INSUFFICIENT_BUFFER);
-
-				return (sbDisplayName.ToString(), lpLanguageId);
-			}
-
-
-			/// <summary>retrieves the locally unique identifier (LUID) used on a specified system to locally represent the specified privilege name.</summary>
-			/// <param name="lpSystemName">A pointer to a null-terminated string that specifies the name of the system on which the privilege name is retrieved. If a null string is specified, the function attempts to find the privilege name on the local system.</param>
-			/// <param name="lpName">A pointer to a null-terminated string that specifies the name of the privilege, as defined in the Winnt.h header file. For example, this parameter could specify the constant, SE_SECURITY_NAME, or its corresponding string, "SeSecurityPrivilege".</param>
-			/// <param name="lpLuid"></param>            
-			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			[SecurityCritical]
-			public static extern bool LookupPrivilegeValue(
-				[In, MarshalAs(UnmanagedType.LPTStr)] string? lpSystemName,
-				[In] string lpName,
-				[In, Out] ref LUID lpLuid);
-
-			[SecurityCritical]
-			public static LUID LookupPrivilegeValue(string pn, string? systemName = null)
-			{
-				LUID Luid = new();
-				LookupPrivilegeValue(systemName, pn, ref Luid).e_ThrowLastWin32Exception_AssertFalse("LookupPrivilegeValue");
-				return Luid;
-			}
-
-			[SecurityCritical]
-			public static LUID LookupPrivilegeValue(PRIVELEGE_NAMES epn, string? systemName = null)
-				=> LookupPrivilegeValue(epn.ToString(), systemName);
-
-
-
-			[SecurityCritical]
-			[DllImport(core.WINDLL_ADVAPI32, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
-			public static extern bool AdjustTokenPrivileges(
-				IntPtr TokenHandle,
-				[MarshalAs(UnmanagedType.Bool)] bool DisableAllPrivileges,
-				ref TOKEN_PRIVILEGES NewState,
-				int BufferLength,
-				IntPtr PreviousState,
-				IntPtr ReturnLength);
-
-
-			/// <returns>processToken</returns>
-			[SecurityCritical]
-			public static SafeFileHandle AdjustProcessPrivilege(PRIVELEGE_NAMES pn)
-				=> AdjustProcessPrivilege(pn.ToString());
-
-			/// <returns>processToken</returns>
-			[SecurityCritical]
-			public static SafeFileHandle AdjustProcessPrivilege(string pn)
-			{
-				//using SafeFileHandle ProcessToken = OpenCurrentProcessToken(TokenAccessLevels.Query | TokenAccessLevels.AdjustPrivileges);
-				SafeFileHandle processToken = OpenCurrentProcessToken(TokenAccessLevels.Query | TokenAccessLevels.AdjustPrivileges);
-				LUID luid = LookupPrivilegeValue(pn);
-				LUID_AND_ATTRIBUTES[] P = new LUID_AND_ATTRIBUTES[1];
-				P[0].Luid = luid;
-				P[0].Attributes = SE_PRIVILEGE_ENABLED;
-				TOKEN_PRIVILEGES tokenPrivileges = new(P);
-				AdjustTokenPrivileges(
-					processToken.DangerousGetHandle(),
-					false,
-					ref tokenPrivileges,
-					Marshal.SizeOf(tokenPrivileges),
-					IntPtr.Zero,
-					IntPtr.Zero)
-					.e_ThrowLastWin32Exception_AssertFalse("AdjustTokenPrivileges");
-
-				return processToken;
-			}
-
-			[SecurityCritical]
-			public static void AdjustProcessPrivilegeAndCloseToken(PRIVELEGE_NAMES pn)
-			{
-				using SafeFileHandle token = AdjustProcessPrivilege(pn);
-			}
-
-			#endregion
-
-			/// <summary>The TOKEN_INFORMATION_CLASS enumeration type contains values that specify the type of information being assigned to or retrieved from an access token.</summary>
-			internal enum TOKEN_INFORMATION_CLASS : int
-			{
-				TokenUser = 1,
-				TokenGroups,
-				TokenPrivileges,
-				TokenOwner,
-				TokenPrimaryGroup,
-				TokenDefaultDacl,
-				TokenSource,
-				TokenType,
-				TokenImpersonationLevel,
-				TokenStatistics,
-				TokenRestrictedSids,
-				TokenSessionId,
-				TokenGroupsAndPrivileges,
-				TokenSessionReference,
-				TokenSandBoxInert,
-				TokenAuditPolicy,
-				TokenOrigin,
-				TokenElevationType,
-				TokenLinkedToken,
-				TokenElevation,
-				TokenHasRestrictions,
-				TokenAccessInformation,
-				TokenVirtualizationAllowed,
-				TokenVirtualizationEnabled,
-				TokenIntegrityLevel,
-				TokenUIAccess,
-				TokenMandatoryPolicy,
-				TokenLogonSid,
-				TokenIsAppContainer,
-				TokenCapabilities,
-				TokenAppContainerSid,
-				TokenAppContainerNumber,
-				TokenUserClaimAttributes,
-				TokenDeviceClaimAttributes,
-				TokenRestrictedUserClaimAttributes,
-				TokenRestrictedDeviceClaimAttributes,
-				TokenDeviceGroups,
-				TokenRestrictedDeviceGroups,
-				TokenSecurityAttributes,
-				TokenIsRestricted,
-				TokenProcessTrustLevel,
-				TokenPrivateNameSpace,
-				TokenSingletonAttributes,
-				TokenBnoIsolation,
-				TokenChildProcessFlags,
-				TokenIsLessPrivilegedAppContainer,
-				TokenIsSandboxed,
-				MaxTokenInfoClass
-			}
-
-
-			/// <summary>The WELL_KNOWN_SID_TYPE enumeration type is a list of commonly used security identifiers (SIDs). Programs can pass these values to the CreateWellKnownSid function to create a SID from this list.</summary>
-			internal enum WELL_KNOWN_SID_TYPE
-			{
-				WinNullSid = 0,
-				WinWorldSid = 1,
-				WinLocalSid = 2,
-				WinCreatorOwnerSid = 3,
-				WinCreatorGroupSid = 4,
-				WinCreatorOwnerServerSid = 5,
-				WinCreatorGroupServerSid = 6,
-				WinNtAuthoritySid = 7,
-				WinDialupSid = 8,
-				WinNetworkSid = 9,
-				WinBatchSid = 10,
-				WinInteractiveSid = 11,
-				WinServiceSid = 12,
-				WinAnonymousSid = 13,
-				WinProxySid = 14,
-				WinEnterpriseControllersSid = 15,
-				WinSelfSid = 16,
-				WinAuthenticatedUserSid = 17,
-				WinRestrictedCodeSid = 18,
-				WinTerminalServerSid = 19,
-				WinRemoteLogonIdSid = 20,
-				WinLogonIdsSid = 21,
-				WinLocalSystemSid = 22,
-				WinLocalServiceSid = 23,
-				WinNetworkServiceSid = 24,
-				WinBuiltinDomainSid = 25,
-				WinBuiltinAdministratorsSid = 26,
-				WinBuiltinUsersSid = 27,
-				WinBuiltinGuestsSid = 28,
-				WinBuiltinPowerUsersSid = 29,
-				WinBuiltinAccountOperatorsSid = 30,
-				WinBuiltinSystemOperatorsSid = 31,
-				WinBuiltinPrintOperatorsSid = 32,
-				WinBuiltinBackupOperatorsSid = 33,
-				WinBuiltinReplicatorSid = 34,
-				WinBuiltinPreWindows2000CompatibleAccessSid = 35,
-				WinBuiltinRemoteDesktopUsersSid = 36,
-				WinBuiltinNetworkConfigurationOperatorsSid = 37,
-				WinAccountAdministratorSid = 38,
-				WinAccountGuestSid = 39,
-				WinAccountKrbtgtSid = 40,
-				WinAccountDomainAdminsSid = 41,
-				WinAccountDomainUsersSid = 42,
-				WinAccountDomainGuestsSid = 43,
-				WinAccountComputersSid = 44,
-				WinAccountControllersSid = 45,
-				WinAccountCertAdminsSid = 46,
-				WinAccountSchemaAdminsSid = 47,
-				WinAccountEnterpriseAdminsSid = 48,
-				WinAccountPolicyAdminsSid = 49,
-				WinAccountRasAndIasServersSid = 50,
-				WinNTLMAuthenticationSid = 51,
-				WinDigestAuthenticationSid = 52,
-				WinSChannelAuthenticationSid = 53,
-				WinThisOrganizationSid = 54,
-				WinOtherOrganizationSid = 55,
-				WinBuiltinIncomingForestTrustBuildersSid = 56,
-				WinBuiltinPerfMonitoringUsersSid = 57,
-				WinBuiltinPerfLoggingUsersSid = 58,
-				WinBuiltinAuthorizationAccessSid = 59,
-				WinBuiltinTerminalServerLicenseServersSid = 60,
-				WinBuiltinDCOMUsersSid = 61,
-				WinBuiltinIUsersSid = 62,
-				WinIUserSid = 63,
-				WinBuiltinCryptoOperatorsSid = 64,
-				WinUntrustedLabelSid = 65,
-				WinLowLabelSid = 66,
-				WinMediumLabelSid = 67,
-				WinHighLabelSid = 68,
-				WinSystemLabelSid = 69,
-				WinWriteRestrictedCodeSid = 70,
-				WinCreatorOwnerRightsSid = 71,
-				WinCacheablePrincipalsGroupSid = 72,
-				WinNonCacheablePrincipalsGroupSid = 73,
-				WinEnterpriseReadonlyControllersSid = 74,
-				WinAccountReadonlyControllersSid = 75,
-				WinBuiltinEventLogReadersGroup = 76,
-				WinNewEnterpriseReadonlyControllersSid = 77,
-				WinBuiltinCertSvcDComAccessGroup = 78
-			}
-
-
-			/// <summary>The SECURITY_IMPERSONATION_LEVEL enumeration type contains values that specify security impersonation levels. Security impersonation levels govern the degree to which a server process can act on behalf of a client process.</summary>
-			internal enum SECURITY_IMPERSONATION_LEVEL
-			{
-				SecurityAnonymous = 0,
-				SecurityIdentification,
-				SecurityImpersonation,
-				SecurityDelegation
-			}
-
-
-			/// <summary>The TOKEN_ELEVATION_TYPE enumeration indicates the elevation type of token
-			/// when UAC is turned off, elevation type always returns TokenElevationTypeDefault
-			/// </summary>
-			internal enum TOKEN_ELEVATION_TYPE : Int32
-			{
-				/// <summary>Токен не имеет связанного токена (UAC is turned off)</summary>
-				TokenElevationTypeDefault = 1,
-
-				/// <summaryс повышенными правами.</summary>
-				TokenElevationTypeFull,
-
-				/// <summary>ограниченный токен.</summary>
-				TokenElevationTypeLimited
-			}
-
-
-			/// <summary>The structure represents a security identifier (SID) and its attributes.
-			/// SIDs are used to uniquely identify users or groups.</summary>
-			[StructLayout(LayoutKind.Sequential)]
-			internal partial struct SID_AND_ATTRIBUTES
-			{
-				public IntPtr Sid;
-				public int Attributes;
-			}
-
-
-			/// <summary>The structure indicates whether a token has elevated privileges.</summary>
-			[StructLayout(LayoutKind.Sequential)]
-			internal partial struct TOKEN_ELEVATION
-			{
-				public int TokenIsElevated;
-			}
-
-
-			/// <summary>The structure specifies the mandatory integrity level for a token.</summary>
-			[StructLayout(LayoutKind.Sequential)]
-			internal partial struct TOKEN_MANDATORY_LABEL
-			{
-				public SID_AND_ATTRIBUTES Label;
-			}
-
-
-			/// <summary>integrity level of the process. Integrity level is only available on Windows Vista and newer operating systems, thus 
-			/// GetProcessIntegrityLevel throws a C++ exception if it is called on systems prior to Windows Vista.</summary>
-			public enum IntegrityLevels : int
-			{
-				ERROR = -1,
-
-				/// <summary>SECURITY_MANDATORY_UNTRUSTED_RID - means untrusted level. It is used by processes started by the Anonymous group. Blocks most write access. (SID: S-1-16-0x0)</summary>
-				SECURITY_MANDATORY_UNTRUSTED_RID = 0,
-
-				/// <summary>SECURITY_MANDATORY_LOW_RID - means low integrity level. It is used by Protected Mode Internet Explorer. Blocks write acess to most objects (such as files and registry keys) on the system. (SID: S-1-16-0x1000)</summary>
-				SECURITY_MANDATORY_LOW_RID = 0x1000,
-
-				/// <summary>SECURITY_MANDATORY_MEDIUM_RID - means medium integrity level. It is used by normal applications being launched while UAC is enabled. (SID: S-1-16-0x2000)</summary>
-				SECURITY_MANDATORY_MEDIUM_RID = 0x2000,
-
-				/// <summary>SECURITY_MANDATORY_HIGH_RID - means high integrity level. It is used by administrative applications launched through elevation when UAC is enabled, or normal applications if UAC is disabled and the user is an administrator. (SID: S-1-16-0x3000)</summary>
-				SECURITY_MANDATORY_HIGH_RID = 0x3000,
-
-				/// <summary>SECURITY_MANDATORY_SYSTEM_RID - means system integrity level. It is used by services and other system-level applications (such as Wininit, Winlogon, Smss, etc.)  (SID: S-1-16-0x4000)</summary>
-				SECURITY_MANDATORY_SYSTEM_RID = 0x4000
-			}
-
-
-
-
-
-
-			/// <summary>The DuplicateToken function creates an impersonation token, 
-			/// which you can use in functions such as SetThreadToken and ImpersonateLoggedOnUser. 
-			/// The token created by DuplicateToken cannot be used in the CreateProcessAsUser function, which requires a primary token. 
-			/// To create a token that you can pass to CreateProcessAsUser, use the DuplicateTokenEx function.</summary>
-			/// <param name="ExistingTokenHandle">A handle to an access token opened with TOKEN_DUPLICATE access.</param>
-			/// <param name="ImpersonationLevel">Specifies a SECURITY_IMPERSONATION_LEVEL enumerated type that supplies the impersonation level of the new token.</param>
-			/// <param name="DuplicateTokenHandle">Outputs a handle to the duplicate token. </param>
-			[DllImport(core.WINDLL_ADVAPI32, CharSet = CharSet.Auto, SetLastError = true)]
-			[SecurityCritical]
-			internal static extern bool DuplicateToken(
-				Microsoft.Win32.SafeHandles.SafeFileHandle ExistingTokenHandle,
-				SECURITY_IMPERSONATION_LEVEL ImpersonationLevel,
-				[In, Out] ref Microsoft.Win32.SafeHandles.SafeFileHandle DuplicateTokenHandle);
-
-			/// <summary>The DuplicateToken function creates an impersonation token, 
-			/// which you can use in functions such as SetThreadToken and ImpersonateLoggedOnUser. 
-			/// The token created by DuplicateToken cannot be used in the CreateProcessAsUser function, which requires a primary token. 
-			/// To create a token that you can pass to CreateProcessAsUser, use the DuplicateTokenEx function.</summary>
-			/// <param name="ExistingTokenHandle">A handle to an access token opened with TOKEN_DUPLICATE access.</param>
-			/// <param name="ImpersonationLevel">Specifies a SECURITY_IMPERSONATION_LEVEL enumerated type that supplies the impersonation level of the new token.</param>
-			internal static Microsoft.Win32.SafeHandles.SafeFileHandle DuplicateToken(Microsoft.Win32.SafeHandles.SafeFileHandle ExistingTokenHandle, SECURITY_IMPERSONATION_LEVEL ImpersonationLevel)
-			{
-				//var hToken2 = IntPtr.Zero;
-				//WinAPI.Security.DuplicateToken(hToken, WinAPI.Security.SECURITY_IMPERSONATION_LEVEL.SecurityIdentification, ref hToken2).e_ThrowLastWin32Exception_AssertFalse();
-				//hTokenToCheck = new(hToken2, true);
-
-				Microsoft.Win32.SafeHandles.SafeFileHandle hToken2 = new(IntPtr.Zero, true);
-				DuplicateToken(ExistingTokenHandle, SECURITY_IMPERSONATION_LEVEL.SecurityIdentification, ref hToken2).e_ThrowLastWin32Exception_AssertFalse();
-				return hToken2;
-			}
-
-
-			/// <summary>The function retrieves a specified type of information about an access token. The calling process must have appropriate access rightsto obtain the information.</summary>
-			/// <param name="hToken">A handle to an access token from which information is retrieved.</param>
-			/// <param name="tokenInfoClass">Specifies a value from the TOKEN_INFORMATION_CLASS enumerated type to identify the type of information the function retrieves.</param>
-			/// <param name="pTokenInfo">A pointer to a buffer the function fills with the requested information.</param>
-			/// <param name="tokenInfoLength">Specifies the size, in bytes, of the buffer pointed to by the TokenInformation parameter.</param>
-			/// <param name="returnLength">A pointer to a variable that receives the number of bytes needed for the buffer pointed to by the TokenInformation parameter.</param>
-			[DllImport(core.WINDLL_ADVAPI32, CharSet = CharSet.Auto, SetLastError = true), SecurityCritical]
-			public static extern bool GetTokenInformation(
-				Microsoft.Win32.SafeHandles.SafeFileHandle hToken,
-				TOKEN_INFORMATION_CLASS tokenInfoClass,
-				IntPtr pTokenInfo,
-				int tokenInfoLength,
-				[In, Out] ref int returnLength);
-
-
-			[DllImport(core.WINDLL_ADVAPI32, EntryPoint = "GetTokenInformation", CharSet = CharSet.Auto, SetLastError = true), SecurityCritical]
-			public static extern bool GetTokenInformation_Int32(
-				Microsoft.Win32.SafeHandles.SafeFileHandle hToken,
-				TOKEN_INFORMATION_CLASS tokenInfoClass,
-				[In, Out] ref Int32 pTokenInfo,
-				int tokenInfoLength,
-				[In, Out] ref int returnLength);
-
-			/// <summary>Determine token type: limited, elevated, or default. </summary>
-			internal static TOKEN_ELEVATION_TYPE GetTokenInformation_Elevation(Microsoft.Win32.SafeHandles.SafeFileHandle hToken)
-			{
-				Int32 iElevationType = 0; int cbSize = sizeof(Int32);
-				GetTokenInformation_Int32(hToken, TOKEN_INFORMATION_CLASS.TokenElevationType, ref iElevationType, cbSize, ref cbSize).e_ThrowLastWin32Exception_AssertFalse();
-				var eElevationType = (WinAPI.Security.TOKEN_ELEVATION_TYPE)iElevationType;// Marshal the TOKEN_ELEVATION_TYPE enum from native to .NET.
-				return eElevationType;
-			}
-
-			[DllImport(core.WINDLL_ADVAPI32, EntryPoint = "GetTokenInformation", CharSet = CharSet.Auto, SetLastError = true), SecurityCritical]
-			public static extern bool GetTokenInformation_IntPtr(
-			 Microsoft.Win32.SafeHandles.SafeFileHandle hToken,
-			  TOKEN_INFORMATION_CLASS tokenInfoClass,
-			  [In, Out] ref IntPtr pTokenInfo,
-			  int tokenInfoLength,
-			  [In, Out] ref int returnLength);
-
-
-			/// <summary>The function returns a pointer to a specified subauthority in a security identifier (SID). The subauthority value is a relative identifier (RID).</summary>
-			/// <param name="pSid">A pointer to the SID structure from which a pointer to a subauthorityis to be returned.</param>
-			/// <param name="nSubAuthority">Specifies an index value identifying the subauthority array element whose address the function will return.</param>
-			/// <returns>If the function succeeds, the return value is a pointer to the specified SID subauthority. To get extended error information, call
-			/// GetLastError. If the function fails, the return value is undefined.
-			/// The function fails if the specified SID structure is not valid or if 
-			/// the index value specified by the nSubAuthority parameter is [Out ] of
-			/// bounds. 
-			/// </returns>
-			[DllImport(core.WINDLL_ADVAPI32, CharSet = CharSet.Auto, SetLastError = true)]
-			[SecurityCritical]
-			public static extern IntPtr GetSidSubAuthority(IntPtr pSid, uint nSubAuthority);
-		}
-
-		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-#pragma warning disable CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
+		/// <summary>Win32 Strings API</summary>
 		internal static partial class strings
-#pragma warning restore CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 		{
 
 
@@ -28898,10 +30732,8 @@ return cItems;
 		}
 
 
-		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-#pragma warning disable CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
+		/// <summary>Win32 Math</summary>
 		internal static partial class math
-#pragma warning restore CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
 		{
 
 
@@ -28916,9 +30748,13 @@ return cItems;
 		}
 
 
-		//[SecurityPermission(SecurityAction.LinkDemand, UnmanagedCode = true)]
-		internal static partial class Shell
+		/// <summary>Win32 Shell API</summary>
+		internal static partial class shell
 		{
+
+
+
+
 			[DllImport(core.WINDLL_SHELL, SetLastError = true, CharSet = CharSet.Auto, ExactSpelling = false, CallingConvention = CallingConvention.Winapi)]
 			private static extern int PickIconDlg(
 				IntPtr hwnd,
@@ -28926,29 +30762,27 @@ return cItems;
 				[In] int cchIconPath,
 				[In, Out] ref int piIconIndex);
 
-			internal static (DialogResult DislogResult, string? IconFile, int IconIndex)
-				PickIconDlg(
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static (DialogResult DislogResult, string? IconFile, int IconIndex) PickIconDlg(
 				IWin32Window hWnd,
 				string? iconFile = null,
 				int iIconIndex = 0)
 			{
 				const int C_DEFAULT_BUFFER_SIZE = 2000;
-				StringBuilder sbPath = (null != iconFile) ? new StringBuilder(iconFile, C_DEFAULT_BUFFER_SIZE) : new StringBuilder(C_DEFAULT_BUFFER_SIZE);
+				StringBuilder sbPath = (null != iconFile)
+					? new StringBuilder(iconFile, C_DEFAULT_BUFFER_SIZE)
+					: new StringBuilder(C_DEFAULT_BUFFER_SIZE);
+
 				int iResult = PickIconDlg(hWnd.Handle, sbPath, sbPath.Capacity, ref iIconIndex);
 				if (iResult == 0) return (DialogResult.Cancel, null, -1);
+
 				iconFile = Environment.ExpandEnvironmentVariables(sbPath.ToString());
 				return (DialogResult.OK, iconFile, iIconIndex);
 			}
 
 
 
-
-
-
 			#region StrFormatByteSize
-
-
-
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -29028,16 +30862,16 @@ return cItems;
 			/////// <returns>В текущем вызове ВСЕГДА вернётся код нажатой кнопки (независимо от состояния галочки).
 			/////// Если галочку установили сейчас, то в этом вызове вернётся код нажатой кнопки, а во всех последющих будет возвращаться iDefault и диалог не будет показываться.</returns>
 			////internal static MsgBoxResult SHMessageBoxCheck(
-			////    IWin32Window WND,
-			////    string pszText,
-			////    string MessageID,
-			////    string pszTitle = null,
-			////    MsgBoxStyle.vbYesNo | MsgBoxStyle.Information, MsgBoxResult iDefault = MsgBoxResult.Abort)
+			//// IWin32Window WND,
+			//// string pszText,
+			//// string MessageID,
+			//// string pszTitle = null,
+			//// MsgBoxStyle.vbYesNo | MsgBoxStyle.Information, MsgBoxResult iDefault = MsgBoxResult.Abort)
 			////{
-			////    IntPtr hwnd = WND.Handle;
-			////    if (string.IsNullOrWhiteSpace(pszTitle)) pszTitle = Application.ProductName;
-			////    string sID = BuildMessageID(MessageID); // This Is the value Of the registry key
-			////    return SHMessageBoxCheck(hwnd, pszText, pszTitle, uType, iDefault, sID);
+			//// IntPtr hwnd = WND.Handle;
+			//// if (string.IsNullOrWhiteSpace(pszTitle)) pszTitle = Application.ProductName;
+			//// string sID = BuildMessageID(MessageID); // This Is the value Of the registry key
+			//// return SHMessageBoxCheck(hwnd, pszText, pszTitle, uType, iDefault, sID);
 			////}
 
 			///// <summary>SHMessageBoxCheckCleanup will reset the state of the message box (i.e. the users choice wether or not to see the message box again will be reset).</summary>
@@ -29063,6 +30897,7 @@ return cItems;
 			//}
 
 			#endregion
+
 
 			#region SHFileOperation
 
@@ -29163,7 +30998,6 @@ return cItems;
 			[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
 			private struct SHFILEOPSTRUCT
 			{
-#pragma warning disable IDE1006 // Naming Styles
 				public IntPtr hwnd;
 				public FO_Func wFunc;
 				[MarshalAs(UnmanagedType.LPTStr)] public string pFrom;
@@ -29172,7 +31006,6 @@ return cItems;
 				public bool fAnyOperationsAborted;
 				public IntPtr hNameMappings;
 				[MarshalAs(UnmanagedType.LPTStr)] public string? lpszProgressTitle; // only used if FOF_SIMPLEPROGRESS      
-#pragma warning restore IDE1006 // Naming Styles
 			}
 
 
@@ -29180,9 +31013,10 @@ return cItems;
 			private static extern int SHFileOperation([In] ref SHFILEOPSTRUCT lpFileOp);
 
 
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static bool SHFO_Delete(IntPtr hWndOwner, IEnumerable<string> ItemsToDelete, FILEOP_FLAGS Options = FILEOP_FLAGS.FOF_ALLOWUNDO, string? title = null)
 			{
-				string sFilesToDelete = ItemsToDelete.e_ToAPIMultiStringZ();
+				string sFilesToDelete = ItemsToDelete.eToAPIMultiStringZ();
 				SHFILEOPSTRUCT fo = new()
 				{
 					hwnd = hWndOwner,
@@ -29208,166 +31042,62 @@ return cItems;
 			}
 
 
-			public static bool SHFO_Move(IntPtr hWndOwner, IEnumerable<string> aFrom, IEnumerable<string> aTo, FILEOP_FLAGS Options = FILEOP_FLAGS.FOF_ALLOWUNDO, string? title = null)
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static bool SHFO_Move(IntPtr hWndOwner, IEnumerable<string> sources, IEnumerable<string> targets, FILEOP_FLAGS opt = FILEOP_FLAGS.FOF_ALLOWUNDO, string? title = null)
 			{
-				var sFrom = aFrom.e_ToAPIMultiStringZ();
-				var sTo = aTo.e_ToAPIMultiStringZ();
+				var sFrom = sources.eToAPIMultiStringZ();
+				var sTo = targets.eToAPIMultiStringZ();
 
 				SHFILEOPSTRUCT fo = new()
 				{
+					wFunc = FO_Func.FO_MOVE,
 					hwnd = hWndOwner,
 					lpszProgressTitle = title,
-					wFunc = FO_Func.FO_MOVE,
 					pFrom = sFrom,
 					pTo = sTo,
-					fFlags = Options
+					fFlags = opt
 				};
 				return (SHFileOperation(ref fo) == 0) && !fo.fAnyOperationsAborted;
-
-				/*
-
-				if (Environment.Is64BitOperatingSystem)
-				{
-
-					var FO = new SHFILEOPSTRUCT_x64() { hwnd = hWndOwner, lpszProgressTitle = title, wFunc = FO_Func.FO_MOVE };
-					{
-						var withBlock = FO;
-						withBlock.pFrom = sFrom;
-						withBlock.pTo = sTo;
-						withBlock.fFlags = Options;
-					}
-
-					return SHFileOperation_x64(ref FO) == 0;
-				}
-				else
-				{
-					var FO = new SHFILEOPSTRUCT_x32() { hwnd = hWndOwner, lpszProgressTitle = title, wFunc = FO_Func.FO_MOVE };
-					{
-						var withBlock1 = FO;
-						withBlock1.pFrom = sFrom;
-						withBlock1.pTo = sTo;
-						withBlock1.fFlags = Options;
-					}
-
-					return SHFileOperation_x32(ref FO) == 0;
-				}
-				*/
 			}
 
 
 			/// <summary>Копирование в заданную ОДНУ папку, без перенименования!</summary>
-			public static bool SHFO_Copy(IntPtr hWndOwner, string[] aFrom, string sTargetFolder, string? title = null)
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static bool SHFO_Copy(IntPtr hWndOwner, string[] sources, string targetFolder, string? title = null)
 			{
-				string sFrom = aFrom.e_ToAPIMultiStringZ();
-				var Options = FILEOP_FLAGS.FOF_ALLOWUNDO;
-
+				string sFrom = sources.eToAPIMultiStringZ();
+				var opt = FILEOP_FLAGS.FOF_ALLOWUNDO;
 				SHFILEOPSTRUCT fo = new()
 				{
 					hwnd = hWndOwner,
 					lpszProgressTitle = title,
 					wFunc = FO_Func.FO_COPY,
 					pFrom = sFrom,
-					pTo = sTargetFolder,
-					fFlags = Options
+					pTo = targetFolder,
+					fFlags = opt
 				};
 				return (SHFileOperation(ref fo) == 0) && !fo.fAnyOperationsAborted;
-
-				/*
-
-				if (Environment.Is64BitOperatingSystem)
-				{
-					var FO = new SHFILEOPSTRUCT_x64()
-					{
-						hwnd = hWndOwner,
-						lpszProgressTitle = title,
-						wFunc = FO_Func.FO_COPY
-					};
-					{
-						var withBlock = FO;
-						withBlock.pFrom = sFrom;
-						withBlock.pTo = sTargetFolder;
-						withBlock.fFlags = Options;
-					}
-
-					return SHFileOperation_x64(ref FO) == 0;
-				}
-				else
-				{
-					var FO = new SHFILEOPSTRUCT_x32()
-					{
-						hwnd = hWndOwner,
-						lpszProgressTitle = title,
-						wFunc = FO_Func.FO_COPY
-					};
-					{
-						var withBlock1 = FO;
-						withBlock1.pFrom = sFrom;
-						withBlock1.pTo = sTargetFolder;
-						withBlock1.fFlags = Options;
-					}
-
-					return SHFileOperation_x32(ref FO) == 0;
-				}
-								 */
 			}
 
 
 			/// <summary>Копирование массива исходных файлов с переименованием</summary>
-			public static bool SHFO_Copy(IntPtr HwndOwner, string[] aFrom, string[] aTo, string? title = null)
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static bool SHFO_Copy(IntPtr HwndOwner, string[] sources, string[] targets, string? title = null)
 			{
-				string sFrom = aFrom.e_ToAPIMultiStringZ();
-				string sTo = aTo.e_ToAPIMultiStringZ();
-				var Options = FILEOP_FLAGS.FOF_ALLOWUNDO | FILEOP_FLAGS.FOF_MULTIDESTFILES;
+				string sFrom = sources.eToAPIMultiStringZ();
+				string sTo = targets.eToAPIMultiStringZ();
+				var opt = FILEOP_FLAGS.FOF_ALLOWUNDO | FILEOP_FLAGS.FOF_MULTIDESTFILES;
 
 				SHFILEOPSTRUCT fo = new()
 				{
+					wFunc = FO_Func.FO_COPY,
 					hwnd = HwndOwner,
 					lpszProgressTitle = title,
-					wFunc = FO_Func.FO_COPY,
 					pFrom = sFrom,
 					pTo = sTo,
-					fFlags = Options
+					fFlags = opt
 				};
 				return (SHFileOperation(ref fo) == 0) && !fo.fAnyOperationsAborted;
-
-				/*
-
-
-
-				if (Environment.Is64BitOperatingSystem)
-				{
-					var FO = new SHFILEOPSTRUCT_x64()
-					{
-						hwnd = HwndOwner,
-						lpszProgressTitle = title,
-						wFunc = FO_Func.FO_COPY
-					};
-					{
-						var withBlock = FO;
-						withBlock.pFrom = sFrom;
-						withBlock.pTo = sTo;
-						withBlock.fFlags = Options;
-					}
-
-					return SHFileOperation_x64(ref FO) == 0;
-				}
-				else
-				{
-					var FO = new SHFILEOPSTRUCT_x32()
-					{
-						hwnd = HwndOwner,
-						lpszProgressTitle = title,
-						wFunc = FO_Func.FO_COPY
-					};
-					{
-						var withBlock1 = FO;
-						withBlock1.pFrom = sFrom;
-						withBlock1.pTo = sTo;
-						withBlock1.fFlags = Options;
-					}
-					return SHFileOperation_x32(ref FO) == 0;
-				}
-				*/
 			}
 
 
@@ -29418,6 +31148,7 @@ return cItems;
 
 			#endregion
 
+
 			#region SHGetFileInfo
 			//  * The SHGetFileInfo API provides an easy way to get attributes
 			//  * for a file given a pathname.
@@ -29441,7 +31172,7 @@ return cItems;
 				public int iIcon;
 				public int dwAttributes;
 				// <MarshalAs(UnmanagedType.ByValTStr, SizeConst:=260)> Public szDisplayName As String
-				[MarshalAs(UnmanagedType.ByValTStr, SizeConst = WinAPI.IO.MAX_PATH)]
+				[MarshalAs(UnmanagedType.ByValTStr, SizeConst = WinAPI.io.MAX_PATH)]
 				public string szDisplayName;
 				[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
 				public string szTypeName;
@@ -29591,6 +31322,7 @@ return cItems;
 			}
 			#endregion
 
+
 			#region Path APIs...
 
 			#region PathCompactPath
@@ -29603,7 +31335,7 @@ return cItems;
 			/// <summary>Truncates a file path to fit within a given pixel width by replacing path components with ellipses like: "c:\system...."</summary>
 			internal static string PathCompactPath(string Path, IntPtr HDC, int PixelWidth)
 			{
-				var SB = new StringBuilder(Path, Path.Length + uom.WinAPI.IO.MAX_PATH);
+				var SB = new StringBuilder(Path, Path.Length + uom.WinAPI.io.MAX_PATH);
 				PathCompactPath(HDC, SB, PixelWidth);
 				return SB.ToString();
 			}
@@ -29624,14 +31356,14 @@ return cItems;
 			internal static String PathCompactPathEx(string PathIn, uint NeedCahrCount)
 			{
 				var SB = new StringBuilder((int)NeedCahrCount * 2);
-				PathCompactPathEx(SB, PathIn, NeedCahrCount, 0).e_ThrowLastWin32Exception_AssertFalse();
+				PathCompactPathEx(SB, PathIn, NeedCahrCount, 0).eThrowLastWin32Exception_AssertFalse();
 				return SB.ToString();
 			}
 			#endregion
 
 
 			/// <summary>Parses a path and returns the portion of that path that follows the first backslash.
-			///             // OUTPUT:
+			///      // OUTPUT:
 			// ===========
 			// The path c:\path1\path2\file.txt returns path1\path2\file.txt
 			// The path path1\path2\file.txt returns path2\file.txt
@@ -29648,13 +31380,13 @@ return cItems;
 			internal static String? PathFindNextComponent_(string lpszPath)
 			{
 				IntPtr ptrStr = PathFindNextComponent(lpszPath);
-				return ptrStr.e_IsValid()
+				return ptrStr.eIsValid()
 					? Marshal.PtrToStringUni(ptrStr)
 					: string.Empty;
 			}
 
 			/// <summary>Finds the command line arguments within a given path.
-			///             // OUTPUT:
+			///      // OUTPUT:
 			// ===========
 			// The path passed to the function was : test.exe temp.txt sample.doc
 			// The arg(s)found in path 1 were      : temp.txt sample.doc
@@ -29675,7 +31407,7 @@ return cItems;
 			internal static String? PathGetArgs_(string lpszPath)
 			{
 				IntPtr ptrStr = PathGetArgs(lpszPath);
-				return ptrStr.e_IsValid()
+				return ptrStr.eIsValid()
 				   ? Marshal.PtrToStringUni(ptrStr)
 				   : string.Empty;
 			}
@@ -29719,8 +31451,8 @@ return cItems;
 			[Obsolete("This function is deprecated. We recommend the use of the PathCchRemoveFileSpec function in its place.")]
 			internal static string PathRemoveFile(string Path)
 			{
-				var SB = Path.e_toStringBuilder();
-				PathRemoveFileSpec(SB).e_ThrowLastWin32Exception_AssertFalse();
+				var SB = Path.eToStringBuilder();
+				PathRemoveFileSpec(SB).eThrowLastWin32Exception_AssertFalse();
 				return SB.ToString();
 			}
 
@@ -29784,8 +31516,8 @@ return cItems;
 
 			internal static string GetRelativePathTo(string PathFrom, FileAttributes dwAttrFrom, string PathTo, FileAttributes dwAttrTo)
 			{
-				StringBuilder SB = new(WinAPI.IO.MAX_PATH + 100);
-				PathRelativePathTo(SB, PathFrom, dwAttrFrom, PathTo, dwAttrTo).e_ThrowLastWin32Exception_AssertFalse();
+				StringBuilder SB = new(WinAPI.io.MAX_PATH + 100);
+				PathRelativePathTo(SB, PathFrom, dwAttrFrom, PathTo, dwAttrTo).eThrowLastWin32Exception_AssertFalse();
 				return SB.ToString();
 			}
 
@@ -29811,12 +31543,12 @@ return cItems;
 			private static extern int StrFromTimeInterval(
 				[In, Out, MarshalAs(UnmanagedType.LPTStr)] StringBuilder? pszOut,
 				[In] int cchMax,
-				[In] int dwTimeMS,
+				[In] uint dwTimeMS,
 				[In] int Digits);
 
 			/// <summary>Converts a time interval, specified in milliseconds, to a string.</summary>
 			/// <param name="dwTimeMS">The time interval, in milliseconds.</param>
-			internal static string StrFromTimeInterval(int dwTimeMS, int Digits = 3)
+			internal static string StrFromTimeInterval(uint dwTimeMS, int Digits = 3)
 			{
 				// dwTimeMS	digits	pszOut 
 				// 34000		3		34 sec 
@@ -29842,6 +31574,7 @@ return cItems;
 			internal static extern int RestartDialog(IntPtr hParent, [MarshalAs(UnmanagedType.LPWStr)] string pszPromp, int dwFlags);
 
 			#endregion
+
 
 			// <DllImport(UOM.Win32.WINDLL_SHELL, _
 			// SetLastError:=True, _
@@ -29887,6 +31620,7 @@ return cItems;
 			/// SAMPLE:
 			/// @{C:\Program Files\WindowsApps\Microsoft.BingMaps_2.1.3230.2048_x64__8wekyb3d8bbwe\resources.pri?ms-resource://Microsoft.BingMaps/Resources/AppShortDisplayName};
 			/// </param>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string SHLoadIndirectString(string indirectString, int bufferSize = 1024)
 			{
 				//@{s}
@@ -29901,7 +31635,7 @@ return cItems;
 
 					throw new ArgumentException($"'{nameof(indirectString)}' is not an indirect string!");
 				}
-				var Hr = new uom.WinAPI.Errors.COMErrors._HRESULT(result);
+				var Hr = new uom.WinAPI.errors.COMErrors._HRESULT(result);
 				Win32Exception wex = new((int)Hr.ToWin32());
 				throw wex;
 			}
@@ -29911,6 +31645,7 @@ return cItems;
 
 			/// <param name="ResID">ms-resource:AppxManifest_DisplayName</param>
 			/// <returns>@{C:\Program Files\WindowsApps\Microsoft.BingMaps_2.1.3230.2048_x64__8wekyb3d8bbwe\resources.pri?ms-resource://Microsoft.BingMaps/Resources/AppShortDisplayName};</returns>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string SHLoadIndirectppPackageResourceString(string ResID, string PackageName, string PackageFullName, string InstallLocation)
 			{
 				if (!ResID.StartsWith(MS_RESX_PREFIX)) throw new ArgumentException(nameof(ResID));
@@ -30009,10 +31744,16 @@ return cItems;
 				return string.Empty;
 			}
 
+
 		}
 
 
 	}
+
+
 	#endregion
 
 }
+
+#pragma warning restore CS8981 // The type name only contains lower-cased ascii characters. Such names may become reserved for the language.
+#pragma warning restore IDE1006 // Naming Styles

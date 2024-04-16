@@ -2,17 +2,15 @@
 
 using System.Drawing;
 
-namespace common.Controls.PathSelector
+namespace uom.controls.PathSelector
 {
 
 
 	[DefaultProperty("FullPath"), DefaultEvent("ValueChanged")]
-	internal abstract partial class SelectorBase : UserControl
+	internal abstract partial class FileSystemObjectSelectorBase : UserControl
 	{
+		private IContainer components;
 		#region Designer
-
-		// Required by the Windows Form Designer
-		protected IContainer components;
 
 		// UserControl overrides dispose to clean up the component list.
 		protected override void Dispose(bool disposing)
@@ -34,25 +32,29 @@ namespace common.Controls.PathSelector
 		#region  Windows Form Designer generated code 
 
 		protected TextBox _txtPath;
-		protected Panel _pnlSeparetor;
+		protected Panel _pnlSeparator;
 		protected ToolTip _ttMain;
 		protected Button _cmdBrowse;
 
 		#endregion
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
-		public SelectorBase() : base()
+		public FileSystemObjectSelectorBase() : base()
 		{
 			// This call is required by the Windows Form Designer.
 			InitializeComponent();
 
 			SelectButtonToolTip = _selectButtonToolTip;
-			Resize += delegate { ProceesResize(); };
+
+
+			this.Resize += delegate { ProceesResize(); };
+			_cmdBrowse!.Click += (_, _) => ShowDialog();
 			_txtPath!.TextChanged += (_, __) => OnTextBoxValueChanged();
+			_txtPath!.Click += (_, __) => OnTextBoxClick();
 
-			// Add any initialization after the InitializeComponent() call
+
+
 			this.AllowHandleTextBoxChanges();
-
 		}
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
 
@@ -70,48 +72,50 @@ namespace common.Controls.PathSelector
 
 		private void InitializeComponent()
 		{
-			components = new Container();
-			_txtPath = new TextBox();
-			_cmdBrowse = new Button();
-			_pnlSeparetor = new Panel();
-			_ttMain = new ToolTip(components);
-
-			SuspendLayout();
+			this.components = new System.ComponentModel.Container();
+			this._txtPath = new System.Windows.Forms.TextBox();
+			this._cmdBrowse = new System.Windows.Forms.Button();
+			this._pnlSeparator = new System.Windows.Forms.Panel();
+			this._ttMain = new System.Windows.Forms.ToolTip(this.components);
+			this.SuspendLayout();
 			// 
-			// txtPath
+			// _txtPath
 			// 
-			_txtPath.Dock = DockStyle.Fill;
-			_txtPath.Location = new Point(0, 0);
-			_txtPath.ReadOnly = true;
-			_txtPath.Size = new Size(192, 20);
-			_txtPath.TabIndex = 1;
-			_txtPath.TabStop = false;
+			this._txtPath.Dock = System.Windows.Forms.DockStyle.Fill;
+			this._txtPath.Location = new System.Drawing.Point(0, 0);
+			this._txtPath.Name = "_txtPath";
+			this._txtPath.ReadOnly = true;
+			this._txtPath.Size = new System.Drawing.Size(192, 26);
+			this._txtPath.TabIndex = 1;
+			this._txtPath.TabStop = false;
 			// 
-			// cmdBrowse
+			// _cmdBrowse
 			// 
-			_cmdBrowse.Dock = DockStyle.Right;
-			_cmdBrowse.FlatStyle = FlatStyle.System;
-			_cmdBrowse.Location = new Point(200, 0);
-			_cmdBrowse.Size = new Size(24, 48);
-			_cmdBrowse.TabIndex = 0;
-			_cmdBrowse.Text = "...";
-
+			this._cmdBrowse.Dock = System.Windows.Forms.DockStyle.Right;
+			this._cmdBrowse.FlatStyle = System.Windows.Forms.FlatStyle.System;
+			this._cmdBrowse.Location = new System.Drawing.Point(200, 0);
+			this._cmdBrowse.Name = "_cmdBrowse";
+			this._cmdBrowse.Size = new System.Drawing.Size(24, 48);
+			this._cmdBrowse.TabIndex = 0;
+			this._cmdBrowse.Text = "...";
 			// 
-			// pnlSeparetor
+			// _pnlSeparetor
 			// 
-			_pnlSeparetor.Dock = DockStyle.Right;
-			_pnlSeparetor.Location = new Point(192, 0);
-			_pnlSeparetor.Size = new Size(8, 48);
-			_pnlSeparetor.TabIndex = 2;
+			this._pnlSeparator.Dock = System.Windows.Forms.DockStyle.Right;
+			this._pnlSeparator.Location = new System.Drawing.Point(192, 0);
+			this._pnlSeparator.Name = "_pnlSeparetor";
+			this._pnlSeparator.Size = new System.Drawing.Size(8, 48);
+			this._pnlSeparator.TabIndex = 2;
 			// 
 			// SelectorBase
 			// 
-			Controls.Add(_txtPath);
-			Controls.Add(_pnlSeparetor);
-			Controls.Add(_cmdBrowse);
-			Size = new Size(224, 48);
-			ResumeLayout(false);
-			PerformLayout();
+			this.Controls.Add(this._txtPath);
+			this.Controls.Add(this._pnlSeparator);
+			this.Controls.Add(this._cmdBrowse);
+			this.Name = "SelectorBase";
+			this.Size = new System.Drawing.Size(224, 48);
+			this.ResumeLayout(false);
+			this.PerformLayout();
 
 		}
 
@@ -121,7 +125,7 @@ namespace common.Controls.PathSelector
 			UpdateVistaCueBanner();
 		}
 
-		private void UpdateVistaCueBanner() => _txtPath.e_SetVistaCueBanner(_emptyText);
+		private void UpdateVistaCueBanner() => _txtPath.eSetVistaCueBanner(_emptyText);
 
 
 		#region Properties
@@ -142,13 +146,25 @@ namespace common.Controls.PathSelector
 			set
 			{
 				_separatorWidth = value;
-				_pnlSeparetor.Width = _separatorWidth;
+				_pnlSeparator.Width = _separatorWidth;
 				ProceesResize();
 			}
 		}
 
 
-		public bool ReadOnly { get => _txtPath.ReadOnly; set => _txtPath.ReadOnly = value; }
+		public bool ReadOnly
+		{
+			get => _txtPath.ReadOnly;
+			set
+			{
+				//if (_txtPath.ReadOnly != value)
+				{
+					_cmdBrowse.Visible = !value;
+					_pnlSeparator.Visible = !value;
+				}
+				_txtPath.ReadOnly = value;
+			}
+		}
 
 		public Color TextBackColor { get => _txtPath.BackColor; set => _txtPath.BackColor = value; }
 
@@ -196,26 +212,33 @@ namespace common.Controls.PathSelector
 			this._cmdBrowse.Width = H;
 			this.ClientSize = new Size(this.ClientSize.Width, H);
 		}
+
 		private void OnTextBoxValueChanged()
 		{
 			if (!_canHandleTextBoxChanges || ReadOnly) return;
 			FullPath = _txtPath.Text.Trim();
 		}
 
+		private void OnTextBoxClick()
+		{
+			if (ReadOnly) ShowDialog();
+		}
+
 		protected void OnChanged(object sender, string NewPath) => ValueChanged?.Invoke(sender, NewPath);
 
 		protected void AllowHandleTextBoxChanges(bool allow = true) => _canHandleTextBoxChanges = allow;
 
+		public abstract DialogResult ShowDialog();
+
 	}
 
 	[ToolboxItem(true)]
-	internal sealed partial class DirectorySelector : SelectorBase
+	internal sealed partial class DirectorySelector : FileSystemObjectSelectorBase
 	{
 		private FolderBrowserDialog _BFFD = new();
 
 		public DirectorySelector() : base()
 		{
-			_cmdBrowse.Click += delegate { BrowseFolder(); };
 			_txtPath.AutoCompleteSource = AutoCompleteSource.FileSystemDirectories;
 			_txtPath.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
 
@@ -237,122 +260,42 @@ namespace common.Controls.PathSelector
 
 		public override FileSystemInfo GetFileSystemInfo() => Directory;
 
-		private void BrowseFolder()
+		public override DialogResult ShowDialog()
 		{
 			_BFFD.RootFolder = Environment.SpecialFolder.MyComputer;
 			_BFFD.SelectedPath = this.FullPath;
-			if (_BFFD.ShowDialog() != DialogResult.OK) return;
-			FullPath = _BFFD.SelectedPath;
-		}
-	}
-
-	[ToolboxItem(true)]
-	internal sealed class FileOpenSelector : SelectorBase
-	{
-		private System.Windows.Forms.OpenFileDialog _ofd;
-
-		public FileOpenSelector() : base()
-		{
-			_ofd = new()
-			{
-				CheckPathExists = true,
-				AutoUpgradeEnabled = true,
-				Multiselect = false,
-				ShowReadOnly = false,
-				ValidateNames = true,
-				SupportMultiDottedExtensions = true,
-				ShowHelp = false,
-			};
-
-			_cmdBrowse.Click += delegate { BrowseForFilder(); };
-		}
-
-		#region Properties
-
-		// Private _Filter As String = "Все файлы|*.*"
-		public string Filter { get => _ofd.Filter; set => _ofd.Filter = value; }
-
-		public bool DereferenceLinks { get => _ofd.DereferenceLinks; set => _ofd.DereferenceLinks = value; }
-
-		public bool CheckFileExists { get => _ofd.CheckFileExists; set => _ofd.CheckFileExists = value; }
-
-		public string InitialDir { get => _ofd.InitialDirectory; set => _ofd.InitialDirectory = value; }
-
-		#endregion
-
-		[Browsable(false)]
-		[DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-		public System.IO.FileInfo File
-		{
-			get => new System.IO.FileInfo(FullPath);
-			set => FullPath = value.FullName;
-		}
-
-		protected override void OnFullPathSet()
-		{
-			base.OnFullPathSet();
-			_ofd.FileName = FullPath;
-		}
-
-		public override FileSystemInfo GetFileSystemInfo() => File;
-
-		private void BrowseForFilder()
-		{
-			if (_ofd.ShowDialog() != DialogResult.OK) return;
-			this.FullPath = _ofd.FileName;
+			DialogResult dr = _BFFD.ShowDialog();
+			if (dr == DialogResult.OK) this.FullPath = _BFFD.SelectedPath;
+			return dr;
 		}
 	}
 
 
-	[ToolboxItem(true)]
-	internal sealed class FileSaveSelector : SelectorBase
+
+
+	internal abstract class FileSelectorBase : FileSystemObjectSelectorBase
 	{
-		private System.Windows.Forms.SaveFileDialog _sfd = new();
+		protected System.Windows.Forms.FileDialog _fd;
 
-		public FileSaveSelector() : base()
-		{
-			_sfd.CheckPathExists = true;
-			_sfd.AddExtension = true;
-			_sfd.AutoUpgradeEnabled = true;
-			_sfd.CheckPathExists = true;
-			_sfd.CreatePrompt = false;
-			_sfd.DefaultExt = "tmp";
-			_sfd.OverwritePrompt = true;
-			_sfd.SupportMultiDottedExtensions = true;
-			_sfd.ShowHelp = false;
-			_sfd.ValidateNames = true;
-
-			//_sfd.FilterIndex
-			//;
-			_cmdBrowse.Click += delegate { BrowseForFilder(); };
-		}
+		public FileSelectorBase(System.Windows.Forms.FileDialog fd) : base() { _fd = fd; }
 
 		#region Properties
 
 		// Private _Filter As String = "Все файлы|*.*"
-		public string Filter { get => _sfd.Filter; set => _sfd.Filter = value; }
+		public string Filter { get => _fd.Filter; set => _fd.Filter = value; }
 
 		[DefaultValue(true)]
-		public bool DereferenceLinks { get => _sfd.DereferenceLinks; set => _sfd.DereferenceLinks = value; }
+		public bool DereferenceLinks { get => _fd.DereferenceLinks; set => _fd.DereferenceLinks = value; }
 
 		[DefaultValue(true)]
-		public bool CheckPathExists { get => _sfd.CheckPathExists; set => _sfd.CheckPathExists = value; }
+		public bool CheckPathExists { get => _fd.CheckPathExists; set => _fd.CheckPathExists = value; }
 
-		[DefaultValue(false)]
-		public bool CreatePrompt { get => _sfd.CreatePrompt; set => _sfd.CreatePrompt = value; }
-
-		[DefaultValue(true)]
-		public bool OverwritePrompt { get => _sfd.OverwritePrompt; set => _sfd.OverwritePrompt = value; }
-
-		public string DefaultExt { get => _sfd.DefaultExt; set => _sfd.DefaultExt = value; }
+		public string DefaultExt { get => _fd.DefaultExt; set => _fd.DefaultExt = value; }
 
 		[DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-		public int FilterIndex { get => _sfd.FilterIndex; set => _sfd.FilterIndex = value; }
+		public int FilterIndex { get => _fd.FilterIndex; set => _fd.FilterIndex = value; }
 
-
-
-		public string InitialDir { get => _sfd.InitialDirectory; set => _sfd.InitialDirectory = value; }
-
+		public string InitialDir { get => _fd.InitialDirectory; set => _fd.InitialDirectory = value; }
 
 		[Browsable(false)]
 		[DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -363,11 +306,29 @@ namespace common.Controls.PathSelector
 
 		#endregion
 
-		private void BrowseForFilder()
+
+		public override DialogResult ShowDialog()
 		{
-			_sfd.FileName = this.FullPath;
-			if (_sfd.ShowDialog() != DialogResult.OK) return;
-			this.FullPath = _sfd.FileName;
+			if (_fd.FileName.eIsNotNullOrWhiteSpace())
+			{
+				try
+				{
+					_fd.InitialDirectory = null;
+					_fd.RestoreDirectory = false;
+
+					FileInfo fi = this.File;
+					DirectoryInfo di = fi.Directory;
+
+					if (di.Exists) _fd.InitialDirectory = fi.DirectoryName;
+				}
+				catch { }
+
+				_fd.FileName = this.FullPath;
+			}
+
+			DialogResult dr = _fd.ShowDialog();
+			if (dr == DialogResult.OK) this.FullPath = _fd.FileName;
+			return dr;
 		}
 	}
 
@@ -376,6 +337,92 @@ namespace common.Controls.PathSelector
 
 
 
+	[ToolboxItem(true)]
+	internal sealed class FileOpenSelector : FileSelectorBase
+	{
+		public FileOpenSelector() : base(new System.Windows.Forms.OpenFileDialog()
+		{
+			CheckPathExists = true,
+			AutoUpgradeEnabled = true,
+			Multiselect = false,
+			ShowReadOnly = false,
+			ValidateNames = true,
+			SupportMultiDottedExtensions = true,
+			ShowHelp = false
+		})
+		{ }
+
+		private System.Windows.Forms.OpenFileDialog _ofd => (System.Windows.Forms.OpenFileDialog)_fd;
+
+
+
+
+		#region Properties
+
+		public bool CheckFileExists { get => _ofd.CheckFileExists; set => _ofd.CheckFileExists = value; }
+
+
+		#endregion
+
+
+		protected override void OnFullPathSet()
+		{
+			base.OnFullPathSet();
+			_ofd.FileName = FullPath;
+		}
+
+		public override FileSystemInfo GetFileSystemInfo() => File;
+
+		/*
+		public override DialogResult ShowDialog()
+		{
+			DialogResult dr = _ofd.ShowDialog();
+			if (dr == DialogResult.OK) this.FullPath = _ofd.FileName;
+			return dr;
+		}
+		 */
+	}
+
+
+
+
+
+
+	[ToolboxItem(true)]
+	internal sealed class FileSaveSelector : FileSelectorBase
+	{
+		public FileSaveSelector() : base(new System.Windows.Forms.SaveFileDialog()
+		{
+			AutoUpgradeEnabled = true,
+			CheckPathExists = true,
+			AddExtension = true,
+			CreatePrompt = false,
+			DefaultExt = "tmp",
+			OverwritePrompt = true,
+			SupportMultiDottedExtensions = true,
+			ShowHelp = false,
+			ValidateNames = true
+		})
+		{ }
+
+		private System.Windows.Forms.SaveFileDialog _sfd => (System.Windows.Forms.SaveFileDialog)_fd;
+
+
+		#region Properties
+
+		[DefaultValue(false)]
+		public bool CreatePrompt { get => _sfd.CreatePrompt; set => _sfd.CreatePrompt = value; }
+
+		[DefaultValue(true)]
+		public bool OverwritePrompt { get => _sfd.OverwritePrompt; set => _sfd.OverwritePrompt = value; }
+
+		public override FileSystemInfo GetFileSystemInfo() => File;
+
+		#endregion
+
+
+
+	}
 
 
 	/*
