@@ -1,8 +1,11 @@
 ﻿#nullable enable
 
+
 using uom.WIA2.Scanner;
 
+
 namespace WS;
+
 
 internal partial class frmMain
 {
@@ -14,6 +17,7 @@ internal partial class frmMain
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
 	private frmMain() : base() => InitializeComponent();
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
+
 
 	public frmMain(WIAManager manager) : this()
 	{
@@ -30,9 +34,6 @@ internal partial class frmMain
 
 		try
 		{
-
-
-			//global::WS.Localization
 
 			Status(L_INITIALIZING);
 
@@ -73,53 +74,50 @@ internal partial class frmMain
 			cmdScan_PreView.Enabled = false;
 			cmdScan_FullQuality.Enabled = false;
 
-			//******************************************
+			#region Attaching UI Events
+
+			cboScannerSelect.SelectedIndexChanged += delegate { On_SelectedScannerChanged(); };
+
+			chkUseAutoFeeder.CheckedChanged += delegate { On_PaperSourceChanged(); };
+			chkUseAutoFeederDuplex.CheckedChanged += delegate { On_PaperSizeChanged(); };
+
+			cboColorMode.SelectedIndexChanged += delegate { On_ColorModeChanged(); };
+			cboDPI.SelectedIndexChanged += delegate { On_DPIChanged(); };
+
+
+			cboFileFormat.SelectedIndexChanged += delegate { On_FileFormatChanged(); };
+			sldFile_Quality.ValueChanged += delegate { On_FileQualityChanged(); };
+
+
+			cmdScan_PreView.Click += delegate { ((Action)On_ScanPreview).erunTryCatch(); };
+
+			chkScan_НесколькоСтраницВручную.Visible = false;
+			cmdScan_FullQuality.Click += delegate { ((Action)On_ScanFullQuality).erunTryCatch(); };
+
+			llScanFolder.LinkClicked += delegate { ((Action)On_DisplayScanDirInExplorer).erunTryCatch(); };
+
+			//Just disabling bc have a probles with parameters send/get to System UI
+			llScanUsingSysUI.Visible = false;
+			//llScanUsingSysUI.LinkClicked += delegate { ((Action)On_ScanUsingSysUI).erunTryCatch(); };
+
+
+			chkCropZone_Set.CheckedChanged += delegate { On_CropChanged(); };
+			xudCrop_Width.ValueChanged += delegate { On_CropChanged(); };
+			xudCrop_Left.ValueChanged += delegate { On_CropChanged(); };
+			xudCrop_Height.ValueChanged += delegate { On_CropChanged(); };
+			xudCrop_Top.ValueChanged += delegate { On_CropChanged(); };
+
+
+			xPageControl.MouseMove += (_, ptfCursorOnPage) =>
 			{
-				#region Attaching UI Events
+				//string units = L_CROP_ZONE_MOUSE_UNITS_CM;
+				lblMousePos.Text = !ptfCursorOnPage.HasValue
+					? string.Empty
+					: $"Cursor: {ptfCursorOnPage.Value.X:N2},{ptfCursorOnPage.Value.Y:N2}";
+			};
+			xPageControl.CropZoneCompleted += (_, rcfCrop) => SetCropAreaCm(rcfCrop);
 
-				cboScannerSelect.SelectedIndexChanged += delegate { On_SelectedScannerChanged(); };
-
-				chkUseAutoFeeder.CheckedChanged += delegate { On_PaperSourceChanged(); };
-				chkUseAutoFeederDuplex.CheckedChanged += delegate { On_PaperSizeChanged(); };
-
-				cboColorMode.SelectedIndexChanged += delegate { On_ColorModeChanged(); };
-				cboDPI.SelectedIndexChanged += delegate { On_DPIChanged(); };
-
-
-				cboFileFormat.SelectedIndexChanged += delegate { On_FileFormatChanged(); };
-				sldFile_Quality.ValueChanged += delegate { On_FileQualityChanged(); };
-
-
-				cmdScan_PreView.Click += delegate { ((Action)On_ScanPreview).erunTryCatch(); };
-
-				chkScan_НесколькоСтраницВручную.Visible = false;
-				cmdScan_FullQuality.Click += delegate { ((Action)On_ScanFullQuality).erunTryCatch(); };
-
-				llScanFolder.LinkClicked += delegate { ((Action)On_DisplayScanDirInExplorer).erunTryCatch(); };
-
-				//Just disabling bc have a probles with parameters send/get to System UI
-				llScanUsingSysUI.Visible = false;                   //llScanUsingSysUI.LinkClicked += delegate { ((Action)On_ScanUsingSysUI).erunTryCatch(); };
-
-
-
-				//this.xPagePreView.OnDrawPage += new System.EventHandler<WIA_Scanner.xPageview.DrawPageEventArgs>(this._OnDrawPage);
-				xPageControl.MouseMoveOnPaper += (_, ptfCursorOnPage) =>
-				{
-					string s = string.Empty;
-					string units = L_CROP_ZONE_MOUSE_UNITS_CM;
-					if (ptfCursorOnPage.HasValue) s = $"x:{ptfCursorOnPage.Value.X.eRound(2).ToString(" 0.00")}, y:{ptfCursorOnPage.Value.Y.eRound(2).ToString(" 0.00")}{units}";
-					lblMousePos.Text = s;
-				};
-				chkCropZone_Set.CheckedChanged += delegate { On_CropChanged(); };
-				xudCrop_Width.ValueChanged += delegate { On_CropChanged(); };
-				xudCrop_Left.ValueChanged += delegate { On_CropChanged(); };
-				xudCrop_Height.ValueChanged += delegate { On_CropChanged(); };
-				xudCrop_Top.ValueChanged += delegate { On_CropChanged(); };
-				xPageControl.OnMouseCropSetup += (_, rcfCrop) => SetCropAreaCm(rcfCrop);
-
-				#endregion
-			}
-
+			#endregion
 
 
 			#region Processing UI settings to update controls statuses
@@ -137,10 +135,8 @@ internal partial class frmMain
 			RegisterScanApp();
 
 			Status();
+
 		}
-
-
-
 		catch (Exception ex)
 		{
 			Status(ex.Message);
@@ -148,6 +144,7 @@ internal partial class frmMain
 			Close();
 		}
 	}
+
 
 	private void LocalizeUI()
 	{
@@ -191,6 +188,28 @@ internal partial class frmMain
 		llScanUsingSysUI.Text = L_SCAN_FULL_QUALITY_USING_OS_UI;
 		chkScan_НесколькоСтраницВручную.Text = L_SCAN_FULL_QUALITY_MANUAL;
 		cmdScan_FullQuality.Text = L_SCAN_FULL_QUALITY;
+
+
+		var svgScaner = uom.AppInfo.Assembly.eLoadSVGFromResourceFile("scanner-svgrepo-com.svg");
+		xPageControl.EmptyImagesLogo = svgScaner;
+
+		this.Icon = svgScaner.eToIcon();
+
+		/*
+FileInfo fi = new(@"C:\Users\uom\Desktop\1.ico");
+using FileStream fs = fi.Create();
+svg.eWriteIconSet(fs);
+ */
+
+
+
+		cmdScan_FullQuality.Image = svgScaner.eToBitmap(false);
+		cmdScan_FullQuality.TextImageRelation = TextImageRelation.ImageBeforeText;
+
+		//cmdScan_PreView.Image = uom.AppInfo.Assembly.eLoadSVGFromResourceFile("preview-svgrepo-com.svg").eToBitmap(false);
+		//cmdScan_PreView.TextImageRelation = TextImageRelation.ImageBeforeText;
+
+
 
 		//lblMousePos.Text = "xy";
 

@@ -7,6 +7,8 @@ using System.Diagnostics.Eventing.Reader;
 using System.Drawing;
 using System.Windows.Forms;
 
+using Svg;
+
 using uom.Extensions;
 
 using static System.Net.Mime.MediaTypeNames;
@@ -18,77 +20,97 @@ namespace WS
 
 	internal class xPageview : UserControl
 	{
-		private class DISPLAY_IMAGE
+
+
+		private class DISPLAY_IMAGE(System.Drawing.Image img, RectangleF rectCm)
 		{
-			public System.Drawing.Image? @Image { get; private set; }
+			public readonly System.Drawing.Image? @Image = img;
+
 			/// <summary>Image rect on paper in Centimeters</summary>
-			public RectangleF ImageRectCm = new(0f, 0f, 0f, 0f);
-			public DISPLAY_IMAGE(System.Drawing.Image img, RectangleF rectCm)
-			{
-				@Image = img;
-				ImageRectCm = rectCm;
-			}
+			public readonly RectangleF ImageRectCm = rectCm;
 
 			~DISPLAY_IMAGE()
 			{
 				@Image?.Dispose();
-				@Image = null;
 			}
 		}
 
 
-		private const int C_MIN_VISIBLE_PAGE_SIZE = 20;
-		private int BORDER_SIZE = 30;
-		//private float SHADOW_SIZE_PERCENT = 2f;
-
-		private Brush BRUSH_SHADOW = SystemBrushes.ButtonShadow;
-		private Brush BRUSH_PAGE = Brushes.White;
-		private Brush RULLER_COLOR_BACK = Brushes.Khaki;
-		private Pen RULLER_COLOR = Pens.SlateGray;
-
-
-		public static readonly RectangleF PAPER_CROP_ZERRO = new(0f, 0f, 0f, 0f);
-
-		private SizeF _paperSize = new(10f, 15f);
-		private int _rullerOffset = 4;
-		private int _rullerSize = 10;
-		private float _zoom = 0f;
-
-		private Rectangle _rcPageOnScreenPx = new(0, 0, 0, 0); // Страница на экране
-		private RectangleF? _paperCropCm = null;
-
-		private DISPLAY_IMAGE? backImage = null;
-		private DISPLAY_IMAGE? frontImage = null;
-
-
-		public class DrawPageEventArgs : EventArgs
+		public class DrawPageEventArgs(SizeF paperSizeCm, RectangleF paperOnScreenPx, float zoom, Graphics graphics) : EventArgs()
 		{
-			public SizeF PaperSizeCm;
-			public RectangleF PaperOnScreenPx;
-			public float Zoom;
-			public Graphics @Graphics;
-			public DrawPageEventArgs(SizeF paperSize, RectangleF screenRect, float zoom, Graphics graphics) : base()
-			{
-				PaperSizeCm = paperSize;
-				PaperOnScreenPx = screenRect;
-				Zoom = zoom;
-				@Graphics = graphics;
-			}
+			public readonly SizeF PaperSizeCm = paperSizeCm;
+			public readonly RectangleF PaperOnScreenPx = paperOnScreenPx;
+			public readonly float Zoom = zoom;
+			public readonly Graphics @Graphics = graphics;
 		}
-		public event EventHandler<DrawPageEventArgs> OnDrawPage = delegate { };
 
 
-		public event EventHandler<PointF?> MouseMoveOnPaper = delegate { };
-		public event EventHandler<RectangleF> OnMouseCropSetup = delegate { };
+		#region Events
 
-		private PointF? ptfMouseCropStartCm = null, ptfMouseCropEndCm = null;
 
-		private bool IsInMouseCropMode => ptfMouseCropStartCm.HasValue && ptfMouseCropEndCm.HasValue;
+		public event EventHandler<DrawPageEventArgs> DrawPage = delegate { };
 
-		private RectangleF? NormalizedMaouseCropRectCm => !IsInMouseCropMode
-			? null
-			: RectangleF.FromLTRB(ptfMouseCropStartCm!.Value.X, ptfMouseCropStartCm!.Value.Y, ptfMouseCropEndCm!.Value.X, ptfMouseCropEndCm!.Value.Y)
-			.eNormalize();
+		public new event EventHandler<PointF?> MouseMove = delegate { };
+
+		/// <summary>When user completed setup crop zone by releasing mouse button in finish crop position</summary>
+		public event EventHandler<RectangleF> CropZoneCompleted = delegate { };
+
+
+		#endregion
+
+
+		#region Constants
+
+
+		private const int MIN_VISIBLE_PAGE_SIZE_PX = 20;
+		private const int CONTROL_PADDING_MM = 5;
+
+		public static readonly RectangleF CROP_ZERRO = new(0f, 0f, 0f, 0f);
+
+		//private readonly static Brush BRUSH_SHADOW = SystemBrushes.ButtonShadow;
+		private readonly static Brush B_PAPER_BACKGROUND = Brushes.White;
+		private readonly static Brush B_RULLER_BACKGROUND = Brushes.Khaki;
+		private readonly static Brush B_RULLER_TEXT = Brushes.Gray;
+		private readonly static Pen P_RULLER_MARKS = Pens.SlateGray;
+
+
+
+
+		#endregion
+
+
+
+		private SizeF _paperSizeCm = new(10f, 15f);
+		private int _rullerOffsetMM = 4;
+		private int _rullerSizeMM = 10;
+		private float _paperZoom = 0f;
+
+		/// <summary>Size of the papper sheet on the screen (pixels)</summary>
+		private Rectangle _rcPageOnScreenPx = new(0, 0, 0, 0); // Страница на экране
+
+		/// <summary>Size of the crop zone (cm)</summary>
+		private RectangleF? _cropZoneCm = null;
+
+		private DISPLAY_IMAGE? _backImage = null;
+		private DISPLAY_IMAGE? _frontImage = null;
+
+
+
+
+		private PointF? _ptfMouseCropStartCm = null, _ptfMouseCropEndCm = null;
+
+
+		/// <summary>
+		/// Цруь тщ
+		/// </summary>
+		private bool CropIsInProcess
+			=> _ptfMouseCropStartCm.HasValue && _ptfMouseCropEndCm.HasValue;
+
+
+		private RectangleF? NormalizedMaouseCropRectCm
+			=> !CropIsInProcess
+				? null
+				: RectangleF.FromLTRB(_ptfMouseCropStartCm!.Value.X, _ptfMouseCropStartCm!.Value.Y, _ptfMouseCropEndCm!.Value.X, _ptfMouseCropEndCm!.Value.Y).eNormalize();
 
 
 		#region Constructor
@@ -99,15 +121,9 @@ namespace WS
 		{
 			try
 			{
-				if (disposing && components != null)
-				{
-					components.Dispose();
-				}
+				if (disposing && components != null) components.Dispose();
 			}
-			finally
-			{
-				base.Dispose(disposing);
-			}
+			finally { base.Dispose(disposing); }
 		}
 
 		// Required by the Windows Form Designer
@@ -126,7 +142,7 @@ namespace WS
 			this.Paint += (_, e) => _Paint(e.Graphics);
 
 			this.MouseDown += (_, e) => _MouseDown(e);
-			this.MouseMove += (_, e) => _MouseMove(e);
+			base.MouseMove += (_, e) => _MouseMove(e);
 			this.MouseUp += (_, e) => _MouseUp(e);
 			this.KeyDown += (_, e) => _KeyPress(e);
 			this.MouseLeave += (_, e) => _MouseLeave(e);
@@ -143,31 +159,35 @@ namespace WS
 		/// Displayed PaperSize in Centimeters
 		/// </summary>
 		[Description("Размер настоящей отображаемой бумаги (например 10х15 см)")]
-		public SizeF PaperSizeCm { get => _paperSize; set { _paperSize = value; OnPropertiesChanged(); } }
+		public SizeF PaperSizeCm { get => _paperSizeCm; set { _paperSizeCm = value; OnPropertiesChanged(); } }
 
 
 		[Description("Толщина линейки")]
-		public int RullerSize { get => _rullerSize; set { _rullerSize = value; OnPropertiesChanged(); } }
+		public int RullerSizeMM { get => _rullerSizeMM; set { _rullerSizeMM = value; OnPropertiesChanged(); } }
 
 
-		[Description("Щель между бумагой и линейкой")]
-		public int RullerOffset { get => _rullerOffset; set { _rullerOffset = value; OnPropertiesChanged(); } }
+		[Description("Spacing between paper and ruller on screen")]
+		public int RullerOffsetMM { get => _rullerOffsetMM; set { _rullerOffsetMM = value; OnPropertiesChanged(); } }
 
 
-		[Description("Коэффициент масштабирования между реальным размером бумаги и отображением на экране")]
-		public float Zoom => _zoom;
+		[Description("Paper scaling factor between real paper size and onscreen paper size")]
+		public float PaperZoom => _paperZoom;
 
 
-		public RectangleF? PaperCropCm
+		public RectangleF? CropZoneCm
 		{
-			get => _paperCropCm; set
+			get => _cropZoneCm; set
 			{
-				_paperCropCm = value;
-				if (_paperCropCm.HasValue) _paperCropCm = _paperCropCm.Value.eEnsureInRect(PaperSizeCm.eToRectangleF());
+				_cropZoneCm = value.HasValue
+					? value.Value.eEnsureInRect(_paperSizeCm.eToRectangleF())
+					: null;
 
 				OnPropertiesChanged();
 			}
 		}
+
+		private SvgDocument? _emptyImagesLogo;
+		public SvgDocument? EmptyImagesLogo { get => _emptyImagesLogo; set { _emptyImagesLogo = value; OnPropertiesChanged(); } }
 
 
 		private string _emptyImagesText = string.Empty;
@@ -182,25 +202,26 @@ namespace WS
 
 		#endregion
 
-		public void PaperCropReset() => PaperCropCm = PAPER_CROP_ZERRO;
+		public void PaperCropReset()
+			=> CropZoneCm = CROP_ZERRO;
 
 
 		public void ResetImages(bool resetFront, bool resetBack)
 		{
-			if (resetFront) this.frontImage = null;
-			if (resetBack) this.backImage = null;
+			if (resetFront) this._frontImage = null;
+			if (resetBack) this._backImage = null;
 			OnPropertiesChanged();
 		}
 
 		public void SetBackImage(System.Drawing.Image img, RectangleF imageRectCM)
 		{
-			this.backImage = new(img, imageRectCM);
+			this._backImage = new(img, imageRectCM);
 			ResetImages(true, false);
 		}
 
 		public void SetFrontImage(System.Drawing.Image img, RectangleF imageRectCM)
 		{
-			this.frontImage = new(img, imageRectCM);
+			this._frontImage = new(img, imageRectCM);
 			ResetImages(false, true);
 		}
 
@@ -208,29 +229,17 @@ namespace WS
 		private void OnPropertiesChanged() => Invalidate();
 
 
+
 		#region Scale Params Counting...
-
-		/// <summary>Расчёт координат листа на экране и коэффициента ZOOM</summary>
-		private void CalculateScreenPage()
-		{
-			Rectangle rcClient = ClientRectangle;
-			rcClient.Inflate(-BORDER_SIZE, -BORDER_SIZE);
-
-			// Центральная точка страницы
-			PointF ptfCenter = rcClient.eToRectangleF().eGetCenter();
-
-			var pageOnScreenPx = PaperSizeCm.eВписатьВ(rcClient.Size);
-			_zoom = pageOnScreenPx.Zoom;
-			_rcPageOnScreenPx = pageOnScreenPx.TargetSize.eToRectangleF().eCenterTo(ptfCenter).eToRectangle();
-		}
 
 
 
 		/// <summary>Converts paper Coords (Cm) to Screen Coords (Pixels)</summary>
-		public Size PaperToScreen(SizeF szfPaper) => szfPaper.eMultiply(_zoom).ToSize();
+		public Size PaperToScreen(SizeF szfPaper)
+			=> szfPaper.eMultiply(_paperZoom).ToSize();
 
 
-		/// <inheritdoc cref="PaperToScreen"/>
+		/// <inheritdoc cref="PaperToScreen(SizeF)"/>
 		public Point PaperToScreen(PointF ptfPaper)
 		{
 			var ptScreen = PaperToScreen(ptfPaper.eToSize()).eToPoint();
@@ -242,14 +251,10 @@ namespace WS
 			return ptScreen;
 		}
 
-		/// <inheritdoc cref="PaperToScreen"/>
+		/// <inheritdoc cref="PaperToScreen(SizeF)"/>
 		public Rectangle PaperToScreen(RectangleF rcfPaper)
-		{
-			var ptScreen = PaperToScreen(rcfPaper.Location);
-			var szScreen = PaperToScreen(rcfPaper.Size);
-			Rectangle rcfScreenRect = new RectangleF(ptScreen, szScreen).eToRectangle();
-			return rcfScreenRect;
-		}
+			=> PaperToScreen(rcfPaper.Size)
+			.eToRectangle(PaperToScreen(rcfPaper.Location));
 
 
 		/// <summary>Converts Screen Pixels Coords to paper Coords (Cm)</summary>
@@ -257,9 +262,54 @@ namespace WS
 		{
 			if (!_rcPageOnScreenPx.Contains(screenPos)) return null;
 			screenPos.Offset(-(int)_rcPageOnScreenPx.X, -(int)_rcPageOnScreenPx.Y);
-			PointF ptfCursorOnPage = new(screenPos.X / _zoom, screenPos.Y / _zoom);
+			PointF ptfCursorOnPage = new(screenPos.X / _paperZoom, screenPos.Y / _paperZoom);
 			return ptfCursorOnPage;
 		}
+
+
+
+		/// <summary>Расчёт координат листа на экране и коэффициента ZOOM</summary>
+		private (Rectangle VRuller, Rectangle HRuller) CalculatePageMetrics(Graphics g)
+		{
+
+			_rullerOffsetMM = 2;
+			_rullerSizeMM = 6;
+
+			Rectangle rcClient = ClientRectangle;
+
+			var paddingPx = g.eMM_ToPixels(new SizeF(CONTROL_PADDING_MM, CONTROL_PADDING_MM));
+			rcClient.Inflate(-paddingPx.Width, -paddingPx.Height);
+
+
+			var rullerSizePx = g.eMM_ToPixels(new SizeF(_rullerSizeMM, _rullerSizeMM));
+			var rullerOffsetPx = g.eMM_ToPixels(new SizeF(_rullerOffsetMM, _rullerOffsetMM));
+
+			int offsetX = rullerSizePx.Width + rullerOffsetPx.Width;
+			int offsetY = rullerSizePx.Height + rullerOffsetPx.Height;
+
+			rcClient = rcClient.eMoveLeftTopCorner(new(offsetX, offsetY));
+
+			// Центральная точка страницы
+			PointF ptfPageCenter = rcClient.eToRectangleF().eGetCenter();
+			(var targetSize, _paperZoom) = _paperSizeCm.eВписатьВ(rcClient.Size);
+
+			_rcPageOnScreenPx = targetSize.eToRectangleF().eCenterTo(ptfPageCenter).eToRectangle();
+
+			//var r1 = _rcPageOnScreenPx;
+			//_rcPageOnScreenPx = _rcPageOnScreenPx.eMoveLeftTopCorner(new(offsetX, offsetY));
+			Rectangle rcVRuller = new(_rcPageOnScreenPx.Left - offsetX, _rcPageOnScreenPx.Top, rullerSizePx.Width, _rcPageOnScreenPx.Height);
+			Rectangle rcHRuller = new(_rcPageOnScreenPx.Left, _rcPageOnScreenPx.Top - offsetY, _rcPageOnScreenPx.Width, rullerSizePx.Height);
+
+			//float xx = (float)_rcPageOnScreenPx.Width / (float)r1.Width;
+			//float yy = (float)_rcPageOnScreenPx.Height / (float)r1.Height;
+
+			return (rcVRuller, rcHRuller);
+		}
+
+
+
+
+
 
 
 		#endregion
@@ -267,18 +317,24 @@ namespace WS
 
 		private void _Paint(Graphics g)
 		{
-			CalculateScreenPage();
+
 			g.Clear(SystemColors.AppWorkspace);
-			if (_rcPageOnScreenPx.Width < C_MIN_VISIBLE_PAGE_SIZE || _rcPageOnScreenPx.Height < C_MIN_VISIBLE_PAGE_SIZE) return;
+
+
+			var (rcVRuller, rcHRuller) = CalculatePageMetrics(g);
+
+
+			if (_rcPageOnScreenPx.Width < MIN_VISIBLE_PAGE_SIZE_PX || _rcPageOnScreenPx.Height < MIN_VISIBLE_PAGE_SIZE_PX) return;
 
 			Region rgnFull = g.Clip;
 			g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
 			g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.None;
-			g.PageUnit = GraphicsUnit.Pixel;
 			g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SystemDefault;
 
-			const int SHADOW_SIZE = 40;
+			g.PageUnit = GraphicsUnit.Pixel;
 
+
+			const int SHADOW_SIZE = 40;
 			float alphaStep = 5f / (float)SHADOW_SIZE;
 
 			int penWidth = SHADOW_SIZE;
@@ -287,9 +343,10 @@ namespace WS
 			for (int iStep = 0; iStep < SHADOW_SIZE; iStep++)
 			{
 				Color clrShadow = Color.FromArgb((int)alpha, Color.Black);
-				using Pen pnShadow = new Pen(clrShadow, penWidth);
-
-				pnShadow.LineJoin = System.Drawing.Drawing2D.LineJoin.Round;
+				using Pen pnShadow = new(clrShadow, penWidth)
+				{
+					LineJoin = LineJoin.Round
+				};
 
 				g.DrawRectangle(pnShadow, _rcPageOnScreenPx);
 				penWidth--;
@@ -297,12 +354,22 @@ namespace WS
 			}
 
 			// ***** Draw White Page
-			g.FillRectangle(BRUSH_PAGE, _rcPageOnScreenPx);
-			//g.DrawRectangle(BRUSH_PAGE, _rcPageOnScreenPx);
+			g.FillRectangle(B_PAPER_BACKGROUND, _rcPageOnScreenPx);
 
 			// ***** Draw Yellow rullers
-			Draw_Ruller(g, 0f, PaperSizeCm.Width, _zoom, _rcPageOnScreenPx, false, _rullerOffset, _rullerSize, RULLER_COLOR, RULLER_COLOR_BACK);
-			Draw_Ruller(g, 0f, PaperSizeCm.Height, _zoom, _rcPageOnScreenPx, true, _rullerOffset, _rullerSize, RULLER_COLOR, RULLER_COLOR_BACK);
+			Enum
+				.GetValues<Orientation>()
+				.eForEach(o =>
+				{
+					Draw_Ruller(g,
+						o,
+						0f,
+						(o == Orientation.Vertical ? PaperSizeCm.Height : PaperSizeCm.Width),
+						(o == Orientation.Vertical ? rcVRuller : rcHRuller),
+						P_RULLER_MARKS,
+						B_RULLER_TEXT,
+						B_RULLER_BACKGROUND);
+				});
 
 
 			// Allow drawing only on page
@@ -316,15 +383,40 @@ namespace WS
 						if (di == null) return;
 
 						var rcImage = PaperToScreen(di.ImageRectCm);
-						g.DrawImage(di.Image, PaperToScreen(di.ImageRectCm));
+						g.DrawImage(di.Image!, PaperToScreen(di.ImageRectCm));
 #if DEBUG
 						g.DrawRectangles(Pens.Blue, rcImage.eToArrayOf());
 #endif
 					}
 
-					if (backImage == null && frontImage == null)
+					if (_backImage == null && _frontImage == null)
 					{
-						if (!string.IsNullOrWhiteSpace(_emptyImagesText))
+						//Drawing NoImage Logo & Text
+
+						if (_emptyImagesLogo != null)
+						{
+							var zoom = _emptyImagesLogo.Width.Value / _emptyImagesLogo.Width.Value;
+							Rectangle rcBitmap = _rcPageOnScreenPx;
+							rcBitmap.Height = (int)(((float)rcBitmap.Width) + zoom);
+
+							rcBitmap = rcBitmap.Size
+								.eВписатьВ(_rcPageOnScreenPx.Size).TargetSize
+								.eToRectangle()
+								.eScaleToInt(new(0.5f, 0.5f));
+
+							var bm = _emptyImagesLogo.Draw(rcBitmap.Width, rcBitmap.Height);
+							bm.MakeTransparent();
+
+							//Rectangle rcBm = bmTmp.Size.eToRectangle();
+							var rectBm = rcBitmap.eCenterTo(_rcPageOnScreenPx.eGetCenter().eRoundToInt());
+
+							bm = bm.eMakeTransparent(0.1f);
+							g.DrawImageUnscaled(bm, rectBm.Location);
+
+
+
+						}
+						if (_emptyImagesText.eIsNotNullOrWhiteSpace())
 						{
 							//Drawing No Image Text
 							using Font fnt = new(this.Font.FontFamily, 20);
@@ -333,42 +425,41 @@ namespace WS
 					}
 					else
 					{
-						DrawImageProc(backImage);
-						DrawImageProc(frontImage);
+						DrawImageProc(_backImage);
+						DrawImageProc(_frontImage);
 					}
 
 				}
 
+
 				// ***** Drawing Crop Region	
 				{
-					bool bCrop = _paperCropCm.HasValue || IsInMouseCropMode;
+					bool bCrop = _cropZoneCm.HasValue || CropIsInProcess;
 					if (bCrop)
 					{
 						RectangleF rcfCropCm = default;
 
-						rcfCropCm = IsInMouseCropMode
+						rcfCropCm = CropIsInProcess
 							? NormalizedMaouseCropRectCm!.Value
-							: _paperCropCm!.Value.eNormalize();
+							: _cropZoneCm!.Value.eNormalize();
 
 						rcfCropCm = rcfCropCm.eEnsureInRect(PaperSizeCm.eToRectangleF());
-
 
 						Rectangle rcCropPx = PaperToScreen(rcfCropCm);
 						rcCropPx = rcCropPx.eEnsureInRect(_rcPageOnScreenPx);
 
-						// Shadowing White page except Clip Rect
-						using Region rgnPageWitoutCrop = new(_rcPageOnScreenPx);
-						rgnPageWitoutCrop.Exclude(rcCropPx);
-						//using Region rgnCrop = new(rcCropPx);
-						g.Clip = rgnPageWitoutCrop;
+						// Shadowing page except Clip Rect
+						{
+							using Region rgnPageWitoutCrop = new(_rcPageOnScreenPx);
+							rgnPageWitoutCrop.Exclude(rcCropPx);
+							g.Clip = rgnPageWitoutCrop;
 
+							const byte CROP_SHADOW_ALPHA = 50;
+							var CLR_CROP_SHADOW = Color.FromArgb(CROP_SHADOW_ALPHA, 0, 0, 0);
 
-
-						const byte CROP_SHADOW_ALPHA = 50;
-						var CLR_CROP_SHADOW = Color.FromArgb(CROP_SHADOW_ALPHA, 0, 0, 0);
-
-						using SolidBrush brClipShadow = new(CLR_CROP_SHADOW);
-						g.FillRectangle(brClipShadow, _rcPageOnScreenPx);
+							using SolidBrush brClipShadow = new(CLR_CROP_SHADOW);
+							g.FillRectangle(brClipShadow, _rcPageOnScreenPx);
+						}
 
 						g.Clip = rgnFull;
 						// ***** Clip Frame
@@ -380,48 +471,57 @@ namespace WS
 							g.Clip = rgnCrop;
 
 							{
-								//Drawing Crop Tip Labels
+								//Drawing crop zone tips
 
-								const int MIN_TIP_W = 120;
-								const int MIN_TIP_H = 60;
+								//const int MIN_TIP_W = 120, MIN_TIP_H = 60;
+								//const string NUMBER_FORMAT = "0.00";
 
-								if (IsInMouseCropMode && rcCropPx.Width > MIN_TIP_W && rcCropPx.Height > MIN_TIP_H)
+								string cropZoneStart = $"{rcfCropCm.X:0.00}x{rcfCropCm.Y:0.00}{_cropZone_UnitsCm}";
+								string cropZoneSize = $"{_cropZoneString}: {rcfCropCm.Width:0.00}x{rcfCropCm.Height:0.00}{_cropZone_UnitsCm}";
+								string cropZoneEnd = $"{rcfCropCm.Right:0.00}x{rcfCropCm.Bottom:0.00}{_cropZone_UnitsCm}";
+
+								var szfCropZoneStart = g.MeasureString(cropZoneStart, Font);
+								var szfCropZoneSize = g.MeasureString(cropZoneSize, Font);
+								var szfCropZoneEnd = g.MeasureString(cropZoneEnd, Font);
+
+								var minTimSize = szfCropZoneStart.Height + szfCropZoneEnd.Height;
+								if (CropIsInProcess && rcCropPx.Height > minTimSize)
 								{
 
 									void DrawTipText(string txt, Rectangle rc, ContentAlignment align)
 									{
-										const int TIP_FRAME_SIZE = 2;
+										const int FRAME_PADDING = 2;
 										Point tipOffset = new(4, 4);
 
 										Rectangle tr = g.MeasureString(txt, Font).eToRectangleF().eToRectangle();
-										tr.Inflate(TIP_FRAME_SIZE, TIP_FRAME_SIZE);
+										tr.Inflate(FRAME_PADDING, FRAME_PADDING);
+
+										if (rcCropPx.Width < tr.Width || rcCropPx.Height < tr.Height) return;
 
 										tr = tr.eAlignTo(rc, align, tipOffset);
-										g.FillRectangle(SystemBrushes.Info, tr);
+
+										//g.FillRectangle(SystemBrushes.Info, tr);
+										Color clrTip = Color.FromArgb(150, SystemColors.Info);
+										using SolidBrush brTip = new(clrTip);
+										g.FillRectangle(brTip, tr);
+
 										g.DrawRectangle(Pens.DarkGray, tr);
 										g.eDrawTextEx(txt, Font, Color.DarkGray, tr, ContentAlignment.MiddleCenter);
 									}
 
-
-									//using Font fnt = new(this.Font.FontFamily, 20);
-
-									string posStart = $"{rcfCropCm.X:0.00}x{rcfCropCm.Y:0.00}" + _cropZone_UnitsCm;
-									DrawTipText(posStart, rcCropPx, ContentAlignment.TopLeft);
-
-									string cropSize = $"{_cropZoneString}: {rcfCropCm.Width:0.00}x{rcfCropCm.Height:0.00}" + _cropZone_UnitsCm;
-									DrawTipText(cropSize, rcCropPx, ContentAlignment.MiddleCenter);
-
-									string endStart = $"{rcfCropCm.Right:0.00}x{rcfCropCm.Bottom:0.00}" + _cropZone_UnitsCm;
-									DrawTipText(endStart, rcCropPx, ContentAlignment.BottomRight);
+									DrawTipText(cropZoneStart, rcCropPx, ContentAlignment.TopLeft);
+									DrawTipText(cropZoneEnd, rcCropPx, ContentAlignment.BottomRight);
+									DrawTipText(cropZoneSize, rcCropPx, ContentAlignment.MiddleCenter);
 
 								}
 							}
 
-							using Pen pnClipFrame = new(clrCropFrame, 3);
-							pnClipFrame.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
-							pnClipFrame.Alignment = System.Drawing.Drawing2D.PenAlignment.Inset;
+							using Pen pnClipFrame = new(clrCropFrame, 3)
+							{
+								DashStyle = System.Drawing.Drawing2D.DashStyle.Dash,
+								Alignment = System.Drawing.Drawing2D.PenAlignment.Inset
+							};
 							g.DrawRectangle(pnClipFrame, rcCropPx);
-
 
 						}
 					}
@@ -432,8 +532,8 @@ namespace WS
 				g.Clip = rgnFull;
 			}
 
-			DrawPageEventArgs DPEA = new(PaperSizeCm, _rcPageOnScreenPx, _zoom, g);
-			try { OnDrawPage?.Invoke(this, DPEA); } catch { }
+			DrawPageEventArgs DPEA = new(PaperSizeCm, _rcPageOnScreenPx, _paperZoom, g);
+			try { DrawPage?.Invoke(this, DPEA); } catch { }
 		}
 
 
@@ -441,83 +541,95 @@ namespace WS
 
 		private static void Draw_Ruller(
 			Graphics g,
-			float Value_Min,
-			float Value_Max,
-			float ScreenZoom,
-			RectangleF rcPaper,
-			bool bVertical,
-			float RullerOffset,
-			float RullerSize,
-			Pen RullerColor,
-			Brush RullerBackColor)
+			Orientation rullerOrientation,
+			float rullerValueMin,
+			float rullerValueMax,
+			Rectangle rullerBoundsPx,
+			Pen pRullerMarks,
+			Brush bRullerText,
+			Brush bRullerBack)
 		{
 
+			bool vertical = (rullerOrientation == Orientation.Vertical);
 
-			// Рисуем жёлтый фон линейки
-			RectangleF rcRullerBack = bVertical
-				? new(rcPaper.Left - RullerOffset - RullerSize, rcPaper.Top, RullerSize, rcPaper.Height)
-				: new(rcPaper.Left, rcPaper.Top - RullerOffset - RullerSize, rcPaper.Width, RullerSize);
+			//var oldUnits = g.PageUnit;
 
-			g.FillRectangle(RullerBackColor, rcRullerBack);
+			var oldClip = g.Clip;
+			g.Clip = new(rullerBoundsPx);
 
-			void Draw_Деления(RectangleF rc, float _From, float _To, float _Step)
+			try
 			{
-				PointF pt1, pt2;
+				g.FillRectangle(bRullerBack, rullerBoundsPx);
 
-				float sngValue = _From;
-				while (sngValue < _To)
+				int rullerLenghtPx = vertical ? rullerBoundsPx.Height : rullerBoundsPx.Width;
+				float rullerWidthPx = (vertical ? rullerBoundsPx.Width : rullerBoundsPx.Height);
+
+				float Size_10_mm = rullerWidthPx / 3f * 2f;
+				float Size_5_mm = rullerWidthPx / 2f;
+				float Size_1_mm = Size_5_mm / 2f;
+
+				float rullerSizeMM = (rullerValueMax - rullerValueMin) * 10;
+				var rullerScale = (float)rullerLenghtPx / rullerSizeMM;
+
+				float fTextSize = rullerScale.eCheckRange(1f, 3f);
+				using Font fnt = new(FontFamily.GenericSansSerif, fTextSize, GraphicsUnit.Millimeter);
+
+				Debug.WriteLine(rullerScale);
+
+				int mm = 0, mmInPixels = 0;
+				while (mmInPixels < rullerLenghtPx)
 				{
-					float ValueOnScreen = sngValue * ScreenZoom; // зНАЧЕНИЕ В ЭКРАННОЙ КООРДИНАТЕ
+					mm++;
+					mmInPixels = (int)(mm * rullerScale);
 
-					if (bVertical)
+					float markSize = Size_1_mm;
+
+					if (mm.eIsКратно(10))
 					{
-						ValueOnScreen += rcPaper.Top; // Сдвигаем относительно начала на экране
-						pt1 = new PointF(rc.Left, ValueOnScreen);
-						pt2 = new PointF(rc.Right, ValueOnScreen);
+						markSize = Size_10_mm;
+					}
+					else if (mm.eIsКратно(5))
+					{
+						markSize = Size_5_mm;
 					}
 					else
 					{
-						ValueOnScreen += rcPaper.Left; // Сдвигаем относительно начала на экране
-						pt1 = new PointF(ValueOnScreen, rc.Top);
-						pt2 = new PointF(ValueOnScreen, rc.Bottom);
+
+						if (rullerScale < 2f) continue;
 					}
 
-					g.DrawLine(RullerColor, pt1, pt2);
+					Point ptStart = vertical
+						? new(rullerBoundsPx.Right, rullerBoundsPx.Top + mmInPixels)
+						: new(rullerBoundsPx.Left + mmInPixels, rullerBoundsPx.Bottom);
 
-					sngValue += _Step;
+					Point ptEnd = ptStart;
+
+					if (vertical)
+						ptEnd.Offset(-(int)markSize, 0);
+					else
+						ptEnd.Offset(0, -(int)markSize);
+
+					g.DrawLine(pRullerMarks, ptStart, ptEnd);
+
+
+					if (mm.eIsКратно(10))
+					{
+						string cm = ((rullerValueMin + mm) / 10).ToString();
+						g.eDrawTextEx(cm, fnt, bRullerText, ptEnd, ContentAlignment.MiddleCenter);
+					}
+
+
 				}
-			};
+
+				return;
 
 
-			// Уменьшаем толщину линейки для основных делений
-			float Size_1 = RullerSize / 2f;
-			float Size_05 = Size_1 / 2f;
-			float Size_01 = Size_05 / 2f;
 
-			(float ВысотаРиски, float ШагДелений)[] aШкалы = {
-				new (Size_1, 1.0f),
-				new (Size_05, 0.5f),
-				new (Size_01, 0.1f)
-			};
-
-			foreach (var Шкала in aШкалы)
+			}
+			finally
 			{
-				var RC = rcRullerBack;
-
-				if (bVertical)
-				{
-					RC.Offset(RC.Width, 0f);
-					RC.Width = Шкала.ВысотаРиски;
-					RC.Offset(-RC.Width, 0f);
-				}
-				else
-				{
-					RC.Offset(0f, RC.Height);
-					RC.Height = Шкала.ВысотаРиски;
-					RC.Offset(0f, -RC.Height);
-				}
-
-				Draw_Деления(RC, Value_Min, Value_Max, Шкала.ШагДелений);
+				//	g.PageUnit = oldUnits;
+				g.Clip = oldClip;
 			}
 
 		}
@@ -533,7 +645,7 @@ namespace WS
 
 		private void _MouseDown(MouseEventArgs e)
 		{
-			ptfMouseCropStartCm = (e.Button == MouseButtons.Left)
+			_ptfMouseCropStartCm = (e.Button == MouseButtons.Left)
 				? ScreenToPaper(e.Location)
 				: null;
 
@@ -549,18 +661,18 @@ namespace WS
 
 			//UseWaitCursor = false;
 
-			ptfMouseCropEndCm = (e.Button == MouseButtons.Left) ? ptfCursor : null;
+			_ptfMouseCropEndCm = (e.Button == MouseButtons.Left) ? ptfCursor : null;
 
 			DrawCropArea();
 
-			MouseMoveOnPaper.Invoke(this, ptfCursor);
+			MouseMove.Invoke(this, ptfCursor);
 		}
 
 		private void _MouseUp(MouseEventArgs e)
 		{
 			if (e.Button != MouseButtons.Left || !NormalizedMaouseCropRectCm.HasValue) return;
-			RectangleF rcfMouseCrop = NormalizedMaouseCropRectCm!.Value;
-			OnMouseCropSetup.Invoke(this, rcfMouseCrop);
+			RectangleF rcfCrop = NormalizedMaouseCropRectCm!.Value;
+			CropZoneCompleted.Invoke(this, rcfCrop);
 			ClearMouseCrop(false);
 		}
 
@@ -573,12 +685,12 @@ namespace WS
 
 		private void ClearMouseCrop(bool redraw = true)
 		{
-			ptfMouseCropStartCm = null;
-			ptfMouseCropEndCm = null;
+			_ptfMouseCropStartCm = null;
+			_ptfMouseCropEndCm = null;
 			if (redraw) DrawCropArea();
 		}
 
-		private void _MouseLeave(EventArgs e) => MouseMoveOnPaper.Invoke(this, null);
+		private void _MouseLeave(EventArgs e) => MouseMove.Invoke(this, null);
 
 
 		private void DrawCropArea() => Invalidate();

@@ -1,5 +1,9 @@
 ﻿#nullable enable
 
+global using WORD = System.Int16;
+global using DWORD = System.Int32;
+global using QWORD = System.Int64;
+
 global using static uom.Extensions.Extensions_DebugAndErrors;
 
 global using System.Windows.Forms;
@@ -287,7 +291,7 @@ namespace uom
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static void SaveMultiString(string name, string? val, string subKey = "")
 			{
-				var lines = val.eSplitToLines(true);
+				var lines = val.eSplitLines(true);
 				Save(name, lines.ToArray(), subKey);
 			}
 
@@ -2176,7 +2180,7 @@ namespace uom
 		public override string ToString() => MutexName;
 
 
-		internal partial class AppMutexAlreadyExistException() : Exception(uom.WinAPI.errors.Win32Errors.ERROR_SERVICE_EXISTS.eToWin32Exception().Message) { }
+		internal partial class AppMutexAlreadyExistException() : Exception(uom.WinAPI.errors.Win32Errors.ERROR_SERVICE_ALREADY_RUNNING.eToWin32Exception().Message) { }
 
 	}
 
@@ -2265,9 +2269,15 @@ namespace uom
 
 		/// <summary>The wrapper class for any objects which need to be displayed in Comboboxes with custom text</summary>
 		[DefaultProperty("Value")]
-		internal class ComboboxItemEnumContainer<T>(T val)
-			: ComboboxItemContainer<T>(val, enumValue => enumValue.eGetDescriptionValue()) where T : Enum
-		{ }
+		internal class ComboboxItemEnumContainer<T> : ComboboxItemContainer<T> where T : Enum
+		{
+			public ComboboxItemEnumContainer(T val, string displayName)
+				: base(val, displayName) { }
+
+			public ComboboxItemEnumContainer(T val)
+				: base(val, enumValue => enumValue.eGetDescriptionValue()) { }
+
+		}
 
 	}
 
@@ -2602,7 +2612,7 @@ namespace uom
 
 					//var rr = uom.WinAPI.windows.GetWindowRectWithoutShadow(_f.Handle);
 					//Debug.WriteLine($"GetWindowRect: {rr}");
-					
+
 					 */
 				}
 			}
@@ -2681,32 +2691,32 @@ namespace uom
 
 			/*
 
-Public Sub Load()
-If (Me._Form?.IsDisposed) Then Return
+	Public Sub Load()
+	If (Me._Form?.IsDisposed) Then Return
 
-Dim sRecordName = Me.GetID
-If(sRecordName.eIsNullOrWhiteSpace) Then Return
+	Dim sRecordName = Me.GetID
+	If(sRecordName.eIsNullOrWhiteSpace) Then Return
 
-Dim aRows = uomvb.Settings.GetSetting_Strings(sRecordName,,,, CS_SETTTINGS_FOLDER).Value
-If(aRows Is Nothing) OrElse(Not aRows.Any) Then Return
+	Dim aRows = uomvb.Settings.GetSetting_Strings(sRecordName,,,, CS_SETTTINGS_FOLDER).Value
+	If(aRows Is Nothing) OrElse(Not aRows.Any) Then Return
 
-Dim sRows = aRows.eJoin(vbCrLf)
-Dim fps As FormPositionSaver = Nothing
-Try
-fps = sRows.eDeSerializeXML(Of FormPositionSaver)
-Catch ex As Exception 'Any error - ignore
-'Debug.WriteLine("*********** Load ERROR")
-'Debug.WriteLine(ex.Message)
-Return
-End Try
-If(fps Is Nothing) Then Return
+	Dim sRows = aRows.eJoin(vbCrLf)
+	Dim fps As FormPositionSaver = Nothing
+	Try
+	fps = sRows.eDeSerializeXML(Of FormPositionSaver)
+	Catch ex As Exception 'Any error - ignore
+	'Debug.WriteLine("*********** Load ERROR")
+	'Debug.WriteLine(ex.Message)
+	Return
+	End Try
+	If(fps Is Nothing) Then Return
 
-'Debug.WriteLine("*********** Load ")
-'Debug.WriteLine(rFP.ToString)
+	'Debug.WriteLine("*********** Load ")
+	'Debug.WriteLine(rFP.ToString)
 
-With Me._Form
-Call.SuspendLayout()
-Try
+	With Me._Form
+	Call.SuspendLayout()
+	Try
 
 	'Ищем монитор, на котором последний раз было окно (могли отключить или удалить - тогда используем основной)
 	Dim scrnDisplay = Screen.PrimaryScreen
@@ -2750,21 +2760,21 @@ Try
 			'.Size = rcBounds.Size
 	End Select
 
-Catch ex As Exception
+	Catch ex As Exception
 	'
-Finally
+	Finally
 	Call.ResumeLayout()
-End Try
-End With
-End Sub
+	End Try
+	End With
+	End Sub
 
 
-Public Overrides Function ToString() As String
-Dim sData = Me.eSerializeXML()
-Return sData
-End Function
+	Public Overrides Function ToString() As String
+	Dim sData = Me.eSerializeXML()
+	Return sData
+	End Function
 
-*/
+	*/
 
 
 		}
@@ -3773,7 +3783,7 @@ End Function
 				Name = Name.Trim();
 
 				if (newName == Name) return;//Already has this name
-				if (newName.eIsDifferOlyInCase(Name)) throw new ArgumentException("New key name differ only in case!", nameof(newName));
+				if (newName.eIsDifferOnlyByCase(Name)) throw new ArgumentException("New key name differ only in case!", nameof(newName));
 
 				KeyParent.eCopySubkey(Name, newName, false);
 				KeyParent.DeleteSubKeyTree(Name, false);
@@ -3790,7 +3800,7 @@ End Function
 				newSubKeyName = newSubKeyName.Trim();
 
 				if (newSubKeyName == subKeyName) throw new ArgumentException($"{nameof(newSubKeyName)} = {nameof(subKeyName)}!");
-				if (subKeyName.eIsDifferOlyInCase(newSubKeyName))
+				if (subKeyName.eIsDifferOnlyByCase(newSubKeyName))
 					throw new ArgumentException($"The {nameof(newSubKeyName)} and {nameof(subKeyName)} differ only in case!", nameof(newSubKeyName));
 
 				RegistryKey? keyOld = KeyParent.OpenSubKey(subKeyName, false);
@@ -5564,11 +5574,11 @@ End Function
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static void eClearItemsAndGroups(this ListView? lvw, bool autoSizeColumns = true, bool clearGroups = true, bool clearColumns = false)
+			internal static void eClear(this ListView? lvw, bool autoSizeColumns = true, bool clearItems = true, bool clearGroups = true, bool clearColumns = false)
 			{
 				lvw?.erunOnLockedUpdate(delegate
 				{
-					lvw?.Items.Clear();
+					if (clearItems) lvw?.Items.Clear();
 					if (clearGroups) lvw?.Groups.Clear();
 					if (clearColumns) lvw?.Columns.Clear();
 				}, autoSizeColumns);
@@ -5577,7 +5587,7 @@ End Function
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static void eClearItems(this ListView lvw, bool autoSizeColumns = false)
-				=> lvw.eClearItemsAndGroups(autoSizeColumns, false);
+				=> lvw.eClear(autoSizeColumns, false);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -8744,33 +8754,65 @@ End Function
 
 
 
-
+			/// <returns>measured text size</returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void eDrawTextEx(
-			this Graphics g,
-			string text,
-			Font font,
-			Color textcolor,
-			Rectangle rect,
-			ContentAlignment textAlign)
+			public static SizeF eDrawTextEx(
+				this Graphics g,
+				string text,
+				Font font,
+				Color textcolor,
+				RectangleF rect,
+				ContentAlignment textAlign,
+				StringTrimming trimming = StringTrimming.Character,
+				bool autoHeightRect = false)
 			{
 				using Brush brText = new SolidBrush(textcolor);
-				g.eDrawTextEx(text, font, brText, rect, textAlign);
+				return g.eDrawTextEx(text, font, brText, rect, textAlign, trimming, autoHeightRect);
 			}
 
+
+			/// <returns>measured text size</returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static void eDrawTextEx(
+			public static SizeF eDrawTextEx(
 				this Graphics g,
 				string text,
 				Font font,
 				Brush textbrush,
-				Rectangle rect,
-				ContentAlignment textAlign)
+				RectangleF rc,
+				ContentAlignment textAlign,
+				StringTrimming trimming = StringTrimming.Character,
+				bool autoHeightRect = false
+				)
 			{
 				using var sf = textAlign.eToStringFormat();
-				g.DrawString(text, font, textbrush, rect, sf);
+				sf.Trimming = trimming;
+
+				var textSize = g.MeasureString(text, font, rc.Size, sf);
+				if (autoHeightRect)
+				{
+					rc.Height = textSize.Height;
+				}
+
+				g.DrawString(text, font, textbrush, rc, sf);
+
+				return textSize;
 			}
 
+			/// <returns>measured text size</returns>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static SizeF eDrawTextEx(
+				this Graphics g,
+				string text,
+				Font font,
+				Brush textbrush,
+				PointF location,
+				ContentAlignment textAlign
+				)
+			{
+				var msl = g.eMeasureStringLocation(text, font, location, textAlign);
+				g.DrawString(text, font, textbrush, msl.TextPos);
+				return msl.MeasuredTextSize;
+			}
 
 
 		}
@@ -8830,10 +8872,10 @@ End Function
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SizeF eMM_ToPixels(this Graphics g, SizeF SizeInMM)
+			internal static Size eMM_ToPixels(this Graphics g, SizeF SizeInMM)
 				=> new(
-					SizeInMM.Width.eMMToInches() * g.DpiX,
-					SizeInMM.Height.eMMToInches() * g.DpiY
+					(int)(SizeInMM.Width.eMMToInches() * g.DpiX),
+					(int)(SizeInMM.Height.eMMToInches() * g.DpiY)
 					);
 
 
@@ -8875,20 +8917,23 @@ End Function
 			internal static System.Drawing.Point eInches_To_Pixels(this PointF Inches, System.Drawing.Point DPI)
 				=> new(
 					(int)(Inches.X * DPI.X),
-					(int)(Inches.Y * DPI.Y));
+					(int)(Inches.Y * DPI.Y)
+					);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static System.Drawing.Size eInches_To_Pixels(this SizeF Inches, System.Drawing.Point DPI)
 				=> new(
 					(int)(Inches.Width * DPI.X),
-					(int)(Inches.Height * DPI.Y));
+					(int)(Inches.Height * DPI.Y)
+					);
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static Rectangle eInches_To_Pixels(this System.Drawing.RectangleF rcfДюймы, System.Drawing.Point DPI)
 				=> new(
 					rcfДюймы.Location.eInches_To_Pixels(DPI),
-					rcfДюймы.Size.eInches_To_Pixels(DPI));
+					rcfДюймы.Size.eInches_To_Pixels(DPI)
+					);
 
 			#endregion
 
@@ -9000,101 +9045,76 @@ End Function
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SizeF eMultiply(this SizeF Source, float Zoom) => new(Source.Width * Zoom, Source.Height * Zoom);
+			internal static SizeF eMultiply(this SizeF source, float Zoom) => new(source.Width * Zoom, source.Height * Zoom);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static PointF eMultiply(this PointF Source, float Zoom) => new(Source.X * Zoom, Source.Y * Zoom);
+			internal static PointF eMultiply(this PointF source, float Zoom) => new(source.X * Zoom, source.Y * Zoom);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static System.Drawing.Point eToPoint(this PointF Source) => new((int)Source.X, (int)Source.Y);
+			internal static Point eToPoint(this PointF source) => Point.Round(source);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static PointF eToPoint(this SizeF Source) => new(Source.Width, Source.Height);
+			internal static PointF eToPoint(this SizeF source) => new(source.Width, source.Height);
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Point eToPoint(this Size Source) => new(Source.Width, Source.Height);
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static PointF eToPointF(this Size Source) => new(Source.Width, Source.Height);
+			internal static Point eToPoint(this Size source) => new(source.Width, source.Height);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SizeF eToSize(this PointF Source) => new(Source.X, Source.Y);
+			internal static PointF eToPointF(this Size source) => new(source.Width, source.Height);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static SizeF eToSizeF(this Size Source) => new(Source.Width, Source.Height);
+			internal static SizeF eToSize(this PointF source) => new(source.X, source.Y);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF eToRectangleF(this System.Drawing.SizeF Source, PointF? newLocation = null)
+			internal static SizeF eToSizeF(this Size source) => new(source.Width, source.Height);
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static RectangleF eToRectangleF(this System.Drawing.SizeF source, PointF? location = null)
 				=> new(
-					newLocation.HasValue
-						? newLocation.Value
+					location.HasValue
+						? location.Value
 						: new PointF(0, 0),
-					 Source);
+					 source);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Rectangle eToRectangle(this System.Drawing.Size Source, Point? newLocation = null)
-				=> new(
-					  newLocation.HasValue
-						? newLocation.Value
-						: new Point(0, 0),
-					 Source);
+			internal static Rectangle eToRectangle(this System.Drawing.Size source, Point location)
+				=> new(location, source);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Rectangle eToRectangle(this System.Drawing.Size source)
+				=> new(new Point(0, 0), source);
+
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF eToRectangleF(this Rectangle RC) => new(RC.Left, RC.Top, RC.Width, RC.Height);
+			internal static RectangleF eToRectangleF(this Rectangle source) => new(source.Left, source.Top, source.Width, source.Height);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Rectangle eToRectangle(this RectangleF RCF)
-			{
-				RCF = RCF.eRound(0);
-				return new(
-					(int)RCF.Left,
-					(int)RCF.Top,
-					(int)RCF.Width,
-					(int)RCF.Height);
-			}
-
-
-
-
-
-
+			internal static Rectangle eToRectangle(this RectangleF source) => Rectangle.Round(source);
 
 
 			/// <summary>Округляет, используя Round(Precission)</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static RectangleF eRound(this RectangleF RCF, int Precission)
+			internal static RectangleF eRound(this RectangleF source, int precission)
 			{
 				float X, Y, W, H;
-				X = RCF.Left.eRound(Precission);
-				Y = RCF.Top.eRound(Precission);
-				W = RCF.Width.eRound(Precission);
-				H = RCF.Height.eRound(Precission);
+				X = source.Left.eRound(precission);
+				Y = source.Top.eRound(precission);
+				W = source.Width.eRound(precission);
+				H = source.Height.eRound(precission);
 				var RC = new RectangleF(X, Y, W, H);
 				return RC;
 			}
-			// 	Function RectCenter(ByVal X As Integer, ByVal Y As Integer, ByVal W As Integer, ByVal H As Integer) As Win.RECT
-			// 		Dim R As Win.RECT
-			// 		Dim W2, H2 As Integer
-			// 		W2 = W \ 2
-			// 		H2 = H \ 2
-			// 		With R
-			// 			.Left = X - W2
-			// 			.Right = X + W2 + IIf(Чётное(W), 0, 1)
-			// 			.Top = Y - H2
-			// 			.bottom = Y + H2 + IIf(Чётное(H), 0, 1)
-			// 		End With
-			// 		RectCenter = LSet(R, Len(RectCenter))
-			// 	End Function
+
 
 
 			// 	Function RectCenterRect(ByRef RcParent As Win.RECT, ByRef RcClient As Win.RECT) As Win.RECT
@@ -9244,6 +9264,59 @@ End Function
 					ptCenter.Y - RC.Height / 2,
 					RC.Width,
 					RC.Height);
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static RectangleF eScale(this RectangleF source, PointF zoom)
+				=> new(
+					source.Left,
+					source.Top,
+					(source.Size.Width * zoom.X),
+					(source.Size.Height * zoom.Y)
+					);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static RectangleF eScale(this Rectangle source, PointF zoom)
+				=> source.eToRectangleF().eScale(zoom);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Rectangle eScaleToInt(this Rectangle source, PointF zoom)
+				=> source.eScale(zoom).eToRectangle();
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Rectangle eMoveLeftEdge(this Rectangle source, int delthaX)
+			{
+				var rc = source;
+				source.Offset(delthaX, 0);
+				source.Width -= delthaX;
+				return source;
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Rectangle eMoveTopEdge(this Rectangle source, int delthaY)
+			{
+				var rc = source;
+				source.Offset(0, delthaY);
+				source.Height -= delthaY;
+				return source;
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Rectangle eMoveLeftTopCorner(this Rectangle source, Size deltha)
+			{
+				var rc = source;
+				source.Offset(deltha.eToPoint());
+				source.Width -= deltha.Width;
+				source.Height -= deltha.Height;
+				return source;
+			}
 
 
 
@@ -9506,74 +9579,214 @@ End Function
 
 
 
+
 		internal static class Extensions_Imaging
 		{
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Image eToGrayscale(this Bitmap src) => ToolStripRenderer.CreateDisabledImage(src);
+			internal static Bitmap eTransformColor(this Bitmap original, ColorMatrix cm)
+			{
+				// create a blank bitmap the same size as original
+				Bitmap newBitmap = new(original.Width, original.Height, PixelFormat.Format32bppArgb);
+
+				// create some image attributes
+				using ImageAttributes attributes = new();
+				// set the color matrix attribute
+				attributes.SetColorMatrix(cm);
+
+				// get a graphics object from the new image
+				using Graphics g = Graphics.FromImage(newBitmap);
+				// draw the original image on the new image using the grayscale color matrix
+				g.DrawImage(
+					 original,
+					 original.Size.eToRectangle(),
+					 0, 0, original.Width, original.Height,
+					 GraphicsUnit.Pixel,
+					 attributes);
+
+				return newBitmap;
+			}
+
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static Bitmap eMakeGrayscale_Matrix(this Bitmap original)
+			internal static Bitmap eMakeTransparent(this Bitmap original, float alpha)
 			{
-				// create a blank bitmap the same size as original
-				Bitmap newBitmap = new(original.Width, original.Height, PixelFormat.Format16bppGrayScale);
+				ColorMatrix cm = new(
+					   [
+								   [1.0f, 0.0f, 0.0f, 0.0f, 0.0f],
+								   [0.0f, 1.0f, 0.0f, 0.0f, 0.0f],
+								   [0.0f, 0.0f, 1.0f, 0.0f, 0.0f],
+								   [0.0f, 0.0f, 0.0f, alpha, 0.0f],
+								   [0.0f, 0.0f, 0.0f, 0.0f, 1.0f],
+								   ]
+								   );
 
-				// get a graphics object from the new image
-				using (Graphics g = Graphics.FromImage(newBitmap))
+				return original.eTransformColor(cm);
+
+			}
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Bitmap eToGrayscaled_Matrix(this Bitmap original)
+			{
+				// create the grayscale ColorMatrix
+				ColorMatrix cm = new(
+					   [
+								   [0.30f, 0.30f, 0.30f, 0.00f, 0.00f],
+								   [0.59f, 0.59f, 0.59f, 0.00f, 0.00f],
+								   [0.11f, 0.11f, 0.11f, 0.00f, 0.00f],
+								   [0.00f, 0.00f, 0.00f, 1.00f, 0.00f],
+								   [0.00f, 0.00f, 0.00f, 0.00f, 1.00f]
+								   ]
+								   );
+
+				return original.eTransformColor(cm);
+			}
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Image eToGrayscaled_ToolStripRenderer(this Bitmap src) => ToolStripRenderer.CreateDisabledImage(src);
+
+
+
+			/// <summary>Saves the specified <see cref="Bitmap"/> objects as a single icon into the output stream.</summary>
+			/// <param name="iconFrames">The bitmaps to save as an icon frames.<br/>
+			/// The expected input image size is less than or equal to 256 and the height is less than or equal to 256</param>
+			internal static Stream eSaveAsMultisizedIconStream(this IEnumerable<Bitmap> iconFrames)
+			{
+				const int MAX_ICON_SIZE = 256;
+				const ushort ICON_HEADER_RESERVED = 0;
+				const ushort ICON_HEADER_ICON_TYPE = 1;
+				const byte HEADER_LENGTH = 6;
+				const byte ENTRY_RESERVED = 0;
+				const byte ENTRY_LENGTH = 16;
+				const byte PNG_COLORS_IN_PALETTE = 0;
+				const ushort PNG_COLOR_PLANES = 1;
+
+				ArgumentNullException.ThrowIfNull(iconFrames);
+
+
+
+				Bitmap[] orderedImages = [..
+					iconFrames
+					.OrderBy(i => i.Width)
+					.ThenBy(i => i.Height)
+					];
+
+				MemoryStream msOutput = new();
+
+				using (BinaryWriter bw = new(msOutput, Encoding.ASCII, true))
 				{
-					// create some image attributes
-					using (ImageAttributes attributes = new())
+					// write the header
+					bw.Write(ICON_HEADER_RESERVED);
+					bw.Write(ICON_HEADER_ICON_TYPE);
+					bw.Write((ushort)orderedImages.Length);
+
+					// save the image buffers and offsets
+					Dictionary<uint, byte[]> buffers = [];
+
+					// tracks the length of the buffers as the iterations occur
+					// and adds that to the offset of the entries
+					uint lengthSum = 0;
+					uint baseOffset = (uint)(HEADER_LENGTH +
+											 ENTRY_LENGTH * orderedImages.Length);
+
+					for (uint i = 0; i < orderedImages.Length; i++)
 					{
-						// create the grayscale ColorMatrix
-						ColorMatrix colorMatrix = new(
-							   new float[][] {
-								   new float[] { 0.3f, 0.3f, 0.3f, 0f, 0f },
-								   new float[] { 0.59f, 0.59f, 0.59f, 0f, 0f },
-								   new float[] { 0.11f, 0.11f, 0.11f, 0f, 0f },
-								   new float[] { 0f, 0f, 0f, 1f, 0f },
-								   new float[] { 0f, 0f, 0f, 0f, 1f } });
+						Bitmap image = orderedImages[i];
 
-						// set the color matrix attribute
-						attributes.SetColorMatrix(colorMatrix);
+						if (image.PixelFormat != PixelFormat.Format32bppArgb)
+							throw new InvalidOperationException($"Required pixel format is PixelFormat.{PixelFormat.Format32bppArgb}.");
 
-						// draw the original image on the new image using the grayscale color matrix
-						g.DrawImage(
-							 original,
-							 new Rectangle(0, 0, original.Width, original.Height),
-							 0, 0, original.Width, original.Height,
-							  GraphicsUnit.Pixel,
-								 attributes);
-						// dispose the Graphics object
+						if (image.Width > MAX_ICON_SIZE || image.Height > MAX_ICON_SIZE)
+							throw new InvalidOperationException($"Dimensions must be less than or equal to {MAX_ICON_SIZE}x{MAX_ICON_SIZE}");
+
+						if (image.RawFormat.Guid != ImageFormat.Png.Guid)
+						{
+							//Converting image to png
+							using MemoryStream msPngTemp = new();
+							image.Save(msPngTemp, ImageFormat.Png);
+							msPngTemp.Seek(0, SeekOrigin.Begin);
+							image = (Bitmap)Bitmap.FromStream(msPngTemp);
+						}
+
+						using var msBuffer = new MemoryStream();
+						image.Save(msBuffer, image.RawFormat);
+						// creates a byte array from an image
+						byte[] buffer = msBuffer.ToArray();
+
+						// calculates what the offset of this image will be
+						// in the stream
+						uint offset = (baseOffset + lengthSum);
+
+						byte iconHeight = (image.Height == MAX_ICON_SIZE)
+							? (byte)0
+							: (byte)image.Height;
+
+						byte iconWidth = (image.Width == MAX_ICON_SIZE)
+							? (byte)0
+							: (byte)image.Width;
+
+						// writes the image entry
+						bw.Write(iconWidth);
+						bw.Write(iconHeight);
+						bw.Write(PNG_COLORS_IN_PALETTE);
+						bw.Write(ENTRY_RESERVED);
+						bw.Write(PNG_COLOR_PLANES);
+						bw.Write((ushort)Image.GetPixelFormatSize(image.PixelFormat));
+						bw.Write((uint)buffer.Length);
+						bw.Write(offset);
+
+						lengthSum += (uint)buffer.Length;
+
+						// adds the buffer to be written at the offset
+						buffers.Add(offset, buffer);
+					}
+
+					// writes the buffers for each image
+					foreach (var kvp in buffers)
+					{
+
+						// seeks to the specified offset required for the image buffer
+						bw.BaseStream.Seek(kvp.Key, SeekOrigin.Begin);
+
+						// writes the buffer
+						bw.Write(kvp.Value);
 					}
 				}
-				return newBitmap;
+
+				msOutput.Seek(0, SeekOrigin.Begin);
+				return msOutput;
 			}
 
 
 		}
 
-		internal static class Extensions_Localization
+
+		internal static class Extensions_UILocalization
 		{
 			internal const string LOCALIZED_RES_NAME_TEMPLATE_L_UI = "L_UI_{0}";
 			internal const string LOCALIZED_RES_NAME_TEMPLATE_L_ENUM = "L_ENUM_{0}";
 
 
-
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string? eGetLocalizedText(this string? resName, System.Resources.ResourceManager rm, string fullResNameTemplate = LOCALIZED_RES_NAME_TEMPLATE_L_UI)
+			internal static string? eGetLocalizedText(this string? resName, System.Resources.ResourceManager? rm = null, string resNameTemplate = LOCALIZED_RES_NAME_TEMPLATE_L_UI)
 			{
 				if (resName.eIsNullOrWhiteSpace()) return null;
-				resName = fullResNameTemplate.eFormat(resName!);
+				resName = resNameTemplate.eFormat(resName!);
+
+				rm ??= uom.AppInfo.LocalizedStringsManager.Value;
+
 				string? resStringValue = rm.GetString(resName);
+
 				if (resStringValue.eIsNotNullOrWhiteSpace()) return resStringValue;
 
 				return null;
 			}
 
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string? eGetLocalizedText(this string? resName, string fullResNameTemplate = LOCALIZED_RES_NAME_TEMPLATE_L_UI)
-				=> resName.eGetLocalizedText(uom.AppInfo.LocalizedStringsManager.Value, fullResNameTemplate);
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			private static string? eGetLocalizedTextByPropertyName(this Component c, string propertyName = "Name")
@@ -9667,7 +9880,7 @@ End Function
 						}
 
 					default:
-						throw new NotImplementedException($"Localization of '{c.GetType()}' is not supported!");
+						throw new NotImplementedException($"Localization of Component '{c.GetType()}' is not supported!");
 				}
 			}
 
@@ -9676,29 +9889,17 @@ End Function
 				=> cmpList.eForEach(ctl => ctl.eLocalizeUI(recurse));
 
 
-
-
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eLocalize<T>(this T value, System.Resources.ResourceManager rm) where T : Enum
+			internal static string eLocalize(this Enum value, System.Resources.ResourceManager? rm = null)
 			{
-				string enumResSuffix = $"{value.GetType().Name}.{value}";
+				string enumResSuffix = value.eGetFullName(false);
 				string? localizedString = enumResSuffix.eGetLocalizedText(rm, LOCALIZED_RES_NAME_TEMPLATE_L_ENUM);
 				if (localizedString.eIsNotNullOrWhiteSpace()) return localizedString!;
 				return value.ToString().eInsertSpacesBeforeUpperCaseChars();
 			}
 
 
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eLocalize<T>(this T value) where T : Enum
-			{
-				string enumResSuffix = $"{value.GetType().Name}.{value}";
-				string? localizedString = enumResSuffix.eGetLocalizedText(LOCALIZED_RES_NAME_TEMPLATE_L_ENUM);
-				if (localizedString.eIsNotNullOrWhiteSpace()) return localizedString!;
-				return value.ToString().eInsertSpacesBeforeUpperCaseChars();
-			}
-
 		}
-
 	}
 
 
@@ -14334,7 +14535,7 @@ End Function
 
 					if (strLen > 0 && sb != null)
 					{
-						string err = sb!.ToString().eRemoveAtEnd(constants.vbCrLf);
+						string err = sb!.ToString().eTrimEnd(constants.vbCrLf);
 						return (err, true);
 					}
 					//Can't read error message!

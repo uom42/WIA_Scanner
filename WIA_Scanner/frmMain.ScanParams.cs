@@ -233,7 +233,7 @@ partial class frmMain
 
 			rcfCrop = new RectangleF((float)xudCrop_Left.Value, (float)xudCrop_Top.Value, (float)xudCrop_Width.Value, (float)xudCrop_Height.Value);
 		}
-		xPageControl.PaperCropCm = rcfCrop;
+		xPageControl.CropZoneCm = rcfCrop;
 	}
 
 	private void RecalculateCropLimits()

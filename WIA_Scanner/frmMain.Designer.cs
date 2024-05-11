@@ -667,10 +667,10 @@ namespace WS
 			xPageControl.Location = new Point(7, 8);
 			xPageControl.Margin = new Padding(4, 6, 4, 6);
 			xPageControl.Name = "xPageControl";
-			xPageControl.PaperCropCm = (RectangleF?)resources.GetObject("xPageControl.PaperCropCm");
+			xPageControl.CropZoneCm = (RectangleF?)resources.GetObject("xPageControl.PaperCropCm");
 			xPageControl.PaperSizeCm = new SizeF(10F, 15F);
-			xPageControl.RullerOffset = 4;
-			xPageControl.RullerSize = 10;
+			xPageControl.RullerOffsetMM = 4;
+			xPageControl.RullerSizeMM = 10;
 			xPageControl.Size = new Size(1399, 1621);
 			xPageControl.TabIndex = 0;
 			// 

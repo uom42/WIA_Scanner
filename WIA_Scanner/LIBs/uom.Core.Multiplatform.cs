@@ -31,9 +31,8 @@ global using System.Xml.Linq;
 global using System.Numerics;
 
 using System.Net.Http;
-using System.Net.NetworkInformation;
 using System.Net.Http.Headers;
-using System;
+using System.Net.NetworkInformation;
 
 
 
@@ -2017,6 +2016,8 @@ namespace uom
 
 
 #if NET && !WINDOWS
+
+
 		/*
 	. AppendLine( $ "Имя: {AppInfo.Current.Name} ")
    .AppendLine( $ "Пакет: {AppInfo.Current.PackageName} ")
@@ -2039,6 +2040,18 @@ namespace uom
 #endif
 
 
+#if NET
+
+		/// <summary>
+		/// In Net & Core we need to RegisterEncodingProvider to use encodigs like Win-1251 or other
+		/// </summary>
+		internal static void RegisterEncodingProvider()
+		{
+			System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
+		}
+
+#endif
 
 		#region Resources
 
@@ -2053,11 +2066,19 @@ namespace uom
 				   Assembly));
 
 
-
+		/*
 		/// <param name="resourcePath"><c>"Localization.LStrings"</c> or something like</param>
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		internal static System.Resources.ResourceManager CreateResourceManagerFromAssemblyEntryPoint(string resourcePath)
-			=> new($"{Assembly.EntryPoint!.DeclaringType!.Namespace}.{resourcePath}", Assembly);
+		=> new($"{Assembly.EntryPoint!.DeclaringType!.Namespace}.{resourcePath}", Assembly);
+		 */
+
+
+		/// <param name="resourcePath"><c>"Localization.LStrings"</c> or something like</param>
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		internal static System.Resources.ResourceManager CreateResourceManager(Type resourceType)
+			=> new(resourceType);
+		//=> new($"{resourceType.FullName}", Assembly);
 
 
 
@@ -2223,6 +2244,9 @@ namespace uom
 		{
 			public T CloneT();
 
+#if NET
+			object ICloneable.Clone() => CloneT()!;
+#endif
 		}
 
 
@@ -4054,7 +4078,7 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 			/// <summary>Чётное</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool eIsEven(this int N) => (N % 2 == 0);
+			internal static bool eIsEven(this int N) => N % 2 == 0;
 
 
 			/// <summary>Нечётное</summary>
@@ -4064,12 +4088,12 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static bool eIsКратно(this int Value, int ЧемуКратно)
-				=> (Value / (double)ЧемуКратно == Value / ЧемуКратно);
+				=> (Value % ЧемуКратно) == 0;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static bool eIsКратно(this long Value, long ЧемуКратно)
-				=> (Value / (double)ЧемуКратно == Value / ЧемуКратно);
+				=> (Value % ЧемуКратно) == 0;
 
 
 			#region CheckRange
@@ -4270,15 +4294,15 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static float eMMToInches(this float MM) => MM / constants.C_MM_IN_INCH;
+			internal static float eMMToInches(this float mm) => mm / constants.C_MM_IN_INCH;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static float eInchesToCM(this float Inches) => Inches * constants.C_CM_IN_INCH;
+			internal static float eInchesToCM(this float inches) => inches * constants.C_CM_IN_INCH;
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static float eCMToInches(this float CM) => CM / constants.C_CM_IN_INCH;
+			internal static float eCMToInches(this float cm) => cm / constants.C_CM_IN_INCH;
 
 		}
 
@@ -4684,12 +4708,12 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 		   List<string> l = new();
 		   foreach (var o in ie)
 		   {
-	#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
+#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 			   string s = (o ?? "null").ToString();
-	#pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
-	#pragma warning disable CS8604 // Possible null reference argument.
+#pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
+#pragma warning disable CS8604 // Possible null reference argument.
 			   l.Add(s);
-	#pragma warning restore CS8604 // Possible null reference argument.
+#pragma warning restore CS8604 // Possible null reference argument.
 			   if (l.Count >= limitArrayItemsOutput) break;
 		   }
 		   result += l.ToArray().eJoin(itemSeparator)!;
@@ -4846,7 +4870,7 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 				BadSeparators ??= C_BAD_BYTE_SEPARATOR_CHARS;
 				GoodHexSeparator ??= constants.SystemDefaultHexByteSeparator;
 
-				return HexString.Trim().ToUpper().eReplaceAll2(BadSeparators.ToCharArray().eToStringArray(), GoodHexSeparator!.ToString()!);
+				return HexString.Trim().ToUpper().eReplaceAll(BadSeparators.ToCharArray().eToStrings(), GoodHexSeparator!.ToString()!);
 			}
 
 
@@ -5233,7 +5257,17 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 		internal static class Extensions_StringAndFormat
 		{
 
+			// (parenthesis)
+			// [brackets]
+			// {curly brackets}.
 
+			public const string DEFAULT_REPLACE_WITH = "";
+			public const StringComparison DEFAULT_STRING_COMPARSION = StringComparison.OrdinalIgnoreCase;
+			private const byte FIRST_READABLE_CHAR = 32;
+
+
+
+			/// <returns>string.Empty if sourceText is null</returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string eToNonNull(this string? sourceText) => (sourceText ?? string.Empty);
 
@@ -5263,25 +5297,25 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 			[MethodImpl(MethodImplOptions.NoOptimization | MethodImplOptions.AggressiveInlining)]
 			public static bool eAssert_NullOrWhiteSpace(
-				this string? s,
-				[System.Runtime.CompilerServices.CallerArgumentExpression("s")] string? valueName = null)
-				=> !string.IsNullOrWhiteSpace(s)
+				this string? source,
+				[System.Runtime.CompilerServices.CallerArgumentExpression(nameof(source))] string? valueName = null)
+				=> !string.IsNullOrWhiteSpace(source)
 					? true
 					: throw new ArgumentNullException(valueName);
 
 			[MethodImpl(MethodImplOptions.NoOptimization | MethodImplOptions.AggressiveInlining)]
 			public static bool eAssert_NullOrEmpty(
-				this string? s,
-				[System.Runtime.CompilerServices.CallerArgumentExpression("s")] string? valueName = null)
-				=> !string.IsNullOrEmpty(s)
+				this string? source,
+				[System.Runtime.CompilerServices.CallerArgumentExpression(nameof(source))] string? valueName = null)
+				=> !string.IsNullOrEmpty(source)
 					? true
 					: throw new ArgumentNullException(valueName);
 
 			[MethodImpl(MethodImplOptions.NoOptimization | MethodImplOptions.AggressiveInlining)]
 			public static bool eAssert_Null<T>(
-				this T? v,
-				[System.Runtime.CompilerServices.CallerArgumentExpression("v")] string? valueName = null) where T : class
-				=> (v != null)
+				this T? source,
+				[System.Runtime.CompilerServices.CallerArgumentExpression(nameof(source))] string? valueName = null) where T : class
+				=> (source != null)
 					? true
 					: throw new ArgumentNullException(valueName);
 
@@ -5290,65 +5324,74 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eReverseString(this string src) => new(src.Reverse().ToArray());
+			public static string eReverseString(this string source) => new([.. source.Reverse()]);
 
 
+			/// <returns>'{source}'</returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eВФигурныеСкобки(this Guid G) => '{' + G.ToString() + '}';
+			public static string eEncloseWithCurlyBrackets(this string source) => '{' + source.ToString() + '}';
+
+			/// <returns>'{Guid}'</returns>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string eEncloseWithCurlyBrackets(this Guid source) => source.ToString().eEncloseWithCurlyBrackets();
 
 
-			/// <summary>The strings is differ only in case?</summary>
-			internal static bool eIsDifferOlyInCase(this string? s1, string? s2)
+			/// <summary>true if 'A' and 'a'</summary>
+			internal static bool eIsDifferOnlyByCase(this string? s1, string? s2)
 			{
-				if (string.Compare(s1, s2) == 0) return false;
-				if (null == s1) return false;
-				if (null == s2) return false;
-
-				return ((s1.ToLower() == s2.ToLower()) && (s1 != s2));
+				if (null == s1 || null == s2) return false;
+				return s1.Equals(s2, StringComparison.OrdinalIgnoreCase) && !s1.Equals(s2, StringComparison.InvariantCulture);
 			}
 
 
 			/// <inheritdoc cref="string.Join(string?, IEnumerable{string?})"/>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string? eJoin(
-				this IEnumerable<string>? src,
+				this IEnumerable<string>? source,
 				string separator = " ",
 				string? emptyOrNullValue = null,
 				bool enquoteAllStrings = false
 				)
 			{
-				if ((null == src) || !src!.Any()) return emptyOrNullValue;
+				if ((null == source) || !source!.Any()) return emptyOrNullValue;
 
-				if (enquoteAllStrings) src = src.Select(s => ('"' + s + '"')).ToArray();
-				return string.Join(separator, src);
+				if (enquoteAllStrings) source = [.. source.Select(s => '"' + s + '"')];
+				return string.Join(separator, source);
 			}
 
 			/// <inheritdoc cref="string.Join(string?, IEnumerable{string?})"/>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eJoin(this System.Collections.Specialized.StringCollection? cSpecializedStringCollection, string separator = " ")
-				=> (null == cSpecializedStringCollection)
-					? ""
-					: cSpecializedStringCollection!.Cast<string>().eJoin(separator)!;
+			public static string eJoin(
+				this System.Collections.Specialized.StringCollection? source,
+				string separator = " ",
+				string? emptyOrNullValue = null,
+				bool enquoteAllStrings = false
+				)
+				=> (null == source)
+					? string.Empty
+					: source!.Cast<string>().eJoin(separator, emptyOrNullValue, enquoteAllStrings)!;
 
 
 			/// <summary>Make string.Format(sFormatString, Args)</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eRepeat(this char cChar, int Length = 70) => new(cChar, Length);
-
-
+			public static string eRepeat(this char c, int Length = 70) => new(c, Length);
 
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<string> eIndent(this string src, int indentLevel = 1, Char indentChar = '\t')
+			public static IEnumerable<string> eIndent(this string source, int level = 1, Char indentChar = '\t')
 			{
-				foreach (var s in src.eReadLines()) yield return (new string(indentChar, indentLevel) + s);
+				foreach (var s in source.eReadLines()) yield return (new string(indentChar, level) + s);
 			}
 
 
-			/// <summary>Make string.Format(sFormatString, Args)</summary>
+			/// <returns>
+			/// if (source = null) return nullValue;<br/>
+			/// if (source = empty) return emptyValue;<br/>
+			/// return source;
+			/// </returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eToStringAllowNull(
+			public static string eFormatAllowNullOrEmpty(
 				this string? source,
 				string nullValue = "null",
 				string emptyValue = "''")
@@ -5361,8 +5404,43 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 			/// <inheritdoc cref="string.Format(string, object?[])" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eFormat(this string sFormatString, params object[] Args) => string.Format(sFormatString, Args);
+			public static string eFormat(this string formatString, params object[] args)
+				=> string.Format(formatString, args);
 
+
+
+#if NET
+
+
+			private static readonly string[] TIMESPAN_PARTS_EN = ["d", "h", "m", "s", "ms"];
+			private static readonly string[] TIMESPAN_PARTS_RU = ["д", "ч", "м", "с", "мс"];
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string eFormatTimespan(this TimeSpan source, bool useMilliseconds = false, bool skipZeroParts = false)
+			{
+				string[] parts = uom.AppInfo.CurrentUICultureIsRuTree
+					? TIMESPAN_PARTS_RU
+					: TIMESPAN_PARTS_EN;
+
+				StringBuilder sb = new(200);
+				if (source.Days > 0) sb.Append($"{source.Days}{parts[0]},");
+				if (source.Hours > 0) sb.Append($"{source.Hours}{parts[1]}:");
+				if (source.Minutes > 0) sb.Append($"{source.Minutes}{parts[2]}:");
+				if (source.Seconds > 0) sb.Append($"{source.Seconds}{parts[3]}");
+				if (useMilliseconds) sb.Append($":{source.Milliseconds}{parts[4]}");
+				return sb
+					.ToString()
+					.eReplaceAll("::", ":")
+					.Trim()
+					.TrimEnd(':')
+					.TrimEnd(',');
+			}
+
+
+
+#endif
 
 			private static readonly string[] ByteSize_En = ["B", "KB", "MB", "GB", "TB", "PB", "EB"];
 			private static readonly string[] ByteSize_Ru = ["Б", "КБ", "МБ", "ГБ", "ТБ", "ПБ", "ЕБ"];
@@ -5381,16 +5459,14 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 					dblLen /= 1024;
 				}
 				// Adjust the format string to your preferences. For example "{0:0.#}{1}" would show a single decimal place, and no space.
-				string sFormat = (decimalPlaces > 0) ? ("{0:0." + new String('#', decimalPlaces) + "} {1}") : "{0:0} {1}";
-				var result = string.Format(sFormat, dblLen, sizes[order]);
+				string format = (decimalPlaces > 0) ? ("{0:0." + new String('#', decimalPlaces) + "} {1}") : "{0:0} {1}";
+				var result = string.Format(format, dblLen, sizes[order]);
 				return result;
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string eFormatByteSize(this Int64 bytesLength, int decimalPlaces = constants.C_DEFAULT_DECIMAL_DIGITS)
 				=> ((UInt64)bytesLength).eFormatByteSize(decimalPlaces);
-
-
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string eFormatByteSize(this Int32 bytesLength, int decimalPlaces = constants.C_DEFAULT_DECIMAL_DIGITS)
@@ -5402,39 +5478,20 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eFormatPercent(this int iPercentValue, bool RightAlign = true)
-				=> ((float)((float)iPercentValue.eCheckRange() / (float)100)).eFormatPercent(0, RightAlign);
+			public static string eFormatPercent(this int value, bool alignRight = true)
+				=> ((float)((float)value.eCheckRange() / 100f)).eFormatPercent(0, alignRight);
 
 			/// <summary>Возвращает строку вида '20,23 %'</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eFormatPercent(this float fPercentValue, int iDecimalPlaces = constants.C_DEFAULT_DECIMAL_DIGITS, bool RightAlign = true)
+			public static string eFormatPercent(this float value, int decimalPlaces = constants.C_DEFAULT_DECIMAL_DIGITS, bool alignRight = true)
 			{
-				if (float.IsNaN(fPercentValue)) fPercentValue = 0F;
-				var sFormat = $"P{iDecimalPlaces}";
-				var sValue = fPercentValue.ToString(sFormat);
-				if (RightAlign)
+				if (float.IsNaN(value)) value = 0F;
+				var format = $"P{decimalPlaces}";
+				var sValue = value.ToString(format);
+				if (alignRight)
 				{
-					var sPercent100 = ((float)1).ToString(sFormat);
+					var sPercent100 = ((float)1).ToString(format);
 					sValue = sValue.PadLeft(sPercent100.Length, ' ');
 				}
 				return sValue;
@@ -5442,17 +5499,13 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 
 			/// <summary>Возвращает строку вида '20,2%'</summary>
-			/// <param name="PercentValue">Значение от 0,0 до 1,0 !!!НЕ от 0 до 100!!!</param>
+			/// <param name="value">Значение от 0,0 до 1,0 !!!НЕ от 0 до 100!!!</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eFormatPercent(this double PercentValue, int iDecimalPlaces = constants.C_DEFAULT_DECIMAL_DIGITS)
+			public static string eFormatPercent(this double value, int decimalPlaces = constants.C_DEFAULT_DECIMAL_DIGITS)
 			{
-				if (double.IsNaN(PercentValue)) PercentValue = 0d;
-				return ((float)PercentValue).eFormatPercent(iDecimalPlaces);
+				if (double.IsNaN(value)) value = 0d;
+				return ((float)value).eFormatPercent(decimalPlaces);
 			}
-
-
-
-
 
 
 
@@ -5461,93 +5514,67 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 			/// <summary>Format number like '1 000 000'</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eFormat(this int iValue) => iValue.ToString("N0").Trim();
+			public static string eFormatReadable(this int value)
+				=> value.ToString("N0").Trim();
 
-
-			/// <summary>Выводит число как строку, разделяя тысячные разряды пробелом </summary>
+			/// <inheritdoc cref="eFormatReadable(int)" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eFormat2(this int Value)
-			{
-				return Value.ToString(constants.C_FMT_LONGNUMBER).Trim();
-			}
+			public static string eFormatReadable(this long value)
+				=> value.ToString("N0").Trim();
 
+			/// <inheritdoc cref="eFormatReadable(int)" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eFormat(this long iValue) => iValue.ToString("N0").Trim();
+			internal static string eFormatReadable(this IntPtr value)
+				=> value.ToInt64().eFormatReadable();
 
-
-
-			[Obsolete("!!!Need to Verify correct output!!!", true)]
+			/// <summary>Format number like '1 000 000.00'</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eFormat(this float fValue, int iDecimalPlaces = constants.C_DEFAULT_DECIMAL_DIGITS)
-				=> fValue.ToString($"N{iDecimalPlaces}").Trim();
+			public static string eFormatReadable(this float value, int decimalPlaces = constants.C_DEFAULT_DECIMAL_DIGITS)
+				=> value.ToString($"N{decimalPlaces}").Trim();
 
-			/// <summary>Выводит число как строку, разделяя тысячные разряды пробелом </summary>
+			/// <inheritdoc cref="eFormatReadable(float,int)" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eFormat2(this float Value, int Prcission = 3)
-			{
-				string sFormat = constants.C_FMT_LONGNUMBER + "." + "".PadRight(Prcission, '0');
-				return Value.ToString(sFormat).Trim();
-			}
-
-
-
-
-
-			/// <summary>Выводит число как строку, разделяя тысячные разряды пробелом </summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eFormat2(this long Value)
-				=> Value.ToString(constants.C_FMT_LONGNUMBER).Trim();
+			public static string eFormatReadable(this double value, int decimalPlaces = constants.C_DEFAULT_DECIMAL_DIGITS)
+				=> value.ToString($"N{decimalPlaces}").Trim();
 
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eFormat(this IntPtr Value)
-				=> eFormat(Value.ToInt64());
+			internal static string eFormat_PlusMinus(this bool bValue) => bValue
+				? "+"
+				: "-";
 
 
-
-
-
-
-
-
-
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eFormat_PlusMinus(this bool bValue) => bValue ? "+" : "-";
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static string eFormat_YesNoGlobal(this bool bValue)
-			{
-				if (uom.AppInfo.CurrentUICultureIsRuTree)
-					return bValue ? constants.C_YES_RUS : constants.C_NO_RUS;
-				else
-					return bValue ? constants.C_YES_ENG : constants.C_NO_ENG;
-			}
-
+				=> (uom.AppInfo.CurrentUICultureIsRuTree)
+					? (bValue ? constants.C_YES_RUS : constants.C_NO_RUS)
+					: (bValue ? constants.C_YES_ENG : constants.C_NO_ENG);
 
 
 			/// <summary>iProgress из iMax (20.25%)</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eFormatProgress(this int iProgress, int iMax, int PercentDigits = 2)
+			internal static string eFormatProgress(this int progressValue, int maxValue, int percentDigits = 2)
 			{
 				float sngProgress = 0f;
-				if (iMax > 0) sngProgress = iProgress / (float)iMax;
-				return "{0} из {1} ({2})".eFormat(iProgress, iMax, sngProgress.eFormatPercent(PercentDigits));
+				if (maxValue > 0) sngProgress = progressValue / (float)maxValue;
+				return "{0} из {1} ({2})".eFormat(progressValue, maxValue, sngProgress.eFormatPercent(percentDigits));
 			}
 
+
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eFormatProgressConsole(this int iACurrent, int iBTotal, string sFormat = "G")
+			internal static string eFormatProgressConsole(this int progressValue, int maxValue, string format = "G")
 			{
-				string sBTotal = iBTotal.ToString(sFormat);
-				string sACurrent = iACurrent.ToString(sFormat).PadLeft(sBTotal.Length, ' ');
+				string sBTotal = maxValue.ToString(format);
+				string sACurrent = progressValue.ToString(format).PadLeft(sBTotal.Length, ' ');
 				return "{0} из {1}".eFormat(sACurrent, sBTotal);
 			}
 
 
 
 
-			private const byte FIRST_READABLE_CHAR = 32;
+
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static char eToChar(this byte b, char? notReadableCharReplacement = null)
@@ -5575,7 +5602,7 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static string eToStringAnsiASC(this IEnumerable<byte>? abData, char? notReadableCharReplacement = '.')
 				=> (abData == null || !abData.Any())
-					? ""
+					? string.Empty
 					: new string(abData!.eToCharArray(notReadableCharReplacement));
 
 
@@ -5583,14 +5610,19 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 			/// <param name="abData">Массив байт</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static string eToStringAnsiASCFast(this IEnumerable<byte>? abData)
-				=> (abData == null || !abData.Any()) ? "" : Encoding.ASCII.GetString((byte[])(abData!));
+				=> (abData == null || !abData.Any())
+					? string.Empty
+					: Encoding.ASCII.GetString((byte[])(abData!));
 
 
 			/// <summary>Возвращает строку из байт, включая нечитаемые символы (используется Text.Encoding.Unicode.GetString)</summary>
 			/// <param name="abData">Массив байт</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static string eToStringUnicodeFast(this IEnumerable<byte>? abData)
-				=> (abData == null || !abData.Any()) ? "" : Encoding.Unicode.GetString((byte[])(abData!));
+				=> (abData == null || !abData.Any())
+					? string.Empty
+					: Encoding.Unicode.GetString((byte[])(abData!));
+
 
 
 			/// <summary>Возвращает строку байт вида 00-00-01-01-05-AA</summary>
@@ -5599,7 +5631,7 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static string eToStringHex(this IEnumerable<byte>? data, bool reverseRTL = false, string? bytesSeparator = null)
 			{
-				if (null == data || data.Count() < 1) return "";
+				if (null == data || data.Count() < 1) return string.Empty;
 
 				if (reverseRTL) data = data.Reverse();
 				string sResult = BitConverter.ToString(data.ToArray());
@@ -5609,13 +5641,21 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 					string defaultSeparator = constants.SystemDefaultHexByteSeparator.ToString();
 					if (bytesSeparator != defaultSeparator)
 					{
-						sResult = sResult.eReplaceAll2(defaultSeparator, bytesSeparator);
+						sResult = sResult.eReplaceAll(defaultSeparator, bytesSeparator);
 					}
 				}
 
 				return sResult;
 			}
 
+
+#if NET
+
+
+
+
+
+#endif
 
 
 			#region IP Address
@@ -5643,97 +5683,140 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 			internal static string eRemoveSpacesEx(this string source)
 				=> string.Concat(source.Where(c => !char.IsWhiteSpace(c)));
 
+#if NET
 
 
 			/// <summary>Заменяет все множественные пробелы на один пробел</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eRemoveDoubleSpaces(this string sourceText) => sourceText.eReplaceAll2("  ", " ");
+			internal static string eRemoveDoubleSpaces(this string source)
+				=> source.eReplaceAll("  ", " ");
 
 
+#endif
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eReplaceCharsWithString(this string source, char[] charsToReplace, string replaceWith)
-			{
-				string[] fixedChars = source
-					.ToCharArray()
-					.Select(x =>
-					{
-						if (!charsToReplace.Contains(x)) return x.ToString();
-						return replaceWith;
-					})
-					.ToArray();
-
-				string result = string.Join("", fixedChars);
-				return result;
-			}
+			internal static string eReplaceCharsWithString(this string source, char[] charsToReplace, string replaceWith, StringComparison comparison = DEFAULT_STRING_COMPARSION)
+				=> string.Concat(source
+					.Select(x => charsToReplace.Contains(x)
+						? replaceWith
+						: x.ToString()
+						)
+					.ToArray());
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static string eReplaceCharsWithString(this string source, char[] charsToReplace, Func<char, string> replaceFunc)
-			{
-				string[] fixedChars = source
-					.ToCharArray()
-					.Select(x =>
-					{
-						if (!charsToReplace.Contains(x)) return x.ToString();
-						return replaceFunc.Invoke(x);
-					})
-					.ToArray();
-
-				string result = string.Join("", fixedChars);
-				return result;
-			}
+				=> string.Concat(source
+					.Select(x => charsToReplace.Contains(x)
+						? replaceFunc.Invoke(x)
+						: x.ToString()
+						)
+					.ToArray());
 
 
-
-
+#if NET
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eReplaceAll2(this string source, string WhatToFind, string sReplaceWith, bool onlyFirst = false)
+			internal static string eReplaceAll(this string source, string search, string replaceWith = DEFAULT_REPLACE_WITH, StringComparison comparison = DEFAULT_STRING_COMPARSION)
 			{
-				if (WhatToFind.eIsNullOrEmpty()) throw new ArgumentNullException(nameof(WhatToFind));
-				if (sReplaceWith.Contains(WhatToFind) && !onlyFirst)
-					throw new ArgumentException($"{nameof(sReplaceWith)} = '{sReplaceWith}', and contains WhatToFind = '{WhatToFind}'");
+				if (search.eIsNullOrEmpty()) throw new ArgumentNullException(nameof(search));
+				if (replaceWith.Contains(search, comparison)) throw new ArgumentException($"{nameof(replaceWith)} = '{replaceWith}', and contains search = '{search}'");
 
-				while (source.Contains(WhatToFind))
+				while (source.Contains(search, comparison))
 				{
-					source = source.Replace(WhatToFind, sReplaceWith);
-					if (onlyFirst) break;
+					source = source.Replace(search, replaceWith, comparison);
 				}
-				return source;
-			}
-
-			/// <summary>Заменяем все вхождения на заданную строку</summary>
-			/// <param name="source">Исходный текст</param>
-			/// <param name="WhatToFind">Что нужно найти и заменить</param>
-			/// <param name="sReplaceWith">На что заменять</param>
-			/// <returns></returns>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eReplaceAll2(this string source, IEnumerable<string> WhatToFind, string sReplaceWith, bool onlyFirst = false)
-			{
-				if (null == WhatToFind || !WhatToFind.Any()) throw new ArgumentNullException(nameof(WhatToFind));
-
-				foreach (var sFind in WhatToFind) source = source.eReplaceAll2(sFind, sReplaceWith, onlyFirst);
 				return source;
 			}
 
 
 			/// <param name="replacePairs">(FindWhat As String, ReplaceWith As String)</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eReplacePairs(this string source, IEnumerable<(string WhatToFind, string ReplaceWith)> replacePairs, bool onlyFirst = false)
+			internal static string eReplacePairs(this string source, IEnumerable<(string search, string replaceWith)> replacePairs, StringComparison comparison = DEFAULT_STRING_COMPARSION)
 			{
 				if (!replacePairs.Any()) throw new ArgumentNullException(nameof(replacePairs));
 
 				foreach (var frp in replacePairs)
-					source = source.eReplaceAll2(frp.WhatToFind, frp.ReplaceWith, onlyFirst);
+					source = source.eReplaceAll(frp.search, frp.replaceWith, comparison);
 
 				return source;
 			}
 
 
+#else
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static string eЗаменитьЗапятыеНаТочки(this string Num)
-				=> Num.eReplaceAll2(",", ".");
+			internal static string eReplaceAll(this string source, string search, string replaceWith = DEFAULT_REPLACE_WITH)
+			{
+				if (search.eIsNullOrEmpty()) throw new ArgumentNullException(nameof(search));
+				if (replaceWith.Contains(search)) throw new ArgumentException($"{nameof(replaceWith)} = '{replaceWith}', and contains search = '{search}'");
+
+				while (source.Contains(search))
+				{
+					source = source.Replace(search, replaceWith);
+				}
+				return source;
+			}
+
+
+			/// <param name="replacePairs">(FindWhat As String, ReplaceWith As String)</param>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string eReplacePairs(this string source, IEnumerable<(string search, string replaceWith)> replacePairs)
+			{
+				if (!replacePairs.Any()) throw new ArgumentNullException(nameof(replacePairs));
+
+				foreach (var frp in replacePairs)
+					source = source.eReplaceAll(frp.search, frp.replaceWith);
+
+				return source;
+			}
+
+#endif
+
+
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string eЗаменитьЗапятыеНаТочки(this string source)
+				=> source.eReplaceAll(",", ".");
+
+
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string eReplaceAll(this string source, IEnumerable<string> search, string replaceWith = DEFAULT_REPLACE_WITH, StringComparison comparison = DEFAULT_STRING_COMPARSION)
+			{
+				if (null == search || !search.Any()) throw new ArgumentNullException(nameof(search));
+
+				foreach (var sFind in search) source = source.eReplaceAll(search, replaceWith, comparison);
+				return source;
+			}
+
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static KeyValuePair<string, string> eToKeyValuePair(this string source, string separator, StringComparison comparison = DEFAULT_STRING_COMPARSION, bool trim = true)
+			{
+				if (source.eIsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(source));
+
+				int sepPos = source.IndexOf(separator, comparison);
+				if (sepPos < 1) throw new ArgumentException("Separator pos < 1!");
+
+				string key = source.Substring(0, sepPos);
+				string value = source.Substring(sepPos + separator.Length);
+
+				if (trim)
+				{
+					key = key.Trim();
+					value = value.Trim();
+				}
+				return new(key, value);
+			}
+
 
 
 
@@ -5747,27 +5830,31 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 
 
-			/// <summary>Убирает с конца строку, если она есть</summary>
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string? eSubstringFrom(this string source, int iPos)
-			{
-				if (source.eIsNullOrWhiteSpace()) return null;
-				if (iPos <= 0) return source;
-				if (iPos >= source.Length) return null;
-				return source.Substring(0, iPos);
-			}
+
 
 #if NET6_0_OR_GREATER
-			/// <summary>Берёт левую часть строки</summary>
+			/// <summary>Take left part of the string</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string? eLeft(this string source, int charCount)
+			internal static string? eLeft(this string? source, int charCount)
 			{
-				if (source.eIsNullOrWhiteSpace()) return null;
-				if (charCount <= 0) return null;
-				if (charCount >= source.Length) return source;
+				if (source == null) return null;
+				if (charCount <= 0) throw new ArgumentOutOfRangeException(nameof(charCount));
+				if (source.Length < charCount) charCount = source.Length;
 				return source[..charCount];
 			}
+
+#else
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string? eLeft(this string? source, int charCount)
+			{
+				if (source == null) return null;
+				if (charCount <= 0) throw new ArgumentOutOfRangeException(nameof(charCount));
+				if (source.Length < charCount) charCount = source.Length;
+
+				return string.Concat(source.Take(charCount));
+			}
 #endif
+
 
 
 			/// <summary>Split string to left and right parts</summary>
@@ -5802,86 +5889,21 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 			}
 
 
-
-
-			/// <summary>
-			/// The example displays the following output: 
-			///    Current Culture: en-US 
-			///       case = Case (CurrentCulture): False 
-			///       case = Case (CurrentCultureIgnoreCase): True 
-			///       case = Case (InvariantCulture): False 
-			///       case = Case (InvariantCultureIgnoreCase): True 
-			///       case = Case (Ordinal): False 
-			///       case = Case (OrdinalIgnoreCase): True 
-			///     
-			///       encyclopædia = encyclopaedia (CurrentCulture): True 
-			///       encyclopædia = encyclopaedia (CurrentCultureIgnoreCase): True 
-			///       encyclopædia = encyclopaedia (InvariantCulture): True 
-			///       encyclopædia = encyclopaedia (InvariantCultureIgnoreCase): True 
-			///       encyclopædia = encyclopaedia (Ordinal): False 
-			///       encyclopædia = encyclopaedia (OrdinalIgnoreCase): False 
-			///     
-			///       encyclopædia = encyclopedia (CurrentCulture): False 
-			///       encyclopædia = encyclopedia (CurrentCultureIgnoreCase): False 
-			///       encyclopædia = encyclopedia (InvariantCulture): False 
-			///       encyclopædia = encyclopedia (InvariantCultureIgnoreCase): False 
-			///       encyclopædia = encyclopedia (Ordinal): False 
-			///       encyclopædia = encyclopedia (OrdinalIgnoreCase): False 
-			///     
-			///       Archæology = ARCHÆOLOGY (CurrentCulture): False 
-			///       Archæology = ARCHÆOLOGY (CurrentCultureIgnoreCase): True 
-			///       Archæology = ARCHÆOLOGY (InvariantCulture): False 
-			///       Archæology = ARCHÆOLOGY (InvariantCultureIgnoreCase): True 
-			///       Archæology = ARCHÆOLOGY (Ordinal): False 
-			///       Archæology = ARCHÆOLOGY (OrdinalIgnoreCase): True 
-			///     
-			///     
-			///    Current Culture: se-SE 
-			///       case = Case (CurrentCulture): False 
-			///       case = Case (CurrentCultureIgnoreCase): True 
-			///       case = Case (InvariantCulture): False 
-			///       case = Case (InvariantCultureIgnoreCase): True 
-			///       case = Case (Ordinal): False 
-			///       case = Case (OrdinalIgnoreCase): True 
-			///     
-			///       encyclopædia = encyclopaedia (CurrentCulture): False 
-			///       encyclopædia = encyclopaedia (CurrentCultureIgnoreCase): False 
-			///       encyclopædia = encyclopaedia (InvariantCulture): True 
-			///       encyclopædia = encyclopaedia (InvariantCultureIgnoreCase): True 
-			///       encyclopædia = encyclopaedia (Ordinal): False 
-			///       encyclopædia = encyclopaedia (OrdinalIgnoreCase): False 
-			///     
-			///       encyclopædia = encyclopedia (CurrentCulture): False 
-			///       encyclopædia = encyclopedia (CurrentCultureIgnoreCase): False 
-			///       encyclopædia = encyclopedia (InvariantCulture): False 
-			///       encyclopædia = encyclopedia (InvariantCultureIgnoreCase): False 
-			///       encyclopædia = encyclopedia (Ordinal): False 
-			///       encyclopædia = encyclopedia (OrdinalIgnoreCase): False 
-			///     
-			///       Archæology = ARCHÆOLOGY (CurrentCulture): False 
-			///       Archæology = ARCHÆOLOGY (CurrentCultureIgnoreCase): True 
-			///       Archæology = ARCHÆOLOGY (InvariantCulture): False 
-			///       Archæology = ARCHÆOLOGY (InvariantCultureIgnoreCase): True 
-			///       Archæology = ARCHÆOLOGY (Ordinal): False 
-			///       Archæology = ARCHÆOLOGY (OrdinalIgnoreCase): True
-			/// </summary>
-			/// <returns></returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool eContains(this string sourceText, string FindWhat, bool IgnoreCase)
+			internal static bool eContains(this string sourceText, string search, StringComparison comparison = DEFAULT_STRING_COMPARSION)
 			{
-				if (null == sourceText || null == FindWhat) return false;
-				return (sourceText.IndexOf(FindWhat,
-					(IgnoreCase) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
-					> 0);
+				if (null == sourceText || null == search) return false;
+				return sourceText.IndexOf(search, comparison) >= 0;
 			}
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool eContains(this string sourceText, IEnumerable<string> FindWhat, bool IgnoreCase)
+			internal static bool eContains(this string sourceText, IEnumerable<string> search, StringComparison comparison = DEFAULT_STRING_COMPARSION)
 			{
-				foreach (var S in FindWhat) { if (sourceText.eContains(S, IgnoreCase)) return true; }
+				foreach (var S in search) { if (sourceText.eContains(S, comparison)) return true; }
 				return false;
 			}
+
 
 			#region Wrap
 			//private const string CS_ESCAPE_LF = "\n";
@@ -5903,40 +5925,34 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 			#endregion
 
-			/// <summary>Добавляет строку к тексту. Если исходный текст пустой, то разделитель к исходному тексту не добавляется</summary>
-			/// <param name="appendText">Строка для добавления</param>
+
+
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eAppendText(this string source, string appendText, string separator = constants.vbCrLf)
+			internal static string eAppend(this string? source, string append, string separator = constants.vbCrLf)
 			{
-				if (source.eIsNullOrWhiteSpace()) source = string.Empty;
-				if (source.eIsNotNullOrWhiteSpace()) source += separator;
-				return (source + appendText);
+				source ??= string.Empty;
+				if (source.Length > 0) source += separator;
+				return (source + append);
 			}
 
-			/// <summary>Добавляет строку к тексту. Если исходный текст пустой, то разделитель к исходному тексту не добавляется</summary>
-			/// <param name="sourceText">Строка для добавления</param>
+
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static StringBuilder eToStringBuilder(this string sourceText)
-				=> new StringBuilder(sourceText);
+				=> new(sourceText);
 
 
-			/// <summary>Вырезает кусок строки</summary>
-			/// <returns>Возвращает строку без вырезанного текста</returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eReplaceSubstring(this string sourceText, int ReplaceStart, int ReplaceLenght, string ReplaceWith)
+			internal static string eReplace(this string source, int startIndex, int len, string replaceWith)
 			{
-				string sBefore = sourceText.Substring(0, ReplaceStart);
-				string sAfter = sourceText.Substring(ReplaceStart + ReplaceLenght);
-				sourceText = sBefore + ReplaceWith + sAfter;
-				return sourceText;
+				string before = source.Substring(0, startIndex);
+				string after = source.Substring(startIndex + len);
+				return before + replaceWith + after;
 			}
 
 
-			/// <summary>Вырезает кусок строки. Возвращает строку без вырезанного текста</summary>
-			/// <returns>Возвращает строку без вырезанного текста</returns>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eCut(this string sourceText, int CutStart, int CutLenght)
-				=> sourceText.eReplaceSubstring(CutStart, CutLenght, "");
+			internal static string eCut(this string source, int cutStart, int len)
+				=> source.eReplace(cutStart, len, "");
 
 
 			/// <summary>Заменяет в тексте строки &lt;0x0A&gt; на соответствующий символ</summary>
@@ -5945,14 +5961,14 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 			internal static string eReplaceSpecialHexChars(this string source)
 			{
 				const string CS_HEX_PREFIX = "<0x";
-				Regex rx = new(CS_HEX_PREFIX + "[0-9a-fA-F]{2}>");
-				var aM = rx.Matches(source).Cast<Match>().ToArray().Reverse();
-				foreach (var M in aM)
+				Regex rx = new(CS_HEX_PREFIX + @"[0-9a-fA-F]{2}>");
+				var mm = rx.Matches(source).Cast<Match>().Reverse();
+				foreach (var m in mm)
 				{
-					string hex = M.Value;
-					hex = hex.Substring(CS_HEX_PREFIX.Length, M.Length - CS_HEX_PREFIX.Length - 1);
-					byte B = byte.Parse(hex, NumberStyles.HexNumber);
-					source = source.eReplaceSubstring(M.Index, M.Length, B.eToChar().ToString());
+					string hex = m.Value;
+					hex = hex.Substring(CS_HEX_PREFIX.Length, m.Length - CS_HEX_PREFIX.Length - 1);
+					byte b = byte.Parse(hex, NumberStyles.HexNumber);
+					source = source.eReplace(m.Index, m.Length, b.eToChar().ToString());
 				}
 				return source;
 			}
@@ -5961,37 +5977,43 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static char[] eToChars(this IEnumerable<byte> abData)
-				=> abData.Select<byte, char>((B) => B.eToChar()).ToArray();
+				=> [..
+					abData.Select(b => b.eToChar())
+					];
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eToStringLine(this IEnumerable<char> A)
-				=> new(A.ToArray());
+			internal static string eToString(this IEnumerable<char> chars)
+				=> new([.. chars]);
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string[] eToStringArray(this IEnumerable<char> A)
-				=> A.Select<char, string>((C) => C.ToString()).ToArray();
+			internal static string[] eToStrings(this IEnumerable<char> chars)
+				=> [..
+					chars.Select(c => c.ToString())
+					];
 
 
-			/// <summary>Делит текст на строки, использует StringReader.ReadLine()</summary>
-			/// <param name="source">Исходный текст для разделения</param>
-			/// <returns>Массив строк исходного текста</returns>
+			/// <summary>using StringReader.ReadLine()</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static IEnumerable<string> eSplitToLines(this string? source, bool skipEmptyLines = false, bool trimEachLine = false)
+			internal static IEnumerable<string> eSplitLines(this string? source, bool skipEmptyLines = false, bool trimEachLine = false)
 			{
 				if (source.eIsNullOrEmpty()) yield break;
 
-				using StringReader sr = new(source!);
-				string? sLine = sr.ReadLine();
-				while (null != sLine)
+				using (StringReader sr = new(source!))
 				{
-					bool bAdd = true;
+					string? line = sr.ReadLine();
+					while (null != line)
+					{
+						if (trimEachLine) line = line.Trim();
 
-					if (trimEachLine) sLine = sLine.Trim();
-					if (skipEmptyLines) bAdd = sLine.eIsNotNullOrWhiteSpace();
-					if (bAdd) yield return sLine;
-					sLine = sr.ReadLine();
+						bool bAdd = skipEmptyLines
+							? line.eIsNotNullOrWhiteSpace()
+							: true;
+
+						if (bAdd) yield return line;
+						line = sr.ReadLine();
+					}
 				}
 			}
 
@@ -6001,71 +6023,105 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 			internal static Guid eToGUID(this string GUIDString) => Guid.Parse(GUIDString);
 
 
-			/// <summary>Убирает с конца строку, если она есть</summary>
+
+
+
+
+
+
+
+			#region eTrimStart / eTrimEnd
+
+
+
+
+
+
+			/// <inheritdoc cref="string.TrimStart(char)" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eRemoveAtEnd(this string source, string SuffixToRemove)
+			internal static string eTrimStart(this string source, string trimPrefix, bool onlyOnce = false, StringComparison comparison = DEFAULT_STRING_COMPARSION)
 			{
-				if (SuffixToRemove.eIsNullOrEmpty()) return source;
-				while (source.EndsWith(SuffixToRemove) && source.Length >= SuffixToRemove.Length)
+				if (trimPrefix.eIsNullOrEmpty()) return source;
+
+				while (source.StartsWith(trimPrefix, comparison) && source.Length >= trimPrefix.Length)
 				{
-					int iTake = source.Length - SuffixToRemove.Length;
-					if (iTake == 0) return "";
-					source = source.Substring(0, iTake);
+					source = source.Substring(trimPrefix.Length);
+					if (onlyOnce) break;
 				}
 				return source;
 			}
 
-			/// <summary>Убирает с начала строку, если она есть</summary>
+			/// <inheritdoc cref="string.TrimStart(char)" />
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eRemoveAtStart(this string source, string prefixToRemove)
+			internal static string eTrimStart(this string source, char trimPrefix, bool onlyOnce = false, StringComparison comparison = DEFAULT_STRING_COMPARSION)
+				=> source.eTrimStart(trimPrefix.ToString(), onlyOnce, comparison);
+
+
+			/// <inheritdoc cref="string.TrimEnd(char)" />
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string eTrimEnd(this string source, string trimSuffix, bool onlyOnce = false, StringComparison comparison = DEFAULT_STRING_COMPARSION)
 			{
-				if (prefixToRemove.eIsNullOrEmpty()) return source;
-				while (source.StartsWith(prefixToRemove))
+				if (trimSuffix.eIsNullOrEmpty()) return source;
+				while (source.EndsWith(trimSuffix, comparison) && source.Length >= trimSuffix.Length)
 				{
-					if (source.Length <= prefixToRemove.Length) return "";
-					source = source.Substring(prefixToRemove.Length);
+					int charsToTake = source.Length - trimSuffix.Length;
+					if (charsToTake == 0) return string.Empty;
+
+					source = source.Substring(0, charsToTake);
+					if (onlyOnce) break;
 				}
 				return source;
 			}
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string eTrimEnd(this string source, char trimSuffix, bool onlyOnce = false, StringComparison comparison = DEFAULT_STRING_COMPARSION)
+				=> source.eTrimEnd(trimSuffix.ToString(), onlyOnce, comparison);
+
+
+			#endregion
+
+
+
 
 
 			/// <summary>Возвращает окончание строки после указанного фрагмента</summary>
-			/// <param name="sourceText">Исходная строка</param>
-			/// <param name="StartWithString">Вернётся отсток, после конца этой строки</param>
+			/// <param name="source">Исходная строка</param>
+			/// <param name="startWithString">Вернётся отсток, после конца этой строки</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eSubstringAfter(this string sourceText, string StartWithString)
+			internal static string eSubstring(this string source, string startWithString, StringComparison comparison = DEFAULT_STRING_COMPARSION)
 			{
-				if (StartWithString.eIsNullOrWhiteSpace()) return sourceText;
-				int iFind = sourceText.IndexOf(StartWithString);
-				if (iFind < 0) return sourceText;
-				string S = sourceText.Substring(iFind + StartWithString.Length);
+				if (startWithString.eIsNullOrWhiteSpace()) return source;
+
+				int pos = source.IndexOf(startWithString, comparison);
+				if (pos < 0) return source;
+				string S = source.Substring(pos + startWithString.Length);
 				return S;
 			}
 
 			/// <summary>Возвращает кусок строки между Prefix и Suffix</summary>
-			/// <param name="sourceText">Исходная строка от которой выделяется остаток</param>
+			/// <param name="source">Исходная строка от которой выделяется остаток</param>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string? eSubstringBetween(this string sourceText, string Prefix, string Suffix)
+			internal static string? eSubstringBetween(this string? source, string prefix, string suffix, StringComparison comparison = DEFAULT_STRING_COMPARSION)
 			{
-				if (null == sourceText) return null;
-				var S = sourceText.eSubstringAfter(Prefix);
-				if (S.eIsNullOrWhiteSpace() || Suffix.eIsNullOrWhiteSpace()) return null;
-				int iFind = S.IndexOf(Suffix);
-				if (iFind <= 0) return null;
-				S = S.Substring(0, iFind);
-				return S;
+				if (source.eIsNullOrWhiteSpace()) return null;
+
+				var s = source!.eSubstring(prefix, comparison);
+				if (s.eIsNullOrWhiteSpace() || suffix.eIsNullOrWhiteSpace()) return null;
+
+				int pos = s.IndexOf(suffix, comparison);
+				if (pos <= 0) return null;
+				s = s.Substring(0, pos);
+				return s;
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static StringCollection eToSpecializedStringCollection(this IEnumerable<string> SourceStrings)
-			{
-				StringCollection C = new();
-				C.AddRange(SourceStrings.ToArray());
-				return C;
-			}
+			internal static StringCollection eToStringCollection(this IEnumerable<string> source)
+				=> [.. source];
+
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static List<string> eToList(this StringCollection C) => C.Cast<string>().ToList();
+			internal static List<string> eToList(this StringCollection source)
+				=> source.Cast<string>().ToList();
 
 
 			#region MiltiStringZ
@@ -6111,53 +6167,61 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static int[] eAllIndexesOfAsArray(this string? str, string? searchString)
-				=> str.eAllIndexesOf(searchString).ToArray();
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static IEnumerable<int> eAllIndexesOf(this string? str, string? searchString)
+			internal static IEnumerable<int> eAllIndexesOf(this string? source, string search, StringComparison comparison = DEFAULT_STRING_COMPARSION)
 			{
-				if (null == str || null == searchString) yield break;
-				int minIndex = str.IndexOf(searchString);
+				if (null == source) yield break;
+
+				int minIndex = source.IndexOf(search!, comparison);
 				while (minIndex != -1)
 				{
 					yield return minIndex;
-					minIndex = str.IndexOf(searchString, minIndex + searchString.Length);
+					minIndex = source.IndexOf(search, minIndex + search.Length, comparison);
 				}
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static int[] eAllIndexesOfAsArray(this string? str, char? c)
-				=> str.eAllIndexesOf(c).ToArray();
+			internal static int[] eAllIndexesOfAsArray(this string? source, string searchString, StringComparison comparison = DEFAULT_STRING_COMPARSION)
+				=> [..
+					source.eAllIndexesOf(searchString, comparison)
+					];
+
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static IEnumerable<int> eAllIndexesOf(this string? str, char? c)
+			internal static IEnumerable<int> eAllIndexesOf(this string? source, char c)
 			{
-				if (null == str || null == c) yield break;
+				if (null == source) yield break;
 
-				var result2 = str?
+				var result2 = source?
 					.Select((b, i) => b.Equals(c) ? i : -1)?
 					.Where(i => i != -1);
 
-				int minIndex = str!.IndexOf(c.Value);
+				int minIndex = source!.IndexOf(c);
 				while (minIndex != -1)
 				{
 					yield return minIndex;
-					minIndex = str.IndexOf(c.Value, minIndex + 1);
+					minIndex = source.IndexOf(c, minIndex + 1);
 				}
 			}
 
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static int[] eAllIndexesOfAsArray(this string? source, char c)
+				=> [..
+					source.eAllIndexesOf(c)
+					];
+
+
+
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static int eCountOfChar(this string source, char charToCount)
-				=> source.Count(t => t == charToCount);
+			internal static int eCount(this string source, char charToCount)
+				=> source.Count(c => c.Equals(charToCount));
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static bool eCountOfCharIsAtLeast(this string str, char c, int countAtLeast)
+			internal static bool eCountOfCharIsAtLeast(this string source, char c, int countAtLeast)
 			{
-				char[] cc = str.ToCharArray();
+				char[] cc = source.ToCharArray();
 
 				int iCharCount = 0;
 				int iCharOld = -1;
@@ -6214,13 +6278,13 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 			{
 				while (sourceText.eIsNotNullOrWhiteSpace() && sourceText.StartsWith(Convert.ToString(encloseChar)))
 				{
-					sourceText = sourceText.eTrimStartOne(encloseChar);
+					sourceText = sourceText.eTrimStart(encloseChar);
 					if (onlyOnePass) break;
 				}
 
 				while (sourceText.eIsNotNullOrWhiteSpace() && sourceText.EndsWith(Convert.ToString(encloseChar)))
 				{
-					sourceText = sourceText.eTrimEndOne(encloseChar);
+					sourceText = sourceText.eTrimEnd(encloseChar);
 					if (onlyOnePass) break;
 				}
 				return sourceText;
@@ -6241,59 +6305,7 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 				return iCount;
 			}
 
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eTrimStartOne(this string sourceText, char trimmedChar)
-			{
-				if (sourceText.eIsNotNullOrWhiteSpace() && sourceText.StartsWith(trimmedChar.ToString()))
-				{
-					if (sourceText.Length > 1)
-					{
-						sourceText = sourceText.Substring(1);
-					}
-					else
-					{
-						sourceText = "";
-					}
-				}
 
-				return sourceText;
-			}
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eTrimEndOne(this string sourceText, char trimmedChar)
-			{
-				if (sourceText.eIsNotNullOrWhiteSpace() && sourceText.EndsWith(trimmedChar.ToString()))
-				{
-					if (sourceText.Length > 1)
-					{
-						sourceText = sourceText.Substring(0, sourceText.Length - 1);
-					}
-					else
-					{
-						sourceText = "";
-					}
-				}
-
-				return sourceText;
-			}
-
-			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			internal static string eTrimEndOne(this string sourceText, string trimmedSuffix)
-			{
-				if (sourceText.eIsNotNullOrWhiteSpace() && sourceText.EndsWith(trimmedSuffix))
-				{
-					if (sourceText.Length > trimmedSuffix.Length)
-					{
-						return sourceText.Substring(0, sourceText.Length - trimmedSuffix.Length);
-					}
-					else
-					{
-						sourceText = "";
-					}
-				}
-
-				return sourceText;
-			}
 
 			/// <summary>Добавляет в конце строки указанный символ</summary>
 			/// <param name="sourceText">Исходная строка</param>
@@ -6716,6 +6728,29 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 			/// <summary>Creates 1 element array with specifed item</summary>
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			public static T[] eToArrayOf<T>(this T? source) => (null == source) ? System.Array.Empty<T>() : new T[] { source };
+
+
+
+			/// <summary>Creates 1 element array with specifed item</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static IEnumerable<T> eAsIEnumerableOf<T>(this IList<T> source)
+			{
+				foreach (T item in source)
+				{
+					yield return item;
+				}
+			}
+
+			/// <summary>Creates 1 element array with specifed item</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static IEnumerable eAsIEnumerable(this IList source)
+			{
+				foreach (var item in source)
+				{
+					yield return item;
+				}
+			}
+
 
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -7514,6 +7549,48 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
 			internal static TEnum eToEnumValue<TEnum>(this string valueName) where TEnum : Enum
 				=> valueName.eToEnumValue<TEnum>((TEnum)(object)0);
+
+
+			/// <returns>
+			/// Returns "{EnumTypeName}.{ValueName}"
+			/// </returns>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static string eGetFullName(this Enum e, bool fullName)
+			{
+				Type t = e.GetType();
+				string n = fullName
+					? t.FullName!
+					: t.Name;
+
+				return $"{n}.{e}";
+			}
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static TypeCode eGetTypeCode(this Type t) => Type.GetTypeCode(t);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static TypeCode eGetTypeCode<T>(this T t) => Type.GetTypeCode(typeof(T));
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static TypeCode eGetEnumTypeCode<T>(this T e) where T : Enum => Type.GetTypeCode(typeof(T).GetEnumUnderlyingType());
+
+
+			/// <summary>Gets the enum default (zero) value.</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static Enum? eGetEnumDefaultValue(this Type enumType)
+				=> enumType == null
+					? null
+					: (Enum?)Activator.CreateInstance(enumType);
+
+
+			/// <summary>Returns a value indicating whether a zero value is valid for the Enum type.</summary>
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			internal static bool eIsZeroValueDefined(this Type enumType)
+				=> Enum.IsDefined(enumType, enumType.eGetEnumDefaultValue()!);
+
+
 
 
 
@@ -8547,10 +8624,10 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 			}
 
 			[MethodImpl(MethodImplOptions.AggressiveInlining)]
-			public static IEnumerable<string> eReadLines(this string src, bool skipEmptyLines = false)
+			public static string[] eReadLines(this string src, bool skipEmptyLines = false)
 			{
 				using var sr = new StringReader(src);
-				return sr.eReadLines(skipEmptyLines);
+				return sr.eReadLines(skipEmptyLines).ToArray();
 			}
 
 
@@ -9432,7 +9509,7 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 				catch (Exception ex)
 				{
 #if !ANDROID
-					ex.eLogError(errorUI, debugErrorUI: !errorUI, callerName: callerName, callerFile: callerFile, callerLine: callerLine);
+					ex.eLogError(errorUI, debugErrorUI: false, callerName: callerName, callerFile: callerFile, callerLine: callerLine);
 #endif
 					return ex;
 				}
@@ -9449,7 +9526,7 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 				catch (Exception ex)
 				{
 #if !ANDROID
-					ex.eLogError(errorUI, debugErrorUI: !errorUI, callerName: callerName, callerFile: callerFile, callerLine: callerLine);
+					ex.eLogError(errorUI, debugErrorUI: false, callerName: callerName, callerFile: callerFile, callerLine: callerLine);
 #endif
 					return (defaultValue, ex);
 				}
@@ -9479,7 +9556,7 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 						default:
 							{
 #if !ANDROID
-								ex.eLogError(errorUI, debugErrorUI: !errorUI, callerName: callerName, callerFile: callerFile, callerLine: callerLine);
+								ex.eLogError(errorUI, debugErrorUI: false, callerName: callerName, callerFile: callerFile, callerLine: callerLine);
 #endif
 								break;
 							}
@@ -9505,7 +9582,7 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 						default:
 							{
 #if !ANDROID
-								ex.eLogError(errorUI, debugErrorUI: !errorUI, callerName: callerName, callerFile: callerFile, callerLine: callerLine);
+								ex.eLogError(errorUI, debugErrorUI: false, callerName: callerName, callerFile: callerFile, callerLine: callerLine);
 #endif
 								break;
 							}
@@ -9540,7 +9617,7 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 								if (cancel == null || !cancel.IsCancellationRequested)
 								{
 #if !ANDROID
-									ex.eLogError(errorUI, debugErrorUI: !errorUI, callerName: callerName, callerFile: callerFile, callerLine: callerLine);
+									ex.eLogError(errorUI, debugErrorUI: false, callerName: callerName, callerFile: callerFile, callerLine: callerLine);
 #endif
 								}
 								break;
@@ -9672,44 +9749,63 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 		internal static partial class Extensions_Resources
 		{
 
-			//
-			// Usage
-			//string resourceText = await Assembly.GetExecutingAssembly().ReadResourceAsync("myResourceName");
 
-			public static string eReadResourceFileAsString(this Assembly assembly, string resourceFileName)
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string[] eGetManifestResourceNames(this Assembly asm, Func<string, bool> predicate)
 			{
-				// Determine path
-				//string resourcePath = name;
-				// Format: "{Namespace}.{Folder}.{filename}.{Extension}"
-				string resourcePath = assembly
-					.GetManifestResourceNames()
-					.FirstOrDefault(str => str.EndsWith(resourceFileName)) ?? throw new ArgumentOutOfRangeException(nameof(resourceFileName));
+				var aaa = asm.GetManifestResourceNames()
+				.Where(resFileName => predicate.Invoke(resFileName))
+				.ToArray();
 
-				using Stream stream = assembly.GetManifestResourceStream(resourcePath)!;
-				using StreamReader reader = new(stream);
-				return reader.ReadToEnd();
+				return aaa;
 			}
 
-			public static string eReadResourceFileAsString(this string name)
-				=> Assembly.GetExecutingAssembly().eReadResourceFileAsString(name);
 
-			public static async Task<string> eReadResourceFileAsStringAsync(this Assembly assembly, string resourceFileName)
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string eGetManifestResourceName(this Assembly asm, string nameSuffix)
+				=> asm
+					.eGetManifestResourceNames(str => str.EndsWith(nameSuffix))
+					.Single() ?? throw new ArgumentOutOfRangeException(nameof(nameSuffix));
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static Stream eGetManifestResourceStream(this Assembly asm, string nameSuffix)
+				=> asm.GetManifestResourceStream(asm.eGetManifestResourceName(nameSuffix))!;
+
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static (Stream @Stream, StreamReader Reader) eGetManifestResourceStreamReader(this Assembly asm, string nameSuffix, Encoding? e = null, bool detectEncodingFromByteOrderMarks = false)
 			{
-				// Determine path
-				//string resourcePath = name;
-				// Format: "{Namespace}.{Folder}.{filename}.{Extension}"
-				//if (!name.StartsWith(nameof(SignificantDrawerCompiler)))
-				string resourcePath = assembly
-					.GetManifestResourceNames()
-					.FirstOrDefault(str => str.EndsWith(resourceFileName)) ?? throw new ArgumentOutOfRangeException(nameof(resourceFileName));
+				e ??= Encoding.Unicode;
 
-				using Stream stream = assembly.GetManifestResourceStream(resourcePath)!;
-				using StreamReader reader = new(stream);
-				return await reader.ReadToEndAsync();
+				Stream stream = asm.eGetManifestResourceStream(nameSuffix)!;
+				StreamReader sr = detectEncodingFromByteOrderMarks
+					? new(stream, true)
+					: new(stream, e, false);
+
+				return (stream, sr);
 			}
 
-			public static async Task<string> eReadResourceFileAsStringAsync(this string name)
-				=> await Assembly.GetExecutingAssembly().eReadResourceFileAsStringAsync(name);
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static string eReadResourceFileAsString(this Assembly asm, string nameSuffix, Encoding? e = null, bool detectEncodingFromByteOrderMarks = false)
+			{
+				var r = asm.eGetManifestResourceStreamReader(nameSuffix, e, detectEncodingFromByteOrderMarks);
+				using Stream s = r.Stream;
+				using StreamReader sr = r.Reader;
+				return sr.ReadToEnd();
+			}
+
+
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			public static async Task<string> eReadResourceFileAsStringAsync(this Assembly asm, string nameSuffix, Encoding? e = null, bool detectEncodingFromByteOrderMarks = false)
+			{
+				var r = asm.eGetManifestResourceStreamReader(nameSuffix, e, detectEncodingFromByteOrderMarks);
+				using Stream s = r.Stream;
+				using StreamReader sr = r.Reader;
+				return await sr.ReadToEndAsync();
+			}
 
 
 		}
@@ -10125,7 +10221,7 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 								var objVal = rFirstProp.GetValue(source);
 								tarpetProp.SetValue(target, objVal);
 
-#if DEBUG
+		#if DEBUG
 								var sVal = "[Nothing]".ToUpper();
 								var sType = sVal;
 								if (null != objVal)
@@ -10134,15 +10230,15 @@ protected T NotifyPropertyChanged<T>(T newValue, [CallerMemberName] string? prop
 									sVal = objVal.ToString();
 								}
 								$"Copied '{propName}' = {sType}:('{sVal}')".eDebugWriteLine();
-#endif
+		#endif
 							}
 							else
 							{
 								// Свойство с таким именем не найдено в объекте-источнике
 								string err = $"Свойство '{propName}' не найдено в объекте-источнике!";
-#if DEBUG
+		#if DEBUG
 								err.eDebugWriteLine();
-#endif
+		#endif
 								if (throwIfNotFound) throw new ArgumentOutOfRangeException(nameof(propertyNames), err);
 							}
 						}
